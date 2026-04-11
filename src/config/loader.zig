@@ -10,6 +10,8 @@
 const std = @import("std");
 const toml = @import("toml");
 const Config = @import("Config.zig").Config;
+const layout_mod = @import("layout");
+const LayoutPreset = layout_mod.LayoutPreset;
 
 pub const LoadError = error{
     ImportCycleDetected,
@@ -61,6 +63,7 @@ const FileUiColors = struct {
     tab_active: ?[]const u8 = null,
     tab_inactive: ?[]const u8 = null,
     pane_border: ?[]const u8 = null,
+    pane_border_active: ?[]const u8 = null,
     status_bar_bg: ?[]const u8 = null,
     agent_alert: ?[]const u8 = null,
 };
@@ -180,6 +183,12 @@ pub fn loadFile(
     // Parse [keybindings] section manually (dynamic keys, not in FileConfig)
     config.keybindings = parseKeybindingsSection(allocator, content) catch &.{};
 
+    // Parse [layout.*] sections manually (dynamic preset names, not in FileConfig)
+    config.layouts = LayoutPreset.parsePresets(allocator, content) catch |err| blk: {
+        std.log.warn("Failed to parse layout presets: {}", .{err});
+        break :blk &.{};
+    };
+
     return config;
 }
 
@@ -222,6 +231,7 @@ fn mergeConfigs(base: Config, over: Config) Config {
     if (over.colors.ui.tab_active) |v| result.colors.ui.tab_active = v;
     if (over.colors.ui.tab_inactive) |v| result.colors.ui.tab_inactive = v;
     if (over.colors.ui.pane_border) |v| result.colors.ui.pane_border = v;
+    if (over.colors.ui.pane_border_active) |v| result.colors.ui.pane_border_active = v;
     if (over.colors.ui.status_bar_bg) |v| result.colors.ui.status_bar_bg = v;
     if (over.colors.ui.agent_alert) |v| result.colors.ui.agent_alert = v;
 
@@ -283,6 +293,7 @@ fn applyFileConfig(allocator: std.mem.Allocator, base: Config, file: FileConfig)
             if (ui.tab_active) |v| result.colors.ui.tab_active = try allocator.dupe(u8, v);
             if (ui.tab_inactive) |v| result.colors.ui.tab_inactive = try allocator.dupe(u8, v);
             if (ui.pane_border) |v| result.colors.ui.pane_border = try allocator.dupe(u8, v);
+            if (ui.pane_border_active) |v| result.colors.ui.pane_border_active = try allocator.dupe(u8, v);
             if (ui.status_bar_bg) |v| result.colors.ui.status_bar_bg = try allocator.dupe(u8, v);
             if (ui.agent_alert) |v| result.colors.ui.agent_alert = try allocator.dupe(u8, v);
         }

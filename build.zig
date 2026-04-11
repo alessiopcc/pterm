@@ -213,6 +213,13 @@ pub fn build(b: *std.Build) void {
     });
     program_mod.addImport("gl", gl_bindings);
 
+    // Layout types module (lightweight Rect duplicate for renderer, avoids circular dep)
+    const layout_types_mod = b.createModule(.{
+        .root_source_file = b.path("src/renderer/layout_types.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // OpenGL backend module
     const opengl_backend_mod = b.createModule(.{
         .root_source_file = b.path("src/renderer/opengl/Backend.zig"),
@@ -223,6 +230,7 @@ pub fn build(b: *std.Build) void {
     opengl_backend_mod.addImport("renderer_types", renderer_types_mod);
     opengl_backend_mod.addImport("shaders", shaders_mod);
     opengl_backend_mod.addImport("Program.zig", program_mod);
+    opengl_backend_mod.addImport("layout_types", layout_types_mod);
 
     // Wire GL bindings into renderer modules
     renderer_mod.addImport("gl", gl_bindings);
@@ -371,6 +379,17 @@ pub fn build(b: *std.Build) void {
         window_mod.linkLibrary(dep.artifact("glfw"));
     }
 
+    // Window icon (embedded RGBA pixel data for taskbar/title bar)
+    const icon_mod = b.createModule(.{
+        .root_source_file = b.path("src/platform/icon.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    if (zglfw_dep) |dep| {
+        icon_mod.addImport("zglfw", dep.module("root"));
+    }
+    window_mod.addImport("icon", icon_mod);
+
     // Input encoder (GLFW keys -> VT sequences)
     const input_encoder_mod = b.createModule(.{
         .root_source_file = b.path("src/surface/InputEncoder.zig"),
@@ -504,6 +523,10 @@ pub fn build(b: *std.Build) void {
     app_mod.addImport("font_types", font_types_mod);
     app_mod.addImport("observer", observer_mod);
     app_mod.addImport("renderer_types", renderer_types_mod);
+    app_mod.addImport("gl", gl_bindings);
+    app_mod.addImport("opengl_backend", opengl_backend_mod);
+    app_mod.addImport("render_state", render_state_mod);
+    app_mod.addImport("layout_types", layout_types_mod);
     if (zglfw_dep) |dep| {
         app_mod.addImport("zglfw", dep.module("root"));
         app_mod.linkLibrary(dep.artifact("glfw"));
@@ -511,12 +534,31 @@ pub fn build(b: *std.Build) void {
     if (freetype_dep) |dep| {
         app_mod.linkLibrary(dep.artifact("freetype"));
     }
+    if (harfbuzz_dep) |dep| {
+        app_mod.linkLibrary(dep.artifact("harfbuzz"));
+    }
 
     // Wire app module into main executable
     exe_mod.addImport("app", app_mod);
     exe_mod.addImport("config", config_mod);
     exe_mod.addImport("cli", config_cli_mod);
     exe_mod.addImport("defaults", config_defaults_mod);
+
+    // -------------------------------------------------------
+    // Phase 5 Plan 01: Layout module (binary tree pane model, tabs)
+    // -------------------------------------------------------
+
+    const layout_mod = b.createModule(.{
+        .root_source_file = b.path("src/layout/layout.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Wire layout into surface, app, and config modules
+    surface_mod.addImport("layout", layout_mod);
+    app_mod.addImport("layout", layout_mod);
+    config_mod.addImport("layout", layout_mod);
+    config_loader_mod.addImport("layout", layout_mod);
 
     // -------------------------------------------------------
     // Phase 4 Plan 02: Keybinding system modules (defined early for exe + surface + test reuse)
@@ -537,8 +579,9 @@ pub fn build(b: *std.Build) void {
     });
     keybinding_tui_mod.addImport("keybindings", keybindings_mod);
 
-    // Wire keybindings into surface module (same instance to avoid duplicate module error)
+    // Wire keybindings into surface and app modules
     surface_mod.addImport("keybindings", keybindings_mod);
+    app_mod.addImport("keybindings", keybindings_mod);
 
     // Wire keybinding TUI into main executable
     exe_mod.addImport("keybinding_tui", keybinding_tui_mod);
@@ -770,6 +813,19 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_keybinding_tests.step);
 
     // -------------------------------------------------------
+    // Phase 5 Plan 01: Layout tests (binary tree pane model, tabs)
+    // -------------------------------------------------------
+
+    const layout_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/layout/layout.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const layout_tests = b.addTest(.{ .root_module = layout_test_mod });
+    const run_layout_tests = b.addRunArtifact(layout_tests);
+    test_step.dependOn(&run_layout_tests.step);
+
+    // -------------------------------------------------------
     // Phase 4 Plan 03: Theme and color palette modules
     // -------------------------------------------------------
 
@@ -823,4 +879,5 @@ pub fn build(b: *std.Build) void {
     app_mod.addImport("theme", theme_mod);
     app_mod.addImport("watcher", watcher_mod);
     app_mod.addImport("cli", config_cli_mod);
+    app_mod.addImport("icon", icon_mod);
 }

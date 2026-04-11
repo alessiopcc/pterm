@@ -344,32 +344,6 @@ fn collectLeavesRecursive(node: *PaneNode, list: *std.ArrayListUnmanaged(u32), a
     }
 }
 
-/// Leaf bounds for render iteration — avoids re-walking the tree per pane.
-pub const LeafBounds = struct {
-    pane_id: u32,
-    bounds: Rect,
-};
-
-/// Collect all leaf nodes with their bounds in a single tree walk.
-pub fn collectLeafInfos(node: *PaneNode, allocator: std.mem.Allocator) ![]LeafBounds {
-    var list = std.ArrayListUnmanaged(LeafBounds){};
-    errdefer list.deinit(allocator);
-    try collectLeafBoundsRecursive(node, &list, allocator);
-    return list.toOwnedSlice(allocator);
-}
-
-fn collectLeafBoundsRecursive(node: *PaneNode, list: *std.ArrayListUnmanaged(LeafBounds), allocator: std.mem.Allocator) !void {
-    switch (node.*) {
-        .branch => |b| {
-            try collectLeafBoundsRecursive(b.first, list, allocator);
-            try collectLeafBoundsRecursive(b.second, list, allocator);
-        },
-        .leaf => |l| {
-            try list.append(allocator, .{ .pane_id = l.pane_id, .bounds = l.bounds });
-        },
-    }
-}
-
 fn firstLeafId(node: *PaneNode) u32 {
     switch (node.*) {
         .branch => |b| return firstLeafId(b.first),

@@ -17,9 +17,9 @@ const parseHexColor = @import("config").parseHexColor;
 
 test "Config.defaults returns expected default values" {
     const config = Config.defaults();
-    try testing.expectEqual(@as(f32, 13.0), config.font.size);
-    try testing.expectEqual(@as(i64, 160), config.window.cols);
-    try testing.expectEqual(@as(i64, 48), config.window.rows);
+    try testing.expectEqual(@as(f32, 12.0), config.font.size);
+    try testing.expectEqual(@as(i64, 200), config.window.cols);
+    try testing.expectEqual(@as(i64, 55), config.window.rows);
     try testing.expectEqual(@as(f32, 4.0), config.window.padding);
     try testing.expectEqual(@as(i64, 10_000), config.scrollback.lines);
     try testing.expectEqualStrings("TermP", config.window.title);
@@ -124,7 +124,7 @@ test "merge: non-default fields override base" {
     try testing.expectEqual(@as(f32, 20.0), base.font.size);
     try testing.expectEqual(@as(i64, 100), base.window.cols);
     // Unset fields remain default
-    try testing.expectEqual(@as(i64, 48), base.window.rows);
+    try testing.expectEqual(@as(i64, 55), base.window.rows);
 }
 
 // ============================================================================
@@ -135,28 +135,28 @@ test "Config.validate resets invalid font_size to default" {
     var config = Config.defaults();
     config.font.size = 0.0;
     config.validate();
-    try testing.expectEqual(@as(f32, 13.0), config.font.size);
+    try testing.expectEqual(@as(f32, 12.0), config.font.size);
 }
 
 test "Config.validate resets negative font_size to default" {
     var config = Config.defaults();
     config.font.size = -5.0;
     config.validate();
-    try testing.expectEqual(@as(f32, 13.0), config.font.size);
+    try testing.expectEqual(@as(f32, 12.0), config.font.size);
 }
 
 test "Config.validate resets invalid cols to default" {
     var config = Config.defaults();
     config.window.cols = 0;
     config.validate();
-    try testing.expectEqual(@as(i64, 160), config.window.cols);
+    try testing.expectEqual(@as(i64, 200), config.window.cols);
 }
 
 test "Config.validate resets invalid rows to default" {
     var config = Config.defaults();
     config.window.rows = -1;
     config.validate();
-    try testing.expectEqual(@as(i64, 48), config.window.rows);
+    try testing.expectEqual(@as(i64, 55), config.window.rows);
 }
 
 test "Config.validate clamps opacity" {
@@ -239,8 +239,8 @@ test "cli.applyOverrides preserves unset fields" {
     var config = Config.defaults();
     const cli_args = cli_mod.CliArgs{}; // all null
     config = cli_mod.applyOverrides(config, cli_args);
-    try testing.expectEqual(@as(f32, 13.0), config.font.size);
-    try testing.expectEqual(@as(i64, 160), config.window.cols);
+    try testing.expectEqual(@as(f32, 12.0), config.font.size);
+    try testing.expectEqual(@as(i64, 200), config.window.cols);
 }
 
 // ============================================================================
@@ -249,9 +249,9 @@ test "cli.applyOverrides preserves unset fields" {
 
 test "Config backward-compatible accessors" {
     const config = Config.defaults();
-    try testing.expectEqual(@as(u16, 160), config.cols());
-    try testing.expectEqual(@as(u16, 48), config.rows());
-    try testing.expectEqual(@as(f32, 13.0), config.font_size_pt());
+    try testing.expectEqual(@as(u16, 200), config.cols());
+    try testing.expectEqual(@as(u16, 55), config.rows());
+    try testing.expectEqual(@as(f32, 12.0), config.font_size_pt());
     try testing.expectEqual(@as(f32, 4.0), config.grid_padding());
     try testing.expectEqual(@as(u32, 10_000), config.scrollback_lines());
     try testing.expectEqual(@as(?[]const u8, null), config.font_family());
@@ -284,8 +284,8 @@ test "env overrides apply to config" {
     const config = Config.defaults();
     const result = env_mod.applyOverrides(config);
     // Without TERMP_* env vars set, should return unchanged config
-    try testing.expectEqual(@as(f32, 13.0), result.font.size);
-    try testing.expectEqual(@as(i64, 160), result.window.cols);
+    try testing.expectEqual(@as(f32, 12.0), result.font.size);
+    try testing.expectEqual(@as(i64, 200), result.window.cols);
 }
 
 test "Config.load returns defaults when no config file exists" {
@@ -293,9 +293,9 @@ test "Config.load returns defaults when no config file exists" {
     const cli_args = cli_mod.CliArgs{};
     // With no config file and no env/CLI overrides, should return defaults
     const config = try Config.load(allocator, cli_args);
-    try testing.expectEqual(@as(f32, 13.0), config.font.size);
-    try testing.expectEqual(@as(i64, 160), config.window.cols);
-    try testing.expectEqual(@as(i64, 48), config.window.rows);
+    try testing.expectEqual(@as(f32, 12.0), config.font.size);
+    try testing.expectEqual(@as(i64, 200), config.window.cols);
+    try testing.expectEqual(@as(i64, 55), config.window.rows);
 }
 
 test "Config.load with --config loads specified file" {

@@ -12,6 +12,8 @@ const loader = @import("loader");
 const defaults_mod = @import("defaults");
 const cli_mod = @import("cli");
 const env_mod = @import("env");
+const layout_mod = @import("layout");
+const LayoutPreset = layout_mod.LayoutPreset;
 
 pub const Config = struct {
     // [font]
@@ -28,6 +30,8 @@ pub const Config = struct {
     colors: Colors = .{},
     // [keybindings] — raw action=combo pairs from TOML, passed to buildMap at runtime
     keybindings: []const KeybindingEntry = &.{},
+    // [layout.*] — named layout presets parsed from TOML
+    layouts: []LayoutPreset.LayoutPreset = &.{},
 
     pub const KeybindingEntry = struct {
         action_name: []const u8,
@@ -36,13 +40,13 @@ pub const Config = struct {
 
     pub const Font = struct {
         family: ?[]const u8 = null, // null = platform default
-        size: f32 = 13.0,
+        size: f32 = 12.0,
     };
 
     pub const Window = struct {
         title: []const u8 = "TermP",
-        cols: i64 = 160,
-        rows: i64 = 48,
+        cols: i64 = 200,
+        rows: i64 = 55,
         padding: f32 = 4.0,
         opacity: f32 = 1.0,
     };
@@ -82,14 +86,15 @@ pub const Config = struct {
         tab_active: ?[]const u8 = null,
         tab_inactive: ?[]const u8 = null,
         pane_border: ?[]const u8 = null,
+        pane_border_active: ?[]const u8 = null,
         status_bar_bg: ?[]const u8 = null,
         agent_alert: ?[]const u8 = null,
     };
 
     /// Default config path constants.
-    pub const default_font_size: f32 = 13.0;
-    pub const default_cols: i64 = 160;
-    pub const default_rows: i64 = 48;
+    pub const default_font_size: f32 = 12.0;
+    pub const default_cols: i64 = 200;
+    pub const default_rows: i64 = 55;
     pub const default_padding: f32 = 4.0;
     pub const default_opacity: f32 = 1.0;
     pub const default_scrollback: i64 = 10_000;
@@ -177,11 +182,15 @@ pub const Config = struct {
         if (file.colors.ui.tab_active) |v| result.colors.ui.tab_active = v;
         if (file.colors.ui.tab_inactive) |v| result.colors.ui.tab_inactive = v;
         if (file.colors.ui.pane_border) |v| result.colors.ui.pane_border = v;
+        if (file.colors.ui.pane_border_active) |v| result.colors.ui.pane_border_active = v;
         if (file.colors.ui.status_bar_bg) |v| result.colors.ui.status_bar_bg = v;
         if (file.colors.ui.agent_alert) |v| result.colors.ui.agent_alert = v;
 
         // Keybindings: file overrides completely replace base
         if (file.keybindings.len > 0) result.keybindings = file.keybindings;
+
+        // Layouts: file overrides completely replace base
+        if (file.layouts.len > 0) result.layouts = file.layouts;
 
         return result;
     }

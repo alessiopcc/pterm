@@ -10,8 +10,13 @@ const Allocator = std.mem.Allocator;
 /// Terminal actions that can be bound to key combos.
 /// This is the fixed vocabulary of operations (D-17).
 pub const Action = enum {
+    // Reserved actions — not rebindable (handled by hardcoded key paths)
     copy,
     paste,
+    increase_font_size,
+    decrease_font_size,
+    reset_font_size,
+    // Rebindable actions
     new_tab,
     close_tab,
     next_tab,
@@ -20,9 +25,37 @@ pub const Action = enum {
     split_vertical,
     focus_next_pane,
     focus_prev_pane,
-    increase_font_size,
-    decrease_font_size,
-    reset_font_size,
+    // Phase 5: pane management actions
+    close_pane,
+    focus_pane_up,
+    focus_pane_down,
+    focus_pane_left,
+    focus_pane_right,
+    resize_pane_up,
+    resize_pane_down,
+    resize_pane_left,
+    resize_pane_right,
+    zoom_pane,
+    equalize_panes,
+    swap_pane_up,
+    swap_pane_down,
+    swap_pane_left,
+    swap_pane_right,
+    rotate_split,
+    break_out_pane,
+    move_tab_left,
+    move_tab_right,
+    goto_tab_1,
+    goto_tab_2,
+    goto_tab_3,
+    goto_tab_4,
+    goto_tab_5,
+    goto_tab_6,
+    goto_tab_7,
+    goto_tab_8,
+    goto_tab_9,
+    goto_tab_last,
+    open_layout_picker,
     scroll_page_up,
     scroll_page_down,
     scroll_to_top,
@@ -290,24 +323,27 @@ pub fn parseKeyCombo(combo_str: []const u8) ParseError!KeyCombo {
     return ParseError.InvalidKeyCombo;
 }
 
-/// Check if a key combo is a reserved clipboard key (D-19).
-/// Ctrl+C/V and Super+C/V (macOS Cmd) cannot be rebound.
-pub fn isReservedClipboardKey(combo: KeyCombo) bool {
-    const is_c = switch (combo.key) {
-        .char => |c| c == 'c',
-        .special => false,
+/// Check if an action is reserved (not rebindable).
+/// Copy, paste, and zoom are handled by hardcoded key paths.
+pub fn isReservedAction(action: Action) bool {
+    return switch (action) {
+        .copy, .paste, .increase_font_size, .decrease_font_size, .reset_font_size => true,
+        else => false,
     };
+}
+
+/// Check if a key combo is a reserved clipboard key.
+/// Only Ctrl+V / Super+V for paste. Ctrl+C passes to terminal (SIGINT).
+/// Copy is handled by selection, not keybinding.
+pub fn isReservedClipboardKey(combo: KeyCombo) bool {
     const is_v = switch (combo.key) {
         .char => |c| c == 'v',
         .special => false,
     };
+    if (!is_v) return false;
 
-    if (!is_c and !is_v) return false;
-
-    // Ctrl only (no shift, no alt) or Super only (no shift, no alt)
     const ctrl_only = combo.mods.ctrl and !combo.mods.shift and !combo.mods.alt and !combo.mods.super;
     const super_only = combo.mods.super and !combo.mods.shift and !combo.mods.alt and !combo.mods.ctrl;
-
     return ctrl_only or super_only;
 }
 
@@ -319,7 +355,6 @@ const DefaultBinding = struct {
 
 pub fn defaultBindings() []const DefaultBinding {
     return &[_]DefaultBinding{
-        .{ .action = .copy, .combo_str = "ctrl+c" },
         .{ .action = .paste, .combo_str = "ctrl+v" },
         .{ .action = .new_tab, .combo_str = "ctrl+shift+t" },
         .{ .action = .close_tab, .combo_str = "ctrl+shift+w" },
@@ -337,6 +372,37 @@ pub fn defaultBindings() []const DefaultBinding {
         .{ .action = .scroll_to_top, .combo_str = "ctrl+shift+home" },
         .{ .action = .scroll_to_bottom, .combo_str = "ctrl+shift+end" },
         .{ .action = .search, .combo_str = "ctrl+shift+f" },
+        // Phase 5: pane/tab management bindings
+        .{ .action = .close_pane, .combo_str = "ctrl+shift+x" },
+        .{ .action = .focus_pane_up, .combo_str = "ctrl+shift+up" },
+        .{ .action = .focus_pane_down, .combo_str = "ctrl+shift+down" },
+        .{ .action = .focus_pane_left, .combo_str = "ctrl+shift+left" },
+        .{ .action = .focus_pane_right, .combo_str = "ctrl+shift+right" },
+        .{ .action = .resize_pane_up, .combo_str = "ctrl+alt+up" },
+        .{ .action = .resize_pane_down, .combo_str = "ctrl+alt+down" },
+        .{ .action = .resize_pane_left, .combo_str = "ctrl+alt+left" },
+        .{ .action = .resize_pane_right, .combo_str = "ctrl+alt+right" },
+        .{ .action = .zoom_pane, .combo_str = "ctrl+shift+z" },
+        .{ .action = .equalize_panes, .combo_str = "ctrl+shift+e" },
+        .{ .action = .rotate_split, .combo_str = "ctrl+shift+r" },
+        .{ .action = .break_out_pane, .combo_str = "ctrl+shift+b" },
+        .{ .action = .move_tab_left, .combo_str = "ctrl+shift+pageup" },
+        .{ .action = .move_tab_right, .combo_str = "ctrl+shift+pagedown" },
+        .{ .action = .swap_pane_up, .combo_str = "ctrl+alt+shift+up" },
+        .{ .action = .swap_pane_down, .combo_str = "ctrl+alt+shift+down" },
+        .{ .action = .swap_pane_left, .combo_str = "ctrl+alt+shift+left" },
+        .{ .action = .swap_pane_right, .combo_str = "ctrl+alt+shift+right" },
+        .{ .action = .goto_tab_1, .combo_str = "alt+1" },
+        .{ .action = .goto_tab_2, .combo_str = "alt+2" },
+        .{ .action = .goto_tab_3, .combo_str = "alt+3" },
+        .{ .action = .goto_tab_4, .combo_str = "alt+4" },
+        .{ .action = .goto_tab_5, .combo_str = "alt+5" },
+        .{ .action = .goto_tab_6, .combo_str = "alt+6" },
+        .{ .action = .goto_tab_7, .combo_str = "alt+7" },
+        .{ .action = .goto_tab_8, .combo_str = "alt+8" },
+        .{ .action = .goto_tab_9, .combo_str = "alt+9" },
+        .{ .action = .goto_tab_last, .combo_str = "alt+0" },
+        .{ .action = .open_layout_picker, .combo_str = "ctrl+shift+l" },
     };
 }
 
@@ -387,6 +453,10 @@ pub fn buildMap(
             };
 
             if (action == .none) continue;
+            if (isReservedAction(action)) {
+                try map.addWarning("cannot rebind reserved action");
+                continue;
+            }
 
             // D-23: "none" as combo value means unbind
             if (strEql(ub.combo_str, "none")) {
@@ -534,19 +604,19 @@ test "parseKeyCombo: invalid returns error" {
     try std.testing.expectError(ParseError.InvalidKeyCombo, parseKeyCombo("invalid"));
 }
 
-test "isReservedClipboardKey: ctrl+c" {
+test "isReservedClipboardKey: ctrl+c is NOT reserved (passes to terminal)" {
     const combo = try parseKeyCombo("ctrl+c");
-    try std.testing.expect(isReservedClipboardKey(combo));
+    try std.testing.expect(!isReservedClipboardKey(combo));
 }
 
-test "isReservedClipboardKey: ctrl+v" {
+test "isReservedClipboardKey: ctrl+v IS reserved (paste)" {
     const combo = try parseKeyCombo("ctrl+v");
     try std.testing.expect(isReservedClipboardKey(combo));
 }
 
-test "isReservedClipboardKey: super+c (macOS Cmd+C)" {
+test "isReservedClipboardKey: super+c is NOT reserved (copy-on-selection)" {
     const combo = try parseKeyCombo("super+c");
-    try std.testing.expect(isReservedClipboardKey(combo));
+    try std.testing.expect(!isReservedClipboardKey(combo));
 }
 
 test "isReservedClipboardKey: ctrl+shift+t is NOT reserved" {
@@ -556,30 +626,27 @@ test "isReservedClipboardKey: ctrl+shift+t is NOT reserved" {
 
 test "defaultBindings contains expected actions" {
     const defaults = defaultBindings();
-    var found_copy = false;
     var found_paste = false;
     var found_new_tab = false;
     var found_scroll_up = false;
     var found_increase_font = false;
     for (defaults) |b| {
-        if (b.action == .copy) found_copy = true;
         if (b.action == .paste) found_paste = true;
         if (b.action == .new_tab) found_new_tab = true;
         if (b.action == .scroll_page_up) found_scroll_up = true;
         if (b.action == .increase_font_size) found_increase_font = true;
     }
-    try std.testing.expect(found_copy);
     try std.testing.expect(found_paste);
     try std.testing.expect(found_new_tab);
     try std.testing.expect(found_scroll_up);
     try std.testing.expect(found_increase_font);
 }
 
-test "buildMap: default map has copy on ctrl+c" {
+test "buildMap: default map has paste on ctrl+v" {
     var map = try buildMap(std.testing.allocator, null);
     defer map.deinit();
-    const combo = try parseKeyCombo("ctrl+c");
-    try std.testing.expectEqual(Action.copy, map.get(combo).?);
+    const combo = try parseKeyCombo("ctrl+v");
+    try std.testing.expectEqual(Action.paste, map.get(combo).?);
 }
 
 test "buildMap: user override replaces default" {
@@ -595,16 +662,16 @@ test "buildMap: user override replaces default" {
 }
 
 test "buildMap: reserved key override emits warning" {
-    // Trying to bind ctrl+c to new_tab should be rejected
+    // Trying to bind ctrl+v to new_tab should be rejected (paste is reserved)
     const overrides = [_]UserBinding{
-        .{ .action_name = "new_tab", .combo_str = "ctrl+c" },
+        .{ .action_name = "new_tab", .combo_str = "ctrl+v" },
     };
     var map = try buildMap(std.testing.allocator, &overrides);
     defer map.deinit();
 
-    // ctrl+c should still be copy (reserved), not new_tab
-    const combo = try parseKeyCombo("ctrl+c");
-    try std.testing.expectEqual(Action.copy, map.get(combo).?);
+    // ctrl+v should still be paste (reserved), not new_tab
+    const combo = try parseKeyCombo("ctrl+v");
+    try std.testing.expectEqual(Action.paste, map.get(combo).?);
 
     // Should have a warning
     try std.testing.expect(map.warnings.items.len > 0);
@@ -636,17 +703,18 @@ test "buildMap: conflict detection warns" {
     try std.testing.expect(map.warnings.items.len > 0);
 }
 
-test "buildMap: single combo per action" {
+test "buildMap: user cannot rebind reserved copy action" {
     const overrides = [_]UserBinding{
         .{ .action_name = "copy", .combo_str = "ctrl+shift+c" },
     };
     var map = try buildMap(std.testing.allocator, &overrides);
     defer map.deinit();
 
+    // copy is reserved — override should be rejected
     const combo = try parseKeyCombo("ctrl+shift+c");
-    try std.testing.expectEqual(Action.copy, map.get(combo).?);
+    try std.testing.expect(map.get(combo) == null);
 
-    // Old default ctrl+c should no longer map to copy (replaced by override)
+    // ctrl+c should NOT be mapped (passes to terminal)
     const old = try parseKeyCombo("ctrl+c");
     try std.testing.expect(map.get(old) == null);
 }

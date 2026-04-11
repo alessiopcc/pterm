@@ -1,9 +1,21 @@
 /// Application lifecycle: init, run, deinit.
 ///
-/// Wires all subsystems together: Window, PTY, TermIO, Surface.
-/// Owns the main event loop (D-15: main thread handles GLFW events only).
+/// Multi-pane architecture (Phase 5 Plan 02):
+/// App owns TabManager, PaneRegistry, Compositor, and shared FontGrid.
+/// Each pane has its own TermIO + PTY. The render thread uses Compositor
+/// to iterate visible panes and render each in its own viewport/scissor rect.
+///
+/// Thread model (D-15):
+///   Main thread:   GLFW events, input dispatch, OSC title updates, pane operations
+///   Render thread: GL context, Compositor.renderFrame, buffer swap
+///
+/// Input routing:
+///   GLFW user pointer -> *App
+///   Key/char events -> focused pane's Surface (VT encoding + keybinding dispatch)
+///   Mouse clicks -> hit-test tab bar / pane borders / pane area
 const std = @import("std");
 const glfw = @import("zglfw");
+const gl = @import("gl");
 const Config = @import("config").Config;
 const Surface = @import("surface").Surface;
 const termio_mod = @import("termio");
@@ -17,133 +29,346 @@ const renderer_types = @import("renderer_types");
 const watcher_mod = @import("watcher");
 const FileWatcher = watcher_mod.FileWatcher;
 const cli_mod = @import("cli");
+const layout_mod = @import("layout");
+const opengl_backend_mod = @import("opengl_backend");
+const render_state = @import("render_state");
+const theme_mod = @import("theme");
+const keybindings = @import("keybindings");
 
 const TermIO = termio_mod.TermIO;
 const TermIOConfig = termio_mod.TermIOConfig;
 const Pty = pty_mod.Pty;
 const Window = window_mod.Window;
+const FontGrid = fontgrid_mod.FontGrid;
+const FontMetrics = font_types.FontMetrics;
+const FontConfig = font_types.FontConfig;
+const OpenGLBackend = opengl_backend_mod.OpenGLBackend;
+const RendererPalette = theme_mod.RendererPalette;
+const layout_types = @import("layout_types");
+const RendererRect = layout_types.Rect;
+
+const TabManager = layout_mod.TabManager.TabManager;
+const Tab = layout_mod.Tab.Tab;
+const PaneTree = layout_mod.PaneTree;
+const PaneNode = PaneTree.PaneNode;
+const tree_ops = layout_mod.tree_ops;
+const Rect = layout_mod.Rect.Rect;
+const Compositor = layout_mod.Compositor.Compositor;
+const PaneRegistry = layout_mod.Compositor.PaneRegistry;
+const PaneState = layout_mod.Compositor.PaneState;
+const TabBarRenderer = layout_mod.TabBarRenderer.TabBarRenderer;
+const LayoutPreset = layout_mod.LayoutPreset;
+const PresetPicker = layout_mod.PresetPicker.PresetPicker;
 
 pub const AppOptions = struct {
     perf_logging: bool = false,
     debug_keys: bool = false,
+    layout_name: ?[]const u8 = null,
+};
+
+/// Per-pane data: holds the TermIO, PTY, and Surface state for one terminal pane.
+pub const PaneData = struct {
+    surface: Surface,
+    termio: TermIO,
+    pty: Pty,
+    pane_id: u32,
+    tab_index: u32,
+
+    /// CWD tracked via OSC 7 or inherited from parent pane (D-03, D-23).
+    cwd: [256]u8,
+    cwd_len: std.atomic.Value(u32),
+
+    /// Process name for tab title (e.g., "bash", "zsh", "powershell").
+    process_name: [64]u8,
+    process_name_len: u32,
+
+    /// Screen change callback pointer for this pane (static per-pane).
+    screen_change_fn: ?*const fn () void,
 };
 
 // Static state for config reload callback (FileWatcher callback has no context pointer).
 // Safe because there is exactly one App instance per process.
 var g_reload_app: ?*App = null;
 
+// Static state for screen change callback (shared across all panes).
+var g_screen_change_app: ?*App = null;
+
 pub const App = struct {
     window: Window,
-    surface: Surface,
-    termio: TermIO,
-    pty: Pty,
+    tab_manager: TabManager,
+    pane_registry: PaneRegistry,
+    compositor: Compositor,
+    font_grid: *FontGrid,
     allocator: std.mem.Allocator,
     config: Config,
     config_path: ?[]const u8,
     config_watcher: ?FileWatcher,
 
+    // Pane data storage (heap-allocated, referenced from PaneRegistry)
+    pane_data: std.AutoHashMapUnmanaged(u32, *PaneData),
+
+    // Render thread state
+    frame_requested: std.atomic.Value(bool),
+    should_quit: std.atomic.Value(bool),
+    render_thread: ?std.Thread,
+    gl_procs: gl.ProcTable,
+
+    // Resize state (main thread -> render thread)
+    pending_resize: std.atomic.Value(bool),
+    new_fb_width: std.atomic.Value(u32),
+    new_fb_height: std.atomic.Value(u32),
+
+    // Font change state (main thread -> render thread)
+    pending_font_change: std.atomic.Value(bool),
+    new_font_size: std.atomic.Value(u32),
+
+    // Runtime color palette
+    renderer_palette: RendererPalette,
+
+    // Keybinding map (shared across all panes)
+    keybinding_map: keybindings.KeybindingMap,
+    last_mods: keybindings.Modifiers,
+
+    // Diagnostics
+    perf_logging: bool,
+    debug_keys: bool,
+    debug_key_file: ?std.fs.File,
+    frame_count: u64,
+
+    // Cursor blink state (global, applies to focused pane)
+    cursor_blink_timer: i128,
+    cursor_visible: bool,
+    focused: bool,
+
+    // Frame arena for per-frame allocations
+    frame_arena: std.heap.ArenaAllocator,
+
+    // Layout preset picker overlay
+    preset_picker: PresetPicker,
+
+    // Pending --layout activation (from CLI flag)
+    pending_layout_name: ?[]const u8,
+
+    // Pending pane operations (main thread -> render thread, mutex-protected)
+    pending_ops: std.ArrayListUnmanaged(PaneOp),
+    pending_ops_mutex: std.Thread.Mutex,
+
+    // Border drag state (mouse resize)
+    border_drag_active: bool,
+    border_drag_branch: ?*PaneNode,
+    border_drag_start_pos: f64,
+    border_drag_start_ratio: f32,
+    border_drag_is_vertical: bool,
+
+    // Window drag state (frameless window drag via tab bar)
+    window_drag_active: bool,
+    window_drag_moved: bool,
+    window_drag_tab_hit: ?usize, // Tab index if drag started on a tab (click-to-switch on release)
+    window_drag_screen_x: i32,
+    window_drag_screen_y: i32,
+
+    // Window control hover state (0=none, 1=minimize, 2=maximize, 3=close)
+    hovered_control: u8,
+
+    // Suppress activity for N frames after resize (async redraws cause false positives)
+    suppress_activity_frames: std.atomic.Value(u32),
+
+    // Window edge resize state (frameless window)
+    window_resize_active: bool,
+    window_resize_edge: WindowEdge,
+    window_resize_start_screen_x: i32,
+    window_resize_start_screen_y: i32,
+    window_resize_start_win_x: i32,
+    window_resize_start_win_y: i32,
+    window_resize_start_win_w: u32,
+    window_resize_start_win_h: u32,
+
+    const WindowEdge = packed struct {
+        left: bool = false,
+        right: bool = false,
+        top: bool = false,
+        bottom: bool = false,
+    };
+
+    pub const PaneOp = union(enum) {
+        split: struct { direction: PaneTree.SplitDirection },
+        close_pane: u32,
+        new_tab: void,
+        close_tab: usize,
+        switch_tab: usize,
+    };
+
     pub fn init(allocator: std.mem.Allocator, config: Config, options: AppOptions) !App {
-        // 2. Create TermIO
-        var termio = try TermIO.init(allocator, TermIOConfig{
-            .cols = config.cols(),
-            .rows = config.rows(),
-            .scrollback_lines = config.scrollback_lines(),
-        });
-        errdefer termio.deinit();
-
-        // 3. Create PTY
-        var pty = try Pty.init(allocator, .{
-            .cols = config.cols(),
-            .rows = config.rows(),
-        });
-        errdefer pty.deinit();
-
-        // 4. Spawn shell process in PTY
-        const shell_config = shell_mod.detectShell();
-        try pty.spawn(shell_config.path, shell_config.args);
-
-        // 5. Attach PTY to TermIO
-        termio.attachPty(&pty);
-
-        // 6. Create Window (GLFW init + window creation)
-        // Need font metrics for cell size computation -- create a temporary FontGrid
-        const dpi_scale: f32 = 1.0; // Will be updated after window creation
-        const temp_font_config = font_types.FontConfig{
+        // Create font grid with dpi_scale=1.0 initially to get base metrics for window sizing.
+        // After window creation, we re-initialize with the actual DPI scale.
+        const font_config = FontConfig{
             .family = config.font_family(),
             .size_pt = config.font_size_pt(),
-            .dpi_scale = dpi_scale,
+            .dpi_scale = 1.0,
         };
-        var temp_font = try fontgrid_mod.FontGrid.init(allocator, temp_font_config);
-        const metrics = temp_font.getMetrics();
-        temp_font.deinit();
 
+        const font_grid = try allocator.create(FontGrid);
+        errdefer allocator.destroy(font_grid);
+        font_grid.* = try FontGrid.init(allocator, font_config);
+        errdefer font_grid.deinit();
+
+        // Create TabManager and first tab
+        var tab_manager = TabManager.init(allocator);
+        errdefer tab_manager.deinit();
+        _ = try tab_manager.createTab();
+
+        // Create Window (pane TermIO/PTY created later in start())
+        var metrics = font_grid.getMetrics();
+        // Add chrome height (title bar + tab bar) to window size so content area
+        // fits exactly rows * cell_height without cell-grid rounding gaps.
+        const chrome_h = TabBarRenderer.computeHeight(metrics.cell_height, 4);
         var window = try Window.init(window_mod.WindowConfig{
             .cols = config.cols(),
             .rows = config.rows(),
             .cell_width = metrics.cell_width,
             .cell_height = metrics.cell_height,
             .grid_padding = config.grid_padding(),
-            .title = "TermP", // TODO: support dynamic title from config
+            .chrome_height = chrome_h,
+            .title = "TermP",
         });
         errdefer window.deinit();
 
-        // 7. Create Surface (does NOT create OpenGLBackend -- render thread does that)
-        const surface = try Surface.init(allocator, config, &window, &termio, .{
-            .perf_logging = options.perf_logging,
-            .debug_keys = options.debug_keys,
-        });
+        // Re-initialize font grid with actual DPI scale from the window
+        const actual_dpi = window.getContentScale();
+        if (actual_dpi > 1.01 or actual_dpi < 0.99) {
+            // DPI differs from 1.0 — rebuild font grid with correct scale
+            font_grid.deinit();
+            font_grid.* = try FontGrid.init(allocator, FontConfig{
+                .family = config.font_family(),
+                .size_pt = config.font_size_pt(),
+                .dpi_scale = actual_dpi,
+            });
+            metrics = font_grid.getMetrics();
+        }
+
+        // Build keybinding map
+        const user_bindings: ?[]const keybindings.UserBinding = if (config.keybindings.len > 0)
+            @ptrCast(config.keybindings)
+        else
+            null;
+        var kb_map = try keybindings.buildMap(allocator, user_bindings);
+        errdefer kb_map.deinit();
+
+        // Build compositor
+        const compositor = Compositor.init(allocator);
 
         // NOTE: Do NOT set GLFW callbacks or start threads here.
-        // The returned App struct will be moved to its final location (caller's stack).
-        // Pointers to surface/window/termio taken here would become dangling.
         // Call app.start() after init returns to set up callbacks at stable addresses.
 
         return App{
             .window = window,
-            .surface = surface,
-            .termio = termio,
-            .pty = pty,
+            .tab_manager = tab_manager,
+            .pane_registry = .{},
+            .compositor = compositor,
+            .font_grid = font_grid,
             .allocator = allocator,
             .config = config,
-            .config_path = null, // Set by caller before start()
-            .config_watcher = null, // Initialized in start() if config_path is set
+            .config_path = null,
+            .config_watcher = null,
+            .pane_data = .{},
+            .frame_requested = std.atomic.Value(bool).init(true),
+            .should_quit = std.atomic.Value(bool).init(false),
+            .render_thread = null,
+            .gl_procs = undefined,
+            .pending_resize = std.atomic.Value(bool).init(false),
+            .new_fb_width = std.atomic.Value(u32).init(0),
+            .new_fb_height = std.atomic.Value(u32).init(0),
+            .pending_font_change = std.atomic.Value(bool).init(false),
+            .new_font_size = std.atomic.Value(u32).init(@intFromFloat(config.font_size_pt() * 100.0)),
+            .renderer_palette = theme_mod.buildRendererPaletteFromConfig(config.colors),
+            .keybinding_map = kb_map,
+            .last_mods = .{},
+            .perf_logging = options.perf_logging,
+            .debug_keys = options.debug_keys,
+            .debug_key_file = if (options.debug_keys)
+                std.fs.cwd().createFile("termp_debug.log", .{}) catch null
+            else
+                null,
+            .frame_count = 0,
+            .cursor_blink_timer = std.time.nanoTimestamp(),
+            .cursor_visible = true,
+            .focused = true,
+            .frame_arena = std.heap.ArenaAllocator.init(allocator),
+            .preset_picker = .{},
+            .pending_layout_name = options.layout_name,
+            .pending_ops = .{},
+            .pending_ops_mutex = .{},
+            .border_drag_active = false,
+            .border_drag_branch = null,
+            .border_drag_start_pos = 0,
+            .border_drag_start_ratio = 0,
+            .border_drag_is_vertical = false,
+            .window_drag_active = false,
+            .window_drag_moved = false,
+            .window_drag_tab_hit = null,
+            .window_drag_screen_x = 0,
+            .window_drag_screen_y = 0,
+            .hovered_control = 0,
+            .suppress_activity_frames = std.atomic.Value(u32).init(0),
+            .window_resize_active = false,
+            .window_resize_edge = .{},
+            .window_resize_start_screen_x = 0,
+            .window_resize_start_screen_y = 0,
+            .window_resize_start_win_x = 0,
+            .window_resize_start_win_y = 0,
+            .window_resize_start_win_w = 0,
+            .window_resize_start_win_h = 0,
         };
     }
 
     /// Start all threads and wire GLFW callbacks.
     /// Must be called after init() returns and the App struct is at its final address.
-    /// This is separate from init() because init() returns by value, which moves
-    /// the struct — any pointers taken during init() would become dangling.
     pub fn start(self: *App) !void {
-        // 1. Set GLFW callbacks, routing to Surface via user pointer.
-        // Now &self.surface is stable because self is at its final location.
-        self.window.setUserPointer(@ptrCast(&self.surface));
+        // Create first pane (TermIO + PTY + Surface)
+        const first_tab = self.tab_manager.getActiveTab() orelse return error.NoTab;
+        const pane_id = try self.createPane(null);
+
+        // Update the tab's root leaf to use this pane_id
+        first_tab.root.leaf.pane_id = pane_id;
+        first_tab.focused_pane_id = pane_id;
+        first_tab.next_pane_id = pane_id + 1;
+        std.log.info("TAB 1: created (pane_id={d})", .{pane_id});
+
+        // Set GLFW callbacks routing to App
+        self.window.setUserPointer(@ptrCast(self));
         self.window.setCallbacks(.{
-            .key_callback = Surface.keyCallback,
-            .char_callback = Surface.charCallback,
-            .framebuffer_size_callback = Surface.framebufferSizeCallback,
-            .focus_callback = Surface.focusCallback,
-            .scroll_callback = Surface.scrollCallback,
+            .key_callback = keyCallback,
+            .char_callback = charCallback,
+            .framebuffer_size_callback = framebufferSizeCallback,
+            .focus_callback = focusCallback,
+            .scroll_callback = scrollCallback,
+            .mouse_button_callback = mouseButtonCallback,
+            .cursor_pos_callback = cursorPosCallback,
         });
 
-        // 2. Fix up internal pointers that were invalidated by the move.
-        // Surface holds pointers to window and termio, which also moved.
-        self.surface.window = &self.window;
-        self.surface.termio = &self.termio;
-
-        // 3. D-15: Detach GL context from main thread
+        // Detach GL context from main thread
         Window.detachContext();
 
-        // 4. D-15: Start render thread (acquires GL context, creates OpenGLBackend)
-        try self.surface.startRenderThread();
+        // Start render thread
+        self.render_thread = try std.Thread.spawn(.{}, renderThreadMain, .{self});
 
-        // 5. Start TermIO (reader + parser threads)
-        try self.termio.start();
+        // Start all pane TermIOs and wire per-pane screen change callbacks
+        g_screen_change_app = self;
+        var it = self.pane_data.iterator();
+        while (it.next()) |entry| {
+            const pane = entry.value_ptr.*;
+            try pane.termio.start();
+            pane.termio.terminal.observer.onScreenChange = &screenChangeCallback;
+            pane.termio.terminal.observer.screen_change_ctx = @ptrCast(pane);
+        }
 
-        // 6. Set Observer.onScreenChange to request frame renders
-        self.termio.terminal.observer.onScreenChange = makeScreenChangeCallback(&self.surface);
+        // Activate --layout preset if specified
+        if (self.pending_layout_name) |name| {
+            self.activatePresetByName(name);
+            self.pending_layout_name = null;
+        }
 
-        // 7. D-14: Initialize config file watcher for hot-reload
+        // Initialize config file watcher
         if (self.config_path) |path| {
             g_reload_app = self;
             self.config_watcher = FileWatcher.init(
@@ -154,7 +379,135 @@ pub const App = struct {
         }
     }
 
-    /// Config reload callback — re-reads config and applies to surface.
+    /// Create a new pane with its own TermIO + PTY.
+    /// Returns the pane_id.
+    pub fn createPane(self: *App, working_dir: ?[]const u8) !u32 {
+        // TODO: pass working_dir to PTY spawn for per-pane CWD (D-23)
+
+        var termio = try TermIO.init(self.allocator, TermIOConfig{
+            .cols = self.config.cols(),
+            .rows = self.config.rows(),
+            .scrollback_lines = self.config.scrollback_lines(),
+        });
+        errdefer termio.deinit();
+
+        var pty = try Pty.init(self.allocator, .{
+            .cols = self.config.cols(),
+            .rows = self.config.rows(),
+        });
+        errdefer pty.deinit();
+
+        const shell_config = shell_mod.detectShell();
+        try pty.spawn(shell_config.path, shell_config.args);
+        termio.attachPty(&pty);
+
+        // Allocate PaneData
+        const pd = try self.allocator.create(PaneData);
+        errdefer self.allocator.destroy(pd);
+
+        // Generate unique pane ID
+        const pane_id = generatePaneId(self);
+
+        // Create lightweight Surface for this pane
+        const surface = try Surface.init(self.allocator, self.config, &self.window, &termio, .{
+            .perf_logging = self.perf_logging,
+            .debug_keys = false, // Only first pane gets debug logging
+        });
+
+        // Determine process name from shell
+        var proc_name_buf: [64]u8 = [_]u8{0} ** 64;
+        var proc_name_len: u32 = 0;
+        {
+            const shell_path_slice = std.mem.span(shell_config.path);
+            // Extract basename from shell path
+            const base = if (std.mem.lastIndexOfScalar(u8, shell_path_slice, '/')) |idx|
+                shell_path_slice[idx + 1 ..]
+            else if (std.mem.lastIndexOfScalar(u8, shell_path_slice, '\\')) |idx|
+                shell_path_slice[idx + 1 ..]
+            else
+                shell_path_slice;
+            // Strip .exe extension on Windows
+            const name = if (std.mem.endsWith(u8, base, ".exe"))
+                base[0 .. base.len - 4]
+            else
+                base;
+            const copy_len = @min(name.len, proc_name_buf.len);
+            @memcpy(proc_name_buf[0..copy_len], name[0..copy_len]);
+            proc_name_len = @intCast(copy_len);
+        }
+
+        // Initialize CWD from working_dir, or detect from current process directory
+        var cwd_buf: [256]u8 = [_]u8{0} ** 256;
+        var cwd_len: u32 = 0;
+        if (working_dir) |wd| {
+            const copy_len = @min(wd.len, cwd_buf.len);
+            @memcpy(cwd_buf[0..copy_len], wd[0..copy_len]);
+            cwd_len = @intCast(copy_len);
+        } else {
+            // Detect CWD from the current process (shell inherits this)
+            if (std.fs.cwd().realpath(".", &cwd_buf)) |resolved| {
+                cwd_len = @intCast(resolved.len);
+            } else |_| {}
+        }
+
+        pd.* = .{
+            .surface = surface,
+            .termio = termio,
+            .pty = pty,
+            .pane_id = pane_id,
+            .tab_index = 0,
+            .cwd = cwd_buf,
+            .cwd_len = std.atomic.Value(u32).init(cwd_len),
+            .process_name = proc_name_buf,
+            .process_name_len = proc_name_len,
+            .screen_change_fn = null,
+        };
+
+        // Fix up internal pointers to point to PaneData's copies (not the stack locals)
+        pd.surface.termio = &pd.termio;
+        pd.surface.window = &self.window;
+
+        // Re-attach PTY pointer: termio.pty and the PtyReader both hold pointers to the
+        // old stack-local pty. Now that pty lives inside PaneData, re-attach so all
+        // pointers reference the stable heap location.
+        pd.termio.attachPty(&pd.pty);
+
+        // Create PaneState for registry
+        const ps = try self.allocator.create(PaneState);
+        errdefer self.allocator.destroy(ps);
+        ps.* = .{
+            .user_data = @ptrCast(pd),
+            .bounds = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
+        };
+
+        try self.pane_data.put(self.allocator, pane_id, pd);
+        try self.pane_registry.put(self.allocator, pane_id, ps);
+
+        return pane_id;
+    }
+
+    /// Destroy a pane: stop its TermIO, deinit PTY, remove from registries.
+    pub fn destroyPane(self: *App, pane_id: u32) void {
+        if (self.pane_data.get(pane_id)) |pd| {
+            // Stop TermIO threads
+            pd.termio.stop();
+
+            // Deinit in reverse order
+            pd.surface.deinit();
+            pd.pty.deinit();
+            pd.termio.deinit();
+
+            self.allocator.destroy(pd);
+        }
+        _ = self.pane_data.remove(pane_id);
+
+        if (self.pane_registry.get(pane_id)) |ps| {
+            self.allocator.destroy(ps);
+        }
+        _ = self.pane_registry.remove(pane_id);
+    }
+
+    /// Config reload callback
     fn configReloadCallback() void {
         const self = g_reload_app orelse return;
         const cli_args = cli_mod.CliArgs{ .config_path = self.config_path };
@@ -162,62 +515,1748 @@ pub const App = struct {
             std.log.warn("Config reload failed: {}", .{err});
             return;
         };
-        self.surface.applyConfig(new_config);
+        self.renderer_palette = theme_mod.buildRendererPaletteFromConfig(new_config.colors);
+        self.config = new_config;
+        self.requestFrame();
         std.log.info("Config hot-reloaded", .{});
     }
 
     pub fn deinit(self: *App) void {
-        // 1. Stop config watcher
+        // Stop config watcher
         if (self.config_watcher) |*w| {
             w.deinit();
             self.config_watcher = null;
         }
 
-        // 2. Stop render thread
-        self.surface.stopRenderThread();
+        // Stop render thread
+        self.should_quit.store(true, .release);
+        if (self.render_thread) |thread| {
+            thread.join();
+        }
+        self.render_thread = null;
 
-        // 3. Stop TermIO (reader + parser)
-        self.termio.stop();
+        // Stop all pane TermIOs and clean up
+        var it = self.pane_data.iterator();
+        while (it.next()) |entry| {
+            const pd = entry.value_ptr.*;
+            pd.termio.stop();
+            pd.surface.deinit();
+            pd.pty.deinit();
+            pd.termio.deinit();
+            self.allocator.destroy(pd);
+        }
+        self.pane_data.deinit(self.allocator);
 
-        // 4. Cleanup (reverse order of init)
-        self.surface.deinit();
-        self.pty.deinit();
-        self.termio.deinit();
+        // Clean up PaneState entries
+        var ps_it = self.pane_registry.iterator();
+        while (ps_it.next()) |entry| {
+            self.allocator.destroy(entry.value_ptr.*);
+        }
+        self.pane_registry.deinit(self.allocator);
+
+        // Clean up remaining resources
+        self.pending_ops.deinit(self.allocator);
+        self.tab_manager.deinit();
+        self.compositor.deinit();
+        self.keybinding_map.deinit();
+        if (self.debug_key_file) |f| f.close();
+        self.frame_arena.deinit();
+        self.font_grid.deinit();
+        self.allocator.destroy(self.font_grid);
         self.window.deinit();
     }
 
     /// Main thread event loop (D-15: main thread does NOT do GL calls).
     pub fn run(self: *App) !void {
         while (!self.window.shouldClose()) {
-            // D-13: Apply pending OSC title updates (GLFW requires main thread)
-            self.surface.applyPendingTitle();
+            // Apply pending OSC title from focused pane
+            if (self.getFocusedPaneData()) |pd| {
+                pd.surface.applyPendingTitle();
+            }
 
-            // D-14: Poll config file watcher for hot-reload
+            // Poll config file watcher
             if (self.config_watcher) |*w| {
                 w.poll();
             }
 
-            // D-16: Adaptive event handling
-            if (self.surface.scheduler.shouldRender()) {
-                Window.pollEvents(); // Active: poll for low latency
-            } else {
-                Window.waitEventsTimeout(0.5); // Idle: wait to save CPU
+            // Adaptive event handling
+            Window.pollEvents();
+        }
+    }
+
+    // -- Input routing --
+
+    /// Handle key input: route to focused pane's Surface for VT encoding.
+    fn handleKeyInput(self: *App, key: glfw.Key, action: glfw.Action, mods: glfw.Mods) void {
+        if (action != .press and action != .repeat) return;
+
+        self.last_mods = glfwModsToModifiers(mods);
+
+        // Intercept input when preset picker is visible
+        if (self.preset_picker.visible) {
+            self.handlePickerInput(key);
+            return;
+        }
+
+        if (self.debug_key_file) |f| {
+            var tmp: [128]u8 = undefined;
+            const line = std.fmt.bufPrint(&tmp, "[key] code={d} action={d} ctrl={} shift={} alt={}\n", .{
+                @intFromEnum(key), @intFromEnum(action), mods.control, mods.shift, mods.alt,
+            }) catch "";
+            if (line.len > 0) _ = f.write(line) catch 0;
+        }
+
+        // Check keybinding map — special keys first, then character keys
+        const km = glfwModsToModifiers(mods);
+
+        if (Surface.mapGlfwKeyToSpecial(key)) |special| {
+            const combo = keybindings.KeyCombo{
+                .key = .{ .special = special },
+                .mods = km,
+            };
+
+            if (keybindings.isReservedClipboardKey(combo)) {
+                if (self.getFocusedPaneData()) |pd| {
+                    pd.surface.handleClipboardAction(combo);
+                }
+                return;
+            }
+
+            if (self.keybinding_map.get(combo)) |bound_action| {
+                self.dispatchAction(bound_action);
+                return;
+            }
+        }
+
+        // Character-based keybindings (ctrl+shift+h, alt+1, etc.)
+        if (glfwKeyToChar(key)) |ch| {
+            const combo = keybindings.KeyCombo{
+                .key = .{ .char = ch },
+                .mods = km,
+            };
+
+            if (keybindings.isReservedClipboardKey(combo)) {
+                if (self.getFocusedPaneData()) |pd| {
+                    pd.surface.handleClipboardAction(combo);
+                }
+                return;
+            }
+
+            if (self.keybinding_map.get(combo)) |bound_action| {
+                self.dispatchAction(bound_action);
+                return;
+            }
+        }
+
+        // Font zoom via GLFW key codes
+        if (mods.control and !mods.alt and !mods.super) {
+            const zoom_action: ?keybindings.Action = switch (key) {
+                .equal, .right_bracket, .kp_add => .increase_font_size,
+                .minus, .slash, .kp_subtract => .decrease_font_size,
+                .zero, .kp_0 => .reset_font_size,
+                else => null,
+            };
+            if (zoom_action) |za| {
+                self.dispatchAction(za);
+                return;
+            }
+        }
+
+        // Fall through to focused pane for VT encoding
+        if (self.getFocusedPaneData()) |pd| {
+            pd.surface.handleKeyInput(key, action, mods);
+        }
+    }
+
+    /// Handle character input: route to focused pane.
+    fn handleCharInput(self: *App, codepoint: u32) void {
+        const cp: u21 = if (codepoint <= 0x10FFFF) @intCast(codepoint) else return;
+        const combo = keybindings.KeyCombo{
+            .key = .{ .char = if (cp >= 'A' and cp <= 'Z') cp + 32 else cp },
+            .mods = self.last_mods,
+        };
+
+        if (keybindings.isReservedClipboardKey(combo)) {
+            if (self.getFocusedPaneData()) |pd| {
+                pd.surface.handleClipboardAction(combo);
+            }
+            return;
+        }
+
+        if (self.keybinding_map.get(combo)) |bound_action| {
+            self.dispatchAction(bound_action);
+            return;
+        }
+
+        // Fall through to focused pane
+        if (self.getFocusedPaneData()) |pd| {
+            pd.surface.handleCharInput(codepoint);
+        }
+    }
+
+    /// Handle mouse button: hit-test tab bar, pane borders, pane area (D-07, D-08, D-34).
+    pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Action, _: glfw.Mods) void {
+        // Handle drag release
+        if (action == .release and button == .left) {
+            if (self.window_resize_active) {
+                self.window_resize_active = false;
+                self.window_resize_edge = .{};
+            }
+            if (self.window_drag_active) {
+                // If released without moving, treat as a tab click
+                if (!self.window_drag_moved) {
+                    if (self.window_drag_tab_hit) |idx| {
+                        self.switchToTab(idx);
+                        self.requestFrame();
+                    }
+                }
+                self.window_drag_active = false;
+                self.window_drag_moved = false;
+                self.window_drag_tab_hit = null;
+            }
+            if (self.border_drag_active) {
+                self.border_drag_active = false;
+                self.border_drag_branch = null;
+                // Snap to cell grid on release (D-29)
+                self.resizeAllPanes();
+                self.requestFrame();
+            }
+            return;
+        }
+
+        if (action != .press) return;
+
+        // GLFW on Windows reports cursor positions in the same space as the
+        // framebuffer (already DPI-scaled). No multiplication needed.
+        const pos = self.window.handle.getCursorPos();
+        const fb_x: i32 = @intFromFloat(pos[0]);
+        const fb_y: i32 = @intFromFloat(pos[1]);
+        const win_x = fb_x;
+        const win_y = fb_y;
+        const metrics = self.font_grid.getMetrics();
+        const fb = self.window.getFramebufferSize();
+
+        // Check window edge resize — but NOT on title bar controls
+        if (button == .left) {
+            const edge = self.detectWindowEdge(win_x, win_y);
+            const in_controls = TabBarRenderer.isInControlsArea(fb_x, fb_y, metrics.cell_height, fb.width);
+            if (edgeIsAny(edge) and !in_controls) {
+                self.window_resize_active = true;
+                self.window_resize_edge = edge;
+                const wpos = self.window.getPos();
+                const wsz = self.window.getSize();
+                self.window_resize_start_screen_x = wpos.x + win_x;
+                self.window_resize_start_screen_y = wpos.y + win_y;
+                self.window_resize_start_win_x = wpos.x;
+                self.window_resize_start_win_y = wpos.y;
+                self.window_resize_start_win_w = @intCast(wsz.width);
+                self.window_resize_start_win_h = @intCast(wsz.height);
+                return;
+            }
+        }
+
+        // Check title bar + tab bar (both rows) — all in framebuffer coords
+        const total_h: i32 = @intCast(TabBarRenderer.computeHeight(metrics.cell_height, 4));
+        if (fb_y >= 0 and fb_y < total_h) {
+            if (button == .middle) {
+                const hit = TabBarRenderer.hitTest(fb_x, fb_y, self.tab_manager.tabCount(), metrics.cell_width, metrics.cell_height, fb.width);
+                switch (hit) {
+                    .tab => |_| self.actionCloseTab(),
+                    else => {},
+                }
+                return;
+            }
+            if (button != .left) return;
+
+            const hit = TabBarRenderer.hitTest(
+                fb_x,
+                fb_y,
+                self.tab_manager.tabCount(),
+                metrics.cell_width,
+                metrics.cell_height,
+                fb.width,
+            );
+            switch (hit) {
+                .close_tab => |_| {
+                    self.actionCloseTab();
+                },
+                .new_tab => {
+                    self.actionNewTab();
+                },
+                .window_minimize => self.window.iconify(),
+                .window_maximize => self.window.toggleMaximize(),
+                .window_close => self.window.requestClose(),
+                else => {
+                    // Tab clicks, drag region, empty space — all start a drag.
+                    // If released without movement, treat as tab click (see release handler).
+                    self.window_drag_active = true;
+                    self.window_drag_moved = false;
+                    self.window_drag_tab_hit = switch (hit) {
+                        .tab => |idx| @as(?usize, idx),
+                        else => null,
+                    };
+                    const wpos = self.window.getPos();
+                    self.window_drag_screen_x = wpos.x + win_x;
+                    self.window_drag_screen_y = wpos.y + win_y;
+                },
+            }
+            return;
+        }
+
+        if (button != .left) return;
+
+        // Pane bounds are in framebuffer space (fb_x/fb_y already computed above)
+
+        // Check pane border grab zone (within 4px of border, D-21)
+        const active_tab = self.tab_manager.getActiveTab() orelse return;
+        if (self.findBorderAtPoint(active_tab.root, fb_x, fb_y)) |border_info| {
+            self.border_drag_active = true;
+            self.border_drag_branch = border_info.branch;
+            self.border_drag_is_vertical = border_info.is_vertical;
+            self.border_drag_start_pos = if (border_info.is_vertical) pos[0] else pos[1];
+            self.border_drag_start_ratio = border_info.branch.branch.ratio;
+            return;
+        }
+
+        // Check pane area: focus the clicked pane (D-34)
+        const leaves = tree_ops.collectLeaves(active_tab.root, std.heap.page_allocator) catch return;
+        defer std.heap.page_allocator.free(leaves);
+
+        for (leaves) |pane_id| {
+            if (tree_ops.findLeaf(active_tab.root, pane_id)) |leaf_node| {
+                if (leaf_node.leaf.bounds.contains(fb_x, fb_y)) {
+                    active_tab.focused_pane_id = pane_id;
+                    self.requestFrame();
+                    return;
+                }
             }
         }
     }
+
+    /// Handle cursor position for border drag resize and cursor shape.
+    pub fn handleCursorPos(self: *App, xpos: f64, ypos: f64) void {
+        // Window edge resize (frameless window)
+        if (self.window_resize_active) {
+            const wpos = self.window.getPos();
+            const screen_x: i32 = wpos.x + @as(i32, @intFromFloat(xpos));
+            const screen_y: i32 = wpos.y + @as(i32, @intFromFloat(ypos));
+            const dx = screen_x - self.window_resize_start_screen_x;
+            const dy = screen_y - self.window_resize_start_screen_y;
+            const e = self.window_resize_edge;
+
+            var new_x = self.window_resize_start_win_x;
+            var new_y = self.window_resize_start_win_y;
+            var new_w: i32 = @intCast(self.window_resize_start_win_w);
+            var new_h: i32 = @intCast(self.window_resize_start_win_h);
+
+            if (e.right) new_w += dx;
+            if (e.bottom) new_h += dy;
+            if (e.left) {
+                new_x += dx;
+                new_w -= dx;
+            }
+            if (e.top) {
+                new_y += dy;
+                new_h -= dy;
+            }
+
+            // Minimum window size
+            const min_w: i32 = 200;
+            const min_h: i32 = 100;
+            if (new_w < min_w) {
+                if (e.left) new_x -= min_w - new_w;
+                new_w = min_w;
+            }
+            if (new_h < min_h) {
+                if (e.top) new_y -= min_h - new_h;
+                new_h = min_h;
+            }
+
+            self.window.setPos(new_x, new_y);
+            self.window.setSize(new_w, new_h);
+            return;
+        }
+
+        // Window drag (frameless window)
+        // Use screen-absolute coordinates: window_pos + cursor_pos gives screen position.
+        // Compare against the screen-absolute position where the drag started.
+        if (self.window_drag_active) {
+            const wpos = self.window.getPos();
+            const screen_x: i32 = wpos.x + @as(i32, @intFromFloat(xpos));
+            const screen_y: i32 = wpos.y + @as(i32, @intFromFloat(ypos));
+            const dx = screen_x - self.window_drag_screen_x;
+            const dy = screen_y - self.window_drag_screen_y;
+            // Only move if there's actual movement (distinguishes click from drag)
+            if (dx != 0 or dy != 0) {
+                self.window_drag_moved = true;
+                self.window.setPos(wpos.x + dx, wpos.y + dy);
+                self.window_drag_screen_x = screen_x;
+                self.window_drag_screen_y = screen_y;
+            }
+            return;
+        }
+
+        if (self.border_drag_active) {
+            const branch = self.border_drag_branch orelse return;
+            const b = &branch.branch;
+            const parent_bounds = getNodeBounds(branch);
+
+            const total_size: f64 = if (self.border_drag_is_vertical)
+                @floatFromInt(parent_bounds.w)
+            else
+                @floatFromInt(parent_bounds.h);
+
+            if (total_size <= 0) return;
+
+            const current_pos: f64 = if (self.border_drag_is_vertical) xpos else ypos;
+            const delta_px = current_pos - self.border_drag_start_pos;
+            const delta_ratio: f32 = @floatCast(delta_px / total_size);
+
+            var new_ratio = self.border_drag_start_ratio + delta_ratio;
+            new_ratio = @max(0.1, @min(0.9, new_ratio));
+            b.ratio = new_ratio;
+
+            self.resizeAllPanes();
+            self.requestFrame();
+            return;
+        }
+
+        // GLFW cursor positions are already in framebuffer space on Windows
+        const win_x: i32 = @intFromFloat(xpos);
+        const win_y: i32 = @intFromFloat(ypos);
+        const fb_x = win_x;
+        const fb_y = win_y;
+
+        // Track which control button is hovered (for background highlight)
+        const cur_metrics = self.font_grid.getMetrics();
+        const cur_fb = self.window.getFramebufferSize();
+        const old_hover = self.hovered_control;
+        if (TabBarRenderer.isInControlsArea(fb_x, fb_y, cur_metrics.cell_height, cur_fb.width)) {
+            const hit = TabBarRenderer.hitTest(fb_x, fb_y, 0, cur_metrics.cell_width, cur_metrics.cell_height, cur_fb.width);
+            self.hovered_control = switch (hit) {
+                .window_minimize => 1,
+                .window_maximize => 2,
+                .window_close => 3,
+                else => 0,
+            };
+        } else {
+            self.hovered_control = 0;
+        }
+        if (self.hovered_control != old_hover) self.requestFrame();
+
+        // Window edge cursor shape (frameless window resize)
+        const edge = self.detectWindowEdge(win_x, win_y);
+        if (edgeIsAny(edge)) {
+            const shape: glfw.Cursor.Shape = blk: {
+                if ((edge.left and edge.top) or (edge.right and edge.bottom)) break :blk .resize_nwse;
+                if ((edge.right and edge.top) or (edge.left and edge.bottom)) break :blk .resize_nesw;
+                if (edge.left or edge.right) break :blk .resize_ew;
+                break :blk .resize_ns;
+            };
+            if (glfw.Cursor.createStandard(shape)) |cursor| {
+                self.window.handle.setCursor(cursor);
+            } else |_| {}
+            return;
+        }
+
+        // Pane border cursor shape (pane bounds are in framebuffer space)
+        const active_tab = self.tab_manager.getActiveTab() orelse return;
+        if (self.findBorderAtPoint(active_tab.root, fb_x, fb_y)) |border_info| {
+            const shape: glfw.Cursor.Shape = if (border_info.is_vertical) .resize_ew else .resize_ns;
+            if (glfw.Cursor.createStandard(shape)) |cursor| {
+                self.window.handle.setCursor(cursor);
+            } else |_| {}
+        } else {
+            self.window.handle.setCursor(null); // Default arrow
+        }
+    }
+
+    /// Border hit-test result.
+    const BorderHit = struct {
+        branch: *PaneNode,
+        is_vertical: bool, // true = vertical border (left/right resize)
+    };
+
+    /// Find a border within the grab zone (4px) at the given pixel position.
+    fn findBorderAtPoint(self: *App, node: *PaneNode, x: i32, y: i32) ?BorderHit {
+        _ = self;
+        return findBorderRecursive(node, x, y);
+    }
+
+    fn findBorderRecursive(node: *PaneNode, x: i32, y: i32) ?BorderHit {
+        switch (node.*) {
+            .branch => |b| {
+                const first_bounds = getNodeBounds(b.first);
+                const grab_zone: i32 = 4;
+
+                switch (b.direction) {
+                    .vertical => {
+                        const border_x = first_bounds.x + @as(i32, @intCast(first_bounds.w));
+                        if (x >= border_x - grab_zone and x <= border_x + grab_zone) {
+                            return .{ .branch = node, .is_vertical = true };
+                        }
+                    },
+                    .horizontal => {
+                        const border_y = first_bounds.y + @as(i32, @intCast(first_bounds.h));
+                        if (y >= border_y - grab_zone and y <= border_y + grab_zone) {
+                            return .{ .branch = node, .is_vertical = false };
+                        }
+                    },
+                }
+
+                // Recurse into children
+                return findBorderRecursive(b.first, x, y) orelse findBorderRecursive(b.second, x, y);
+            },
+            .leaf => return null,
+        }
+    }
+
+    /// Dispatch a keybinding action.
+    fn dispatchAction(self: *App, action: keybindings.Action) void {
+        switch (action) {
+            .copy => if (self.getFocusedPaneData()) |pd| pd.surface.copySelection(),
+            .paste => if (self.getFocusedPaneData()) |pd| pd.surface.pasteFromClipboard(),
+            .increase_font_size => self.changeFontSize(1.0),
+            .decrease_font_size => self.changeFontSize(-1.0),
+            .reset_font_size => self.resetFontSize(),
+            .scroll_page_up => if (self.getFocusedPaneData()) |pd| pd.surface.scrollPageUp(),
+            .scroll_page_down => if (self.getFocusedPaneData()) |pd| pd.surface.scrollPageDown(),
+
+            // Tab operations
+            .new_tab => self.actionNewTab(),
+            .close_tab => self.actionCloseTab(),
+            .next_tab => {
+                const count = self.tab_manager.tabCount();
+                if (count > 1) {
+                    const next = (self.tab_manager.active_idx + 1) % count;
+                    self.switchToTab(next);
+                }
+            },
+            .prev_tab => {
+                const count = self.tab_manager.tabCount();
+                if (count > 1) {
+                    const prev = if (self.tab_manager.active_idx == 0) count - 1 else self.tab_manager.active_idx - 1;
+                    self.switchToTab(prev);
+                }
+            },
+            .goto_tab_1 => self.switchToTab(0),
+            .goto_tab_2 => self.switchToTab(1),
+            .goto_tab_3 => self.switchToTab(2),
+            .goto_tab_4 => self.switchToTab(3),
+            .goto_tab_5 => self.switchToTab(4),
+            .goto_tab_6 => self.switchToTab(5),
+            .goto_tab_7 => self.switchToTab(6),
+            .goto_tab_8 => self.switchToTab(7),
+            .goto_tab_9 => self.switchToTab(8),
+            .goto_tab_last => {
+                const count = self.tab_manager.tabCount();
+                if (count > 0) {
+                    self.switchToTab(count - 1);
+                }
+            },
+
+            // Pane operations
+            .split_horizontal => self.actionSplit(.horizontal),
+            .split_vertical => self.actionSplit(.vertical),
+            .close_pane => self.actionClosePane(),
+
+            // Focus navigation
+            .focus_next_pane => {
+                if (self.tab_manager.getActiveTab()) |tab| {
+                    if (tree_ops.focusNext(tab.root, tab.focused_pane_id)) |next_id| {
+                        tab.focused_pane_id = next_id;
+                        self.requestFrame();
+                    }
+                }
+            },
+            .focus_prev_pane => {
+                if (self.tab_manager.getActiveTab()) |tab| {
+                    if (tree_ops.focusPrev(tab.root, tab.focused_pane_id)) |prev_id| {
+                        tab.focused_pane_id = prev_id;
+                        self.requestFrame();
+                    }
+                }
+            },
+            .focus_pane_up => self.focusDirection(.up),
+            .focus_pane_down => self.focusDirection(.down),
+            .focus_pane_left => self.focusDirection(.left),
+            .focus_pane_right => self.focusDirection(.right),
+
+            // Tab reorder
+            .move_tab_left => { self.tab_manager.moveTabLeft(); self.requestFrame(); },
+            .move_tab_right => { self.tab_manager.moveTabRight(); self.requestFrame(); },
+
+            // Zoom (D-24)
+            .zoom_pane => self.actionZoomPane(),
+            .equalize_panes => {
+                if (self.tab_manager.getActiveTab()) |tab| {
+                    tree_ops.equalize(tab.root);
+                    self.resizeAllPanes();
+                    self.requestFrame();
+                }
+            },
+            .rotate_split => self.actionRotateSplit(),
+
+            // Pane resize (keyboard, 1 cell per press, D-29)
+            .resize_pane_up => self.actionResizePane(.up),
+            .resize_pane_down => self.actionResizePane(.down),
+            .resize_pane_left => self.actionResizePane(.left),
+            .resize_pane_right => self.actionResizePane(.right),
+
+            // Swap pane (D-30)
+            .swap_pane_up => self.actionSwapDirectional(.up),
+            .swap_pane_down => self.actionSwapDirectional(.down),
+            .swap_pane_left => self.actionSwapDirectional(.left),
+            .swap_pane_right => self.actionSwapDirectional(.right),
+
+            // Break out pane to new tab (D-32)
+            .break_out_pane => self.actionBreakOut(),
+
+            .open_layout_picker => {
+                if (self.config.layouts.len > 0) {
+                    self.preset_picker.open(self.config.layouts.len);
+                    self.requestFrame();
+                }
+            },
+            .scroll_to_top, .scroll_to_bottom => {},
+            .search => {},
+            .none => {},
+        }
+    }
+
+    /// Navigate focus to the pane in the given direction (D-22).
+    fn actionFocusDirectional(self: *App, direction: PaneTree.FocusDirection) void {
+        self.focusDirection(direction);
+    }
+
+    /// Switch to a tab by index, clearing activity indicator (D-13).
+    fn actionNewTab(self: *App) void {
+        const tab = self.tab_manager.createTab() catch return;
+        const pane_id = self.createPane(null) catch return;
+
+        // Wire the new tab's root leaf to this pane
+        tab.root.leaf.pane_id = pane_id;
+        tab.focused_pane_id = pane_id;
+        tab.next_pane_id = pane_id + 1;
+
+        // Set tab_index on the pane and start TermIO
+        const new_tab_idx: u32 = @intCast(self.tab_manager.tabCount() - 1);
+        std.log.info("TAB {d}: created (pane_id={d})", .{ new_tab_idx + 1, pane_id });
+        if (self.pane_data.get(pane_id)) |pd| {
+            pd.tab_index = new_tab_idx;
+            pd.termio.start() catch {};
+            pd.termio.terminal.observer.onScreenChange = &screenChangeCallback;
+            pd.termio.terminal.observer.screen_change_ctx = @ptrCast(pd);
+        }
+
+        // Switch to the new tab and clear stale activity indicators
+        self.switchToTab(new_tab_idx);
+        self.resizeAllPanes();
+        self.updateTabTitles();
+        for (self.tab_manager.tabs.items) |*t| t.has_activity = false;
+    }
+
+    fn actionCloseTab(self: *App) void {
+        const tab = self.tab_manager.getActiveTab() orelse return;
+
+        // Destroy all panes in this tab
+        const leaves = tree_ops.collectLeaves(tab.root, std.heap.page_allocator) catch return;
+        defer std.heap.page_allocator.free(leaves);
+        for (leaves) |pane_id| {
+            self.destroyPane(pane_id);
+        }
+
+        const idx = self.tab_manager.active_idx;
+        const result = self.tab_manager.closeTab(idx);
+        if (result == .last_tab_closed) {
+            self.window.handle.setShouldClose(true);
+            return;
+        }
+        self.resizeAllPanes();
+        self.requestFrame();
+    }
+
+    fn switchToTab(self: *App, idx: usize) void {
+        self.tab_manager.switchTab(idx);
+        // Clear activity on the now-active tab
+        if (self.tab_manager.getActiveTab()) |tab| {
+            tab.has_activity = false;
+        }
+        self.requestFrame();
+    }
+
+    fn focusDirection(self: *App, direction: PaneTree.FocusDirection) void {
+        if (self.tab_manager.getActiveTab()) |tab| {
+            if (tree_ops.findLeaf(tab.root, tab.focused_pane_id)) |leaf| {
+                if (tree_ops.focusDirectional(leaf, direction)) |target_id| {
+                    tab.focused_pane_id = target_id;
+                    self.requestFrame();
+                }
+            }
+        }
+    }
+
+    /// Dispatch a pane/tab action by name (alias for dispatchAction for plan compliance).
+    fn dispatchPaneAction(self: *App, action: keybindings.Action) void {
+        self.dispatchAction(action);
+    }
+
+    /// Split the focused pane in the given direction.
+    /// Checks canSplit minimum before proceeding (UI-SPEC: 10x3).
+    fn actionSplit(self: *App, direction: PaneTree.SplitDirection) void {
+        const tab = self.tab_manager.getActiveTab() orelse return;
+        const leaf = tree_ops.findLeaf(tab.root, tab.focused_pane_id) orelse return;
+        const metrics = self.font_grid.getMetrics();
+
+        // Check minimum size constraint (10 cols x 3 rows)
+        if (!tree_ops.canSplit(leaf.leaf.bounds, direction, metrics.cell_width, metrics.cell_height, 10, 3)) {
+            return;
+        }
+
+        const new_id = tab.splitFocused(direction) catch return;
+
+        // Create pane with TermIO + PTY
+        const pane_id = self.createPane(null) catch return;
+
+        // Update the new leaf's pane_id to match the created pane
+        if (tree_ops.findLeaf(tab.root, new_id)) |new_leaf| {
+            new_leaf.leaf.pane_id = pane_id;
+        }
+        tab.focused_pane_id = pane_id;
+
+        // Set tab_index and start the new pane's TermIO
+        if (self.pane_data.get(pane_id)) |pd| {
+            pd.tab_index = @intCast(self.tab_manager.active_idx);
+            pd.termio.start() catch {};
+            pd.termio.terminal.observer.onScreenChange = &screenChangeCallback;
+            pd.termio.terminal.observer.screen_change_ctx = @ptrCast(pd);
+        }
+
+        self.resizeAllPanes();
+        self.updateTabTitles();
+        self.requestFrame();
+    }
+
+    /// Close the focused pane (D-20, D-27).
+    fn actionClosePane(self: *App) void {
+        const tab = self.tab_manager.getActiveTab() orelse return;
+        const old_pane_id = tab.focused_pane_id;
+
+        const result = tab.closeFocused();
+        self.destroyPane(old_pane_id);
+
+        if (result) |_| {
+            // Sibling takes focus, resize remaining panes
+            self.resizeAllPanes();
+            self.updateTabTitles();
+            self.requestFrame();
+        } else {
+            // Was last pane in tab (D-27) - close the tab
+            const idx = self.tab_manager.active_idx;
+            const close_result = self.tab_manager.closeTab(idx);
+            if (close_result == .last_tab_closed) {
+                self.window.handle.setShouldClose(true);
+            }
+            self.resizeAllPanes();
+            self.updateTabTitles();
+            self.requestFrame();
+        }
+    }
+
+    /// Toggle zoom on the focused pane (D-24).
+    fn actionZoomPane(self: *App) void {
+        const tab = self.tab_manager.getActiveTab() orelse return;
+
+        if (tab.is_zoomed) {
+            // Unzoom: restore saved root
+            if (tab.zoom_saved_root) |saved| {
+                tab.root = saved;
+                tab.zoom_saved_root = null;
+            }
+            tab.is_zoomed = false;
+        } else {
+            // Zoom: save current root, create single-leaf root for focused pane
+            tab.zoom_saved_root = tab.root;
+            const new_root = PaneTree.createLeaf(self.allocator, tab.focused_pane_id, null) catch return;
+            tab.root = new_root;
+            tab.is_zoomed = true;
+        }
+        self.resizeAllPanes();
+        self.requestFrame();
+    }
+
+    /// Resize the focused pane by 1 cell in the given direction (D-29).
+    fn actionResizePane(self: *App, direction: PaneTree.FocusDirection) void {
+        const tab = self.tab_manager.getActiveTab() orelse return;
+        const leaf = tree_ops.findLeaf(tab.root, tab.focused_pane_id) orelse return;
+
+        // Find the nearest ancestor branch whose split matches the resize direction
+        const branch = tree_ops.findResizableBranch(leaf, direction) orelse return;
+        const b = &branch.branch;
+
+        const metrics = self.font_grid.getMetrics();
+
+        // Compute delta as a ratio change equivalent to 1 cell
+        const total_size: f32 = switch (b.direction) {
+            .horizontal => @floatFromInt(getNodeBounds(branch).h),
+            .vertical => @floatFromInt(getNodeBounds(branch).w),
+        };
+        if (total_size <= 0) return;
+
+        const cell_size: f32 = switch (b.direction) {
+            .horizontal => metrics.cell_height,
+            .vertical => metrics.cell_width,
+        };
+        const delta = cell_size / total_size;
+
+        // Determine sign: growing first child or second based on direction + which child has focus
+        const focus_in_first = tree_ops.findLeaf(b.first, tab.focused_pane_id) != null;
+        const grow_first = switch (direction) {
+            .down, .right => focus_in_first,
+            .up, .left => !focus_in_first,
+        };
+
+        var new_ratio = if (grow_first) b.ratio + delta else b.ratio - delta;
+        new_ratio = @max(0.1, @min(0.9, new_ratio)); // Clamp
+        b.ratio = new_ratio;
+
+        self.resizeAllPanes();
+        self.requestFrame();
+    }
+
+    /// Swap focused pane with neighbor in the given direction (D-30).
+    fn actionSwapDirectional(self: *App, direction: PaneTree.FocusDirection) void {
+        const tab = self.tab_manager.getActiveTab() orelse return;
+        const leaf = tree_ops.findLeaf(tab.root, tab.focused_pane_id) orelse return;
+        const neighbor_id = tree_ops.focusDirectional(leaf, direction) orelse return;
+        const neighbor_leaf = tree_ops.findLeaf(tab.root, neighbor_id) orelse return;
+
+        tree_ops.swap(leaf, neighbor_leaf);
+        self.requestFrame();
+    }
+
+    /// Rotate the split direction of the focused pane's parent branch (D-33).
+    fn actionRotateSplit(self: *App) void {
+        const tab = self.tab_manager.getActiveTab() orelse return;
+        const leaf = tree_ops.findLeaf(tab.root, tab.focused_pane_id) orelse return;
+        if (leaf.leaf.parent) |parent| {
+            tree_ops.rotate(parent);
+            self.resizeAllPanes();
+            self.requestFrame();
+        }
+    }
+
+    /// Break the focused pane out into a new tab (D-32).
+    fn actionBreakOut(self: *App) void {
+        const tab = self.tab_manager.getActiveTab() orelse return;
+        const pane_id = tab.focused_pane_id;
+
+        // Only break out if there's more than one pane
+        if (tab.paneCount() <= 1) return;
+
+        // Remove from current tab tree (close returns sibling focus)
+        const new_focus = tab.closeFocused() orelse return;
+        _ = new_focus;
+
+        // Create new tab
+        const new_tab = self.tab_manager.createTab() catch return;
+
+        // Point the new tab's root leaf to the existing pane (don't destroy/recreate)
+        new_tab.root.leaf.pane_id = pane_id;
+        new_tab.focused_pane_id = pane_id;
+        new_tab.next_pane_id = pane_id + 1;
+
+        self.resizeAllPanes();
+        self.requestFrame();
+    }
+
+    /// Recompute bounds for the active tab and resize all pane PTYs.
+    /// Called after any structural layout change (split, close, resize, zoom, etc).
+    fn resizeAllPanes(self: *App) void {
+        // Suppress activity for 30 frames — async PTY redraws from resize cause false positives
+        self.suppress_activity_frames.store(30, .release);
+        for (self.tab_manager.tabs.items) |*t| t.has_activity = false;
+        const tab = self.tab_manager.getActiveTab() orelse return;
+        const fb = self.window.getFramebufferSize();
+        const metrics = self.font_grid.getMetrics();
+        const tab_bar_height = TabBarRenderer.computeHeight(metrics.cell_height, 4);
+
+        const content_y: i32 = @intCast(tab_bar_height);
+        const content_h: u32 = if (fb.height > tab_bar_height) fb.height - tab_bar_height else 0;
+        const available = Rect{
+            .x = 0,
+            .y = content_y,
+            .w = fb.width,
+            .h = content_h,
+        };
+
+        tree_ops.computeBounds(tab.root, available, metrics.cell_width, metrics.cell_height, 1);
+
+        // Resize each pane's TermIO/PTY to match its new bounds
+        const leaves = tree_ops.collectLeaves(tab.root, std.heap.page_allocator) catch return;
+        defer std.heap.page_allocator.free(leaves);
+
+        for (leaves) |pid| {
+            if (self.pane_data.get(pid)) |pd| {
+                if (tree_ops.findLeaf(tab.root, pid)) |leaf_node| {
+                    const bounds = leaf_node.leaf.bounds;
+                    const cols: u16 = @intFromFloat(@min(500.0, @max(1.0, @as(f32, @floatFromInt(bounds.w)) / metrics.cell_width)));
+                    const rows: u16 = @intFromFloat(@min(500.0, @max(1.0, @as(f32, @floatFromInt(bounds.h)) / metrics.cell_height)));
+                    pd.termio.resize(cols, rows) catch {};
+                }
+            }
+        }
+    }
+
+    /// Update tab titles from focused pane CWD and process name (D-03, D-04).
+    /// Format: "N: basename: process [count] [Z]"
+    /// Called periodically from the render loop.
+    fn updateTabTitles(self: *App) void {
+        for (self.tab_manager.tabs.items, 0..) |*tab, idx| {
+            var title_buf: [128]u8 = undefined;
+            var offset: usize = 0;
+
+            // Prefer CWD basename; fall back to process name
+            if (self.pane_data.get(tab.focused_pane_id)) |pd| {
+                const cwd_l = pd.cwd_len.load(.acquire);
+                if (cwd_l > 0) {
+                    const cwd_slice = pd.cwd[0..cwd_l];
+                    const base = if (std.mem.lastIndexOfScalar(u8, cwd_slice, '/')) |i|
+                        cwd_slice[i + 1 ..]
+                    else if (std.mem.lastIndexOfScalar(u8, cwd_slice, '\\')) |i|
+                        cwd_slice[i + 1 ..]
+                    else
+                        cwd_slice;
+                    const copy_len = @min(base.len, title_buf.len - offset);
+                    @memcpy(title_buf[offset .. offset + copy_len], base[0..copy_len]);
+                    offset += copy_len;
+                } else if (pd.process_name_len > 0) {
+                    // No CWD — show process name as fallback
+                    const pname = pd.process_name[0..pd.process_name_len];
+                    const copy_len = @min(pname.len, title_buf.len - offset);
+                    @memcpy(title_buf[offset .. offset + copy_len], pname[0..copy_len]);
+                    offset += copy_len;
+                }
+            }
+
+            // Pane count badge "[N]" if >1 pane (D-03)
+            const pcount = tab.paneCount();
+            if (pcount > 1) {
+                const badge = std.fmt.bufPrint(title_buf[offset..], " [{d}]", .{pcount}) catch "";
+                offset += badge.len;
+            }
+
+            // Zoom badge "[Z]" (D-24)
+            if (tab.is_zoomed) {
+                if (offset + 4 <= title_buf.len) {
+                    @memcpy(title_buf[offset .. offset + 4], " [Z]");
+                    offset += 4;
+                }
+            }
+
+            const new_title = title_buf[0..offset];
+            // Log when title changes
+            const old_title = tab.title[0..tab.title_len];
+            if (!std.mem.eql(u8, old_title, new_title)) {
+                std.log.info("TAB {d}: title changed \"{s}\" -> \"{s}\"", .{ idx + 1, old_title, new_title });
+            }
+            tab.setTitle(new_title);
+        }
+    }
+
+    /// Handle keyboard input while the preset picker overlay is visible.
+    fn handlePickerInput(self: *App, key: glfw.Key) void {
+        switch (key) {
+            .up => {
+                self.preset_picker.moveUp();
+                self.requestFrame();
+            },
+            .down => {
+                self.preset_picker.moveDown();
+                self.requestFrame();
+            },
+            .enter, .kp_enter => {
+                const idx = self.preset_picker.getSelectedIndex();
+                if (idx < self.config.layouts.len) {
+                    self.activatePreset(&self.config.layouts[idx]);
+                }
+                self.preset_picker.close();
+                self.requestFrame();
+            },
+            .escape => {
+                self.preset_picker.close();
+                self.requestFrame();
+            },
+            else => {}, // Ignore all other keys while picker is open
+        }
+    }
+
+    /// Activate a layout preset: create new tabs with the preset's pane tree.
+    /// Non-destructive: opens in new tab(s), preserving existing tabs (D-39).
+    fn activatePreset(self: *App, preset: *const LayoutPreset.LayoutPreset) void {
+        var first_new_tab_idx: ?usize = null;
+
+        for (preset.tabs) |tab_def| {
+            // Create new tab
+            const tab = self.tab_manager.createTab() catch continue;
+            if (first_new_tab_idx == null) {
+                first_new_tab_idx = self.tab_manager.tabCount() - 1;
+            }
+
+            if (tab_def.panes.len == 0) continue;
+
+            // Build tree from preset panes
+            const start_id = generatePaneId(self);
+            const build_result = LayoutPreset.buildTree(self.allocator, tab_def.panes, start_id) catch continue;
+
+            // Replace the tab's default root with the built tree
+            PaneTree.destroyNode(self.allocator, tab.root);
+            tab.root = build_result.root;
+
+            // Create actual panes (TermIO + PTY) for each leaf
+            const leaves = tree_ops.collectLeaves(tab.root, self.allocator) catch continue;
+            defer self.allocator.free(leaves);
+
+            for (leaves, 0..) |pane_id, i| {
+                const dir = if (i < tab_def.panes.len) tab_def.panes[i].dir else null;
+                const actual_id = self.createPane(dir) catch continue;
+
+                // If the generated pane_id differs from what buildTree assigned,
+                // update the tree leaf to match the actual pane_id
+                if (actual_id != pane_id) {
+                    if (tree_ops.findLeaf(tab.root, pane_id)) |leaf| {
+                        leaf.leaf.pane_id = actual_id;
+                    }
+                }
+
+                // Set focused pane to first leaf
+                if (i == 0) {
+                    tab.focused_pane_id = actual_id;
+                }
+
+                // Execute startup command if specified (D-40)
+                if (i < tab_def.panes.len) {
+                    if (tab_def.panes[i].cmd) |cmd| {
+                        if (self.pane_data.get(actual_id)) |pd| {
+                            // Write command + newline to the pane's TermIO
+                            // Shell stays interactive after command runs
+                            pd.termio.writeInput(cmd) catch {};
+                            pd.termio.writeInput("\n") catch {};
+                        }
+                    }
+                }
+            }
+
+            // Update tab's next_pane_id
+            tab.next_pane_id = generatePaneId(self);
+        }
+
+        // Switch to the first new tab
+        if (first_new_tab_idx) |idx| {
+            self.tab_manager.switchTab(idx);
+        }
+        self.requestFrame();
+    }
+
+    /// Activate a named layout preset by name. Used by --layout CLI flag.
+    pub fn activatePresetByName(self: *App, name: []const u8) void {
+        for (self.config.layouts) |*preset| {
+            if (std.mem.eql(u8, preset.name, name)) {
+                self.activatePreset(preset);
+                return;
+            }
+        }
+        std.log.err("Layout \"{s}\" not found in config.", .{name});
+    }
+
+    fn changeFontSize(self: *App, delta: f32) void {
+        const current_fp = self.new_font_size.load(.acquire);
+        const current: f32 = @as(f32, @floatFromInt(current_fp)) / 100.0;
+        var new_size = current + delta;
+        new_size = @max(6.0, @min(72.0, new_size));
+        const new_fp: u32 = @intFromFloat(new_size * 100.0);
+        if (new_fp != current_fp) {
+            self.new_font_size.store(new_fp, .release);
+            self.pending_font_change.store(true, .release);
+            self.requestFrame();
+        }
+    }
+
+    fn resetFontSize(self: *App) void {
+        const default_fp: u32 = @intFromFloat(self.config.font_size_pt() * 100.0);
+        if (self.new_font_size.load(.acquire) == default_fp) return;
+        self.new_font_size.store(default_fp, .release);
+        self.pending_font_change.store(true, .release);
+        self.requestFrame();
+    }
+
+    /// Request a new frame render.
+    pub fn requestFrame(self: *App) void {
+        self.frame_requested.store(true, .release);
+    }
+
+    /// Queue a pane operation for execution on the render thread.
+    fn queueOp(self: *App, op: PaneOp) void {
+        self.pending_ops_mutex.lock();
+        defer self.pending_ops_mutex.unlock();
+        self.pending_ops.append(self.allocator, op) catch {};
+        self.requestFrame();
+    }
+
+    /// Get PaneData for the currently focused pane.
+    fn getFocusedPaneData(self: *App) ?*PaneData {
+        const tab = self.tab_manager.getActiveTab() orelse return null;
+        return self.pane_data.get(tab.focused_pane_id);
+    }
+
+    // -- Render thread --
+
+    fn renderThreadMain(self: *App) void {
+        // Acquire GL context
+        self.window.makeContextCurrent();
+
+        if (!self.gl_procs.init(glfw.getProcAddress)) {
+            std.log.err("Failed to initialize OpenGL procedure table", .{});
+            return;
+        }
+        gl.makeProcTableCurrent(&self.gl_procs);
+
+        // Initialize OpenGL backend
+        var backend = OpenGLBackend.init() catch |err| {
+            std.log.err("Failed to initialize OpenGL backend: {}", .{err});
+            return;
+        };
+
+        // Initial viewport setup
+        {
+            const fb = self.window.getFramebufferSize();
+            backend.resize(fb.width, fb.height);
+        }
+
+        // Upload initial atlas
+        {
+            const atlas = self.font_grid.getAtlas();
+            backend.uploadAtlas(atlas.getPixels(), atlas.getSize());
+            self.font_grid.getAtlasMut().clearDirty();
+            backend.uploadColorAtlas(atlas.getColorPixels(), atlas.getColorSize());
+            self.font_grid.getAtlasMut().clearColorDirty();
+        }
+
+        // Initial terminal resize — use per-pane bounds
+        self.resizeAllPanes();
+
+        const perf_log = if (self.perf_logging)
+            std.fs.cwd().createFile("termp_perf.log", .{}) catch null
+        else
+            null;
+
+        const min_frame_ns: i128 = 16_000_000;
+        var last_frame_ns: i128 = 0;
+
+        while (!self.should_quit.load(.acquire)) {
+            if (self.frame_requested.swap(false, .acq_rel)) {
+                const now = std.time.nanoTimestamp();
+                if (now - last_frame_ns < min_frame_ns) {
+                    self.frame_requested.store(true, .release);
+                    std.Thread.sleep(1_000_000);
+                    continue;
+                }
+                last_frame_ns = now;
+
+                // Handle pending font size change
+                if (self.pending_font_change.swap(false, .acq_rel)) {
+                    const new_size_fp = self.new_font_size.load(.acquire);
+                    const new_size: f32 = @as(f32, @floatFromInt(new_size_fp)) / 100.0;
+                    self.font_grid.setSize(new_size) catch {};
+
+                    const fb2 = self.window.getFramebufferSize();
+                    backend.resize(@intCast(fb2.width), @intCast(fb2.height));
+
+                    self.resizeAllPanes();
+                }
+
+                // Handle pending resize
+                if (self.pending_resize.swap(false, .acq_rel)) {
+                    const w = self.new_fb_width.load(.acquire);
+                    const h = self.new_fb_height.load(.acquire);
+                    backend.resize(w, h);
+                    self.resizeAllPanes();
+                }
+
+                // Render frame: clear, tab bar, panes, borders
+                const fb = self.window.getFramebufferSize();
+                if (fb.width == 0 or fb.height == 0) {
+                    // Window is minimized — skip rendering to avoid GL errors
+                    self.window.swapBuffers();
+                    _ = self.frame_arena.reset(.retain_capacity);
+                    continue;
+                }
+                const metrics = self.font_grid.getMetrics();
+                const tab_bar_height = TabBarRenderer.computeHeight(metrics.cell_height, 4);
+
+                // Clear full window
+                const bg = self.renderer_palette.default_bg;
+                gl.ClearColor(
+                    @as(gl.float, @floatFromInt(bg.r)) / 255.0,
+                    @as(gl.float, @floatFromInt(bg.g)) / 255.0,
+                    @as(gl.float, @floatFromInt(bg.b)) / 255.0,
+                    1.0,
+                );
+                gl.Viewport(0, 0, @intCast(fb.width), @intCast(fb.height));
+                gl.Disable(gl.SCISSOR_TEST);
+                gl.Clear(gl.COLOR_BUFFER_BIT);
+
+                // Update tab titles periodically (forced on pane/tab create/close)
+                if (self.frame_count % 60 == 0 or self.frame_count <= 1) {
+                    self.updateTabTitles();
+                }
+
+                // Render tab bar
+                var tab_bar_ctx = TabBarRenderCtx{
+                    .backend = &backend,
+                    .font_grid = self.font_grid,
+                };
+                // Upload icon texture on first frame
+                if (backend.icon_size == 0) {
+                    const icon_data = @import("icon");
+                    const img = icon_data.images[1]; // 32x32
+                    const sz: u32 = @intCast(img.width);
+                    const byte_count = sz * @as(u32, @intCast(img.height)) * 4;
+                    backend.uploadIcon(img.pixels[0..byte_count], sz);
+                }
+
+                TabBarRenderer.render(
+                    &self.tab_manager,
+                    .{
+                        .tab_bar_bg = self.renderer_palette.ui_tab_bar_bg.toU32(),
+                        .tab_active = self.renderer_palette.ui_tab_active.toU32(),
+                        .tab_inactive = self.renderer_palette.ui_tab_inactive.toU32(),
+                        .fg_color = self.renderer_palette.default_fg.toU32(),
+                        .agent_alert = self.renderer_palette.ui_agent_alert.toU32(),
+                        .pane_border = self.renderer_palette.ui_pane_border_active.toU32(),
+                        .cell_width = metrics.cell_width,
+                        .cell_height = metrics.cell_height,
+                        .hovered_control = self.hovered_control,
+                    },
+                    fb.width,
+                    tab_bar_height,
+                    drawFilledRectCallback,
+                    drawTextCallback,
+                    drawIconCallback,
+                    @ptrCast(&tab_bar_ctx),
+                );
+
+                // Render panes in active tab
+                if (self.tab_manager.getActiveTab()) |active_tab| {
+                    const content_y: i32 = @intCast(tab_bar_height);
+                    const content_h: u32 = if (fb.height > tab_bar_height) fb.height - tab_bar_height else 0;
+                    const available = Rect{
+                        .x = 0,
+                        .y = content_y,
+                        .w = fb.width,
+                        .h = content_h,
+                    };
+
+                    // Fill content area with default bg to cover cell-grid rounding gaps
+                    backend.drawFilledRect(RendererRect{
+                        .x = 0,
+                        .y = content_y,
+                        .w = fb.width,
+                        .h = content_h,
+                    }, self.renderer_palette.default_bg);
+
+                    tree_ops.computeBounds(active_tab.root, available, metrics.cell_width, metrics.cell_height, 1);
+
+                    // Render each pane
+                    const leaves = tree_ops.collectLeaves(active_tab.root, std.heap.page_allocator) catch &.{};
+                    defer if (leaves.len > 0) std.heap.page_allocator.free(leaves);
+
+                    for (leaves) |pane_id| {
+                        if (self.pane_data.get(pane_id)) |pd| {
+                            if (tree_ops.findLeaf(active_tab.root, pane_id)) |leaf| {
+                                const bounds = leaf.leaf.bounds;
+                                if (bounds.w == 0 or bounds.h == 0) continue;
+
+                                // Snapshot under mutex
+                                const snapshot = pd.termio.lockTerminal();
+                                const snap = render_state.snapshotCells(
+                                    self.frame_arena.allocator(),
+                                    snapshot,
+                                    &self.renderer_palette,
+                                ) catch {
+                                    pd.termio.unlockTerminal();
+                                    continue;
+                                };
+                                pd.termio.unlockTerminal();
+
+                                // Build render state
+                                var rs = render_state.buildFromSnapshot(
+                                    self.frame_arena.allocator(),
+                                    snap,
+                                    self.font_grid,
+                                    bounds.w,
+                                    bounds.h,
+                                    &self.renderer_palette,
+                                ) catch continue;
+
+                                // Cursor visibility
+                                const is_focused = pane_id == active_tab.focused_pane_id;
+                                rs.cursor.visible = self.cursor_visible and self.focused and is_focused;
+                                rs.cell_width = metrics.cell_width;
+                                rs.cell_height = metrics.cell_height;
+
+                                // Upload atlas if dirty
+                                if (self.font_grid.getAtlas().isDirty()) {
+                                    const atlas = self.font_grid.getAtlas();
+                                    backend.uploadAtlas(atlas.getPixels(), atlas.getSize());
+                                    self.font_grid.getAtlasMut().clearDirty();
+                                }
+                                if (self.font_grid.getAtlas().isColorDirty()) {
+                                    const atlas = self.font_grid.getAtlas();
+                                    backend.uploadColorAtlas(atlas.getColorPixels(), atlas.getColorSize());
+                                    self.font_grid.getAtlasMut().clearColorDirty();
+                                }
+
+                                // Draw pane — slightly dimmed background for unfocused panes
+                                const pane_bg = if (is_focused)
+                                    self.renderer_palette.default_bg
+                                else blk: {
+                                    const dbg = self.renderer_palette.default_bg;
+                                    // Darken by ~25% for unfocused
+                                    break :blk renderer_types.Color{
+                                        .r = dbg.r -| (dbg.r / 4),
+                                        .g = dbg.g -| (dbg.g / 4),
+                                        .b = dbg.b -| (dbg.b / 4),
+                                    };
+                                };
+                                backend.drawFrameInRect(&rs, pane_bg, toRendererRect(bounds));
+                            }
+                        }
+                    }
+
+                    // Render pane borders (after all panes, full viewport, no scissor)
+                    backend.setFullViewport();
+                    renderPaneBorders(active_tab.root, active_tab.focused_pane_id, &backend, &self.renderer_palette);
+
+                    // Re-draw tab bar bottom separator on top of pane content
+                    // (pane background clear can bleed into the separator line)
+                    {
+                        const sep_color = self.renderer_palette.ui_pane_border_active;
+                        const sep_r = sep_color.r;
+                        const sep_g = sep_color.g;
+                        const sep_b = sep_color.b;
+                        const lighter = renderer_types.Color{
+                            .r = sep_r +| 30,
+                            .g = sep_g +| 30,
+                            .b = sep_b +| 30,
+                        };
+                        backend.drawFilledRect(RendererRect{
+                            .x = 0,
+                            .y = @as(i32, @intCast(tab_bar_height)) - 1,
+                            .w = fb.width,
+                            .h = 1,
+                        }, lighter);
+                    }
+                }
+
+                // Render preset picker overlay if visible
+                if (self.preset_picker.visible) {
+                    var name_ptrs: [64][]const u8 = undefined;
+                    const name_count = @min(self.config.layouts.len, 64);
+                    for (0..name_count) |i| {
+                        name_ptrs[i] = self.config.layouts[i].name;
+                    }
+                    self.preset_picker.render(
+                        name_ptrs[0..name_count],
+                        metrics.cell_width,
+                        metrics.cell_height,
+                        fb.width,
+                        fb.height,
+                        .{
+                            .bg = self.renderer_palette.ui_tab_bar_bg.toU32(),
+                            .border = self.renderer_palette.ui_pane_border.toU32(),
+                            .selected = self.renderer_palette.ui_tab_active.toU32(),
+                            .fg = self.renderer_palette.default_fg.toU32(),
+                            .overlay_bg = 0x00000080, // Semi-transparent black
+                        },
+                        pickerDrawRectCallback,
+                        pickerDrawTextCallback,
+                        @ptrCast(&backend),
+                    );
+                }
+
+                // Restore full viewport
+                backend.setFullViewport();
+
+                // Draw 1px window border (frameless window needs visible edge)
+                {
+                    const border_color = self.renderer_palette.ui_pane_border;
+                    const w = fb.width;
+                    const h = fb.height;
+                    // Top edge
+                    backend.drawFilledRect(RendererRect{ .x = 0, .y = 0, .w = w, .h = 1 }, border_color);
+                    // Bottom edge
+                    backend.drawFilledRect(RendererRect{ .x = 0, .y = @as(i32, @intCast(h)) - 1, .w = w, .h = 1 }, border_color);
+                    // Left edge
+                    backend.drawFilledRect(RendererRect{ .x = 0, .y = 0, .w = 1, .h = h }, border_color);
+                    // Right edge
+                    backend.drawFilledRect(RendererRect{ .x = @as(i32, @intCast(w)) - 1, .y = 0, .w = 1, .h = h }, border_color);
+                }
+
+                // Cursor blink
+                updateCursorBlink(self);
+
+                // Diagnostics
+                self.frame_count += 1;
+
+                // Decrement activity suppression cooldown
+                const sup = self.suppress_activity_frames.load(.acquire);
+                if (sup > 0) self.suppress_activity_frames.store(sup - 1, .release);
+                if (perf_log) |f| {
+                    if (self.frame_count == 1 or self.frame_count % 60 == 0) {
+                        const diag = backend.getDiagnostics();
+                        var pbuf: [128]u8 = undefined;
+                        const pline = std.fmt.bufPrint(&pbuf, "frame={d} frame_time={d}us draws={d}\n", .{
+                            self.frame_count, diag.frame_time_us, diag.draw_calls,
+                        }) catch "";
+                        if (pline.len > 0) _ = f.write(pline) catch 0;
+                    }
+                }
+
+                self.window.swapBuffers();
+                _ = self.frame_arena.reset(.retain_capacity);
+            } else {
+                std.Thread.sleep(1_000_000);
+            }
+        }
+
+        // Cleanup
+        if (perf_log) |f| f.close();
+        backend.deinit();
+        gl.makeProcTableCurrent(null);
+        Window.detachContext();
+    }
+
+    // -- Render helper callbacks --
+
+    fn drawIconCallback(px_x: i32, px_y: i32, size: u32, ctx: *anyopaque) void {
+        const rc: *TabBarRenderCtx = @ptrCast(@alignCast(ctx));
+        rc.backend.drawIcon(px_x, px_y, size);
+    }
+
+    fn drawFilledRectCallback(rect: Rect, color: layout_mod.Compositor.ColorU32, ctx: *anyopaque) void {
+        const rc: *TabBarRenderCtx = @ptrCast(@alignCast(ctx));
+        const c = renderer_types.Color.fromU32(color);
+        rc.backend.drawFilledRect(toRendererRect(rect), c);
+    }
+
+    fn pickerDrawRectCallback(x: i32, y: i32, w: u32, h: u32, color: u32, ctx: *anyopaque) void {
+        const backend: *OpenGLBackend = @ptrCast(@alignCast(ctx));
+        const c = renderer_types.Color.fromU32(color);
+        backend.drawFilledRect(.{ .x = x, .y = y, .w = w, .h = h }, c);
+    }
+
+    fn pickerDrawTextCallback(_: []const u8, _: i32, _: i32, _: u32, _: *anyopaque) void {
+        // TODO: glyph-based text rendering for picker overlay
+        // Same deferral as tab bar text - colored backgrounds render immediately,
+        // glyph text rendering requires building CellInstance arrays.
+    }
+
+    const TabBarRenderCtx = struct {
+        backend: *OpenGLBackend,
+        font_grid: *FontGrid,
+    };
+
+    fn drawTextCallback(text: []const u8, px_x: i32, px_y: i32, color: layout_mod.Compositor.ColorU32, ctx: *anyopaque) void {
+        const rc: *TabBarRenderCtx = @ptrCast(@alignCast(ctx));
+        const backend = rc.backend;
+        const font_grid = rc.font_grid;
+        const metrics = font_grid.getMetrics();
+
+        // Build CellInstance array for each byte in the string
+        var instances: [128]renderer_types.CellInstance = undefined;
+        var count: usize = 0;
+
+        const ascender: i32 = @intFromFloat(metrics.ascender);
+        for (text) |byte| {
+            if (count >= 128) break;
+            const glyph = font_grid.getGlyph(@as(u21, byte)) catch continue;
+
+            // Compute vertical offset: same as pane rendering (ascender - bearing_y)
+            const sby: i32 = ascender - glyph.bearing_y;
+            instances[count] = .{
+                .grid_col = @intCast(count),
+                .grid_row = 0,
+                .atlas_x = glyph.region.x,
+                .atlas_y = glyph.region.y,
+                .atlas_w = glyph.region.w,
+                .atlas_h = glyph.region.h,
+                .bearing_x = @intCast(glyph.bearing_x),
+                .bearing_y = @intCast(std.math.clamp(sby, -32768, 32767)),
+                .fg_color = color,
+                .bg_color = 0,
+                .flags = 0,
+            };
+            count += 1;
+        }
+
+        if (count == 0) return;
+
+        // Upload atlas if dirty (glyph lookup may have rasterized new glyphs)
+        if (font_grid.getAtlas().isDirty()) {
+            const atlas = font_grid.getAtlas();
+            backend.uploadAtlas(atlas.getPixels(), atlas.getSize());
+            font_grid.getAtlasMut().clearDirty();
+        }
+
+        // Set up text shader with pixel-based grid offset
+        // Use setFullViewport to get correct projection, then override grid offset
+        backend.setFullViewport();
+
+        backend.text_program.use();
+        backend.text_program.setUniformMat4("uProjection", backend.projection);
+        backend.text_program.setUniformVec2("uCellSize", metrics.cell_width, metrics.cell_height);
+        backend.text_program.setUniformVec2("uGridOffset", @floatFromInt(px_x), @floatFromInt(px_y));
+        backend.text_program.setUniformFloat("uTextScale", 0.75);
+        backend.text_program.setUniformVec2("uAtlasSize", @floatFromInt(backend.atlas_size), @floatFromInt(backend.atlas_size));
+        backend.text_program.setUniformVec2("uColorAtlasSize", @floatFromInt(backend.color_atlas_size), @floatFromInt(backend.color_atlas_size));
+
+        gl.Enable(gl.BLEND);
+        gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+        gl.ActiveTexture(gl.TEXTURE0);
+        gl.BindTexture(gl.TEXTURE_2D, backend.atlas_texture);
+        backend.text_program.setUniformInt("uAtlasTexture", 0);
+
+        gl.ActiveTexture(gl.TEXTURE1);
+        gl.BindTexture(gl.TEXTURE_2D, backend.color_atlas_texture);
+        backend.text_program.setUniformInt("uColorAtlasTexture", 1);
+
+        gl.BindVertexArray(backend.quad_vao);
+        gl.BindBuffer(gl.ARRAY_BUFFER, backend.text_instance_vbo);
+        gl.BufferSubData(gl.ARRAY_BUFFER, 0, @intCast(count * @sizeOf(renderer_types.CellInstance)), @ptrCast(&instances));
+        OpenGLBackend.setupInstanceAttributes(backend.text_instance_vbo);
+        gl.DrawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, @intCast(count));
+        gl.BindVertexArray(0);
+    }
+
+    fn renderPaneBorders(node: *PaneNode, focused_id: u32, backend: *OpenGLBackend, pal: *const RendererPalette) void {
+        switch (node.*) {
+            .branch => |b| {
+                // Use the FULL parent bounds so the border line spans the entire split
+                const parent_bounds = getNodeBounds(node);
+                const first_bounds = getNodeBounds(b.first);
+
+                // Use active border color if focused pane is adjacent
+                const focus_in_first = tree_ops.findLeaf(b.first, focused_id) != null;
+                const focus_in_second = tree_ops.findLeaf(b.second, focused_id) != null;
+                const border_color = if (focus_in_first or focus_in_second) pal.ui_pane_border_active else pal.ui_pane_border;
+
+                switch (b.direction) {
+                    .vertical => {
+                        // Vertical split: draw a full-height vertical line at the split point
+                        const border_x = first_bounds.x + @as(i32, @intCast(first_bounds.w));
+                        backend.drawFilledRect(RendererRect{
+                            .x = border_x,
+                            .y = parent_bounds.y,
+                            .w = 1,
+                            .h = parent_bounds.h,
+                        }, border_color);
+                    },
+                    .horizontal => {
+                        // Horizontal split: draw a full-width horizontal line at the split point
+                        const border_y = first_bounds.y + @as(i32, @intCast(first_bounds.h));
+                        backend.drawFilledRect(RendererRect{
+                            .x = parent_bounds.x,
+                            .y = border_y,
+                            .w = parent_bounds.w,
+                            .h = 1,
+                        }, border_color);
+                    },
+                }
+
+                renderPaneBorders(b.first, focused_id, backend, pal);
+                renderPaneBorders(b.second, focused_id, backend, pal);
+            },
+            .leaf => {},
+        }
+    }
+
+    fn getNodeBounds(node: *PaneNode) Rect {
+        switch (node.*) {
+            .leaf => |l| return l.bounds,
+            .branch => |b| {
+                const fb = getNodeBounds(b.first);
+                const sb = getNodeBounds(b.second);
+                const min_x = @min(fb.x, sb.x);
+                const min_y = @min(fb.y, sb.y);
+                const max_x = @max(fb.x + @as(i32, @intCast(fb.w)), sb.x + @as(i32, @intCast(sb.w)));
+                const max_y = @max(fb.y + @as(i32, @intCast(fb.h)), sb.y + @as(i32, @intCast(sb.h)));
+                return .{
+                    .x = min_x,
+                    .y = min_y,
+                    .w = @intCast(max_x - min_x),
+                    .h = @intCast(max_y - min_y),
+                };
+            },
+        }
+    }
+
+    fn updateCursorBlink(self: *App) void {
+        if (!self.focused) {
+            self.cursor_visible = true;
+            return;
+        }
+        const now = std.time.nanoTimestamp();
+        const elapsed = now - self.cursor_blink_timer;
+        const blink_interval: i128 = 530_000_000;
+        if (elapsed >= blink_interval) {
+            self.cursor_visible = !self.cursor_visible;
+            self.cursor_blink_timer = now;
+            self.requestFrame();
+        }
+    }
+
+    // -- Helpers --
+
+    /// Convert a layout Rect to renderer layout_types Rect.
+    /// Map GLFW key code to lowercase ASCII character for keybinding lookup.
+    fn glfwKeyToChar(key: glfw.Key) ?u21 {
+        const code: u32 = @intCast(@intFromEnum(key));
+        // A-Z (GLFW codes 65-90) -> lowercase 'a'-'z'
+        if (code >= 65 and code <= 90) return @intCast(code + 32);
+        // 0-9 (GLFW codes 48-57) -> '0'-'9'
+        if (code >= 48 and code <= 57) return @intCast(code);
+        // Common punctuation
+        return switch (key) {
+            .minus => '-',
+            .equal => '=',
+            .left_bracket => '[',
+            .right_bracket => ']',
+            .backslash => '\\',
+            .semicolon => ';',
+            .apostrophe => '\'',
+            .comma => ',',
+            .period => '.',
+            .slash => '/',
+            .grave_accent => '`',
+            .space => ' ',
+            else => null,
+        };
+    }
+
+    fn toRendererRect(rect: Rect) RendererRect {
+        return .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h };
+    }
+
+    /// Detect if cursor is on a window edge for resize (5px grab zone).
+    const resize_grab = 5;
+    fn detectWindowEdge(self: *App, x: i32, y: i32) WindowEdge {
+        const fb = self.window.getFramebufferSize();
+        const w: i32 = @intCast(fb.width);
+        const h: i32 = @intCast(fb.height);
+        return .{
+            .left = x < resize_grab,
+            .right = x >= w - resize_grab,
+            .top = y < resize_grab,
+            .bottom = y >= h - resize_grab,
+        };
+    }
+
+    fn edgeIsAny(edge: WindowEdge) bool {
+        return edge.left or edge.right or edge.top or edge.bottom;
+    }
+
+    /// Convert GLFW modifier flags to keybinding Modifiers.
+    fn glfwModsToModifiers(mods: glfw.Mods) keybindings.Modifiers {
+        return .{
+            .ctrl = mods.control,
+            .shift = mods.shift,
+            .alt = mods.alt,
+            .super = mods.super,
+        };
+    }
+
+    fn generatePaneId(self: *App) u32 {
+        // Simple incrementing ID across all tabs
+        var max_id: u32 = 0;
+        var it = self.pane_data.iterator();
+        while (it.next()) |entry| {
+            if (entry.key_ptr.* > max_id) max_id = entry.key_ptr.*;
+        }
+        return max_id + 1;
+    }
+
+    fn setupScreenChangeCallback(self: *App, pd: *PaneData) void {
+        // Use a single global callback that requests a frame on the App.
+        // All panes share the same callback since any screen change triggers a frame.
+        _ = pd;
+        g_screen_change_app = self;
+    }
+
+    // -- Static GLFW callbacks --
+
+    fn keyCallback(handle: *glfw.Window, key: glfw.Key, _: c_int, action: glfw.Action, mods: glfw.Mods) callconv(.c) void {
+        const app = Window.getUserPointer(App, handle) orelse return;
+        app.handleKeyInput(key, action, mods);
+    }
+
+    fn charCallback(handle: *glfw.Window, codepoint: u32) callconv(.c) void {
+        const app = Window.getUserPointer(App, handle) orelse return;
+        app.handleCharInput(codepoint);
+    }
+
+    fn framebufferSizeCallback(handle: *glfw.Window, width: c_int, height: c_int) callconv(.c) void {
+        const app = Window.getUserPointer(App, handle) orelse return;
+        app.new_fb_width.store(@intCast(width), .release);
+        app.new_fb_height.store(@intCast(height), .release);
+        app.pending_resize.store(true, .release);
+        app.requestFrame();
+    }
+
+    fn focusCallback(handle: *glfw.Window, focused: glfw.Bool) callconv(.c) void {
+        const app = Window.getUserPointer(App, handle) orelse return;
+        app.focused = @intFromEnum(focused) != 0;
+        if (app.focused) {
+            app.cursor_blink_timer = std.time.nanoTimestamp();
+            app.cursor_visible = true;
+        }
+        app.requestFrame();
+    }
+
+    fn scrollCallback(handle: *glfw.Window, _: f64, _: f64) callconv(.c) void {
+        const app = Window.getUserPointer(App, handle) orelse return;
+        app.requestFrame();
+    }
+
+    fn mouseButtonCallback(handle: *glfw.Window, button: glfw.MouseButton, action: glfw.Action, mods: glfw.Mods) callconv(.c) void {
+        const app = Window.getUserPointer(App, handle) orelse return;
+        app.handleMouseButton(button, action, mods);
+    }
+
+    fn cursorPosCallback(handle: *glfw.Window, xpos: f64, ypos: f64) callconv(.c) void {
+        const app = Window.getUserPointer(App, handle) orelse return;
+        app.handleCursorPos(xpos, ypos);
+    }
 };
 
-/// Create a screen change callback that requests a frame on the Surface.
-/// Uses a function pointer closure via a static variable.
-var g_surface_ptr: ?*Surface = null;
-
-fn screenChangeCallback() void {
-    if (g_surface_ptr) |surface| {
-        surface.requestFrame();
+/// Per-pane screen change callback (D-13).
+/// Context pointer is the PaneData that produced output.
+/// Only marks that pane's tab as having activity (not all tabs).
+fn screenChangeCallback(ctx: ?*anyopaque) void {
+    if (g_screen_change_app) |app| {
+        // Skip activity marking during resize cooldown
+        if (app.suppress_activity_frames.load(.acquire) == 0) {
+            if (ctx) |raw| {
+                const pd: *PaneData = @ptrCast(@alignCast(raw));
+                const pane_tab_idx = pd.tab_index;
+                const active_idx = app.tab_manager.active_idx;
+                if (pane_tab_idx != active_idx and pane_tab_idx < app.tab_manager.tabs.items.len) {
+                    app.tab_manager.tabs.items[pane_tab_idx].has_activity = true;
+                }
+            }
+        }
+        app.requestFrame();
     }
 }
 
-fn makeScreenChangeCallback(surface: *Surface) *const fn () void {
-    g_surface_ptr = surface;
-    return &screenChangeCallback;
-}

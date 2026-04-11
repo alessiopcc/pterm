@@ -432,32 +432,18 @@ pub const Surface = struct {
             }
         }
 
-        // Font zoom: handle directly before encoder to catch all key combos.
-        // On Windows, Ctrl++ is Ctrl+Shift+= (key=.equal, shift=true, ctrl=true).
-        // Also handle numpad +/- and standalone Ctrl+= and Ctrl+-.
-        if (mods.control) {
-            var zoom_delta: ?f32 = null;
-            var zoom_reset = false;
-
-            switch (key) {
-                .equal, .right_bracket, .kp_add => zoom_delta = 1.0, // Ctrl++ (layout-dependent)
-                .minus, .slash, .kp_subtract => zoom_delta = -1.0, // Ctrl+- (layout-dependent)
-                .zero, .kp_0 => zoom_reset = true, // Ctrl+0
-                else => {},
-            }
-
-            if (zoom_delta != null or zoom_reset) {
-                const current_size_fp = self.new_font_size.load(.acquire);
-                const current_size: f32 = @as(f32, @floatFromInt(current_size_fp)) / 100.0;
-                var new_size = if (zoom_reset) self.config.font_size_pt() else current_size + zoom_delta.?;
-                new_size = @max(6.0, @min(72.0, new_size));
-
-                if (@as(u32, @intFromFloat(new_size * 100.0)) != current_size_fp) {
-                    self.new_font_size.store(@intFromFloat(new_size * 100.0), .release);
-                    self.pending_font_change.store(true, .release);
-                    self.requestFrame();
-                }
-                return; // Don't pass to encoder
+        // Font zoom via GLFW key codes (charCallback doesn't fire with Ctrl held).
+        // These are the physical key fallbacks — keybinding map handles logical combos.
+        if (mods.control and !mods.alt and !mods.super) {
+            const zoom_action: ?keybindings.Action = switch (key) {
+                .equal, .right_bracket, .kp_add => .increase_font_size,
+                .minus, .slash, .kp_subtract => .decrease_font_size,
+                .zero, .kp_0 => .reset_font_size,
+                else => null,
+            };
+            if (zoom_action) |za| {
+                self.dispatchAction(za);
+                return;
             }
         }
 
@@ -532,6 +518,18 @@ pub const Surface = struct {
             .new_tab, .close_tab, .next_tab, .prev_tab => {},
             .split_horizontal, .split_vertical => {},
             .focus_next_pane, .focus_prev_pane => {},
+            .close_pane => {},
+            .focus_pane_up, .focus_pane_down, .focus_pane_left, .focus_pane_right => {},
+            .resize_pane_up, .resize_pane_down, .resize_pane_left, .resize_pane_right => {},
+            .zoom_pane => {},
+            .equalize_panes => {},
+            .swap_pane_up, .swap_pane_down, .swap_pane_left, .swap_pane_right => {},
+            .rotate_split => {},
+            .break_out_pane => {},
+            .move_tab_left, .move_tab_right => {},
+            .goto_tab_1, .goto_tab_2, .goto_tab_3, .goto_tab_4, .goto_tab_5 => {},
+            .goto_tab_6, .goto_tab_7, .goto_tab_8, .goto_tab_9, .goto_tab_last => {},
+            .open_layout_picker => {},
             .scroll_to_top, .scroll_to_bottom => {},
             .search => {}, // Phase 6
             .none => {},
@@ -539,7 +537,7 @@ pub const Surface = struct {
     }
 
     /// Handle clipboard action for reserved keys (D-19).
-    fn handleClipboardAction(self: *Surface, combo: keybindings.KeyCombo) void {
+    pub fn handleClipboardAction(self: *Surface, combo: keybindings.KeyCombo) void {
         const is_c = switch (combo.key) {
             .char => |c| c == 'c',
             .special => false,
@@ -552,13 +550,13 @@ pub const Surface = struct {
     }
 
     /// Copy current selection to clipboard.
-    fn copySelection(self: *Surface) void {
+    pub fn copySelection(self: *Surface) void {
         // TODO: Get selected text from terminal (Phase 5: selection system)
         _ = self;
     }
 
     /// Paste clipboard contents to terminal PTY.
-    fn pasteFromClipboard(self: *Surface) void {
+    pub fn pasteFromClipboard(self: *Surface) void {
         if (glfw.getClipboardString(self.window.handle)) |clip| {
             self.termio.writeInput(clip) catch {};
             self.scheduler.markActive();
@@ -583,19 +581,20 @@ pub const Surface = struct {
     /// Reset font size to config default.
     fn resetFontSize(self: *Surface) void {
         const default_fp: u32 = @intFromFloat(self.config.font_size_pt() * 100.0);
+        if (self.new_font_size.load(.acquire) == default_fp) return; // already at default
         self.new_font_size.store(default_fp, .release);
         self.pending_font_change.store(true, .release);
         self.requestFrame();
     }
 
     /// Scroll up one page.
-    fn scrollPageUp(self: *Surface) void {
+    pub fn scrollPageUp(self: *Surface) void {
         // TODO: Implement terminal viewport scrolling when scrollback is wired
         self.requestFrame();
     }
 
     /// Scroll down one page.
-    fn scrollPageDown(self: *Surface) void {
+    pub fn scrollPageDown(self: *Surface) void {
         // TODO: Implement terminal viewport scrolling when scrollback is wired
         self.requestFrame();
     }
@@ -722,7 +721,7 @@ pub const Surface = struct {
     }
 
     /// Map a GLFW key to a SpecialKey, or null if the key is printable.
-    fn mapGlfwKeyToSpecial(key: glfw.Key) ?keybindings.SpecialKey {
+    pub fn mapGlfwKeyToSpecial(key: glfw.Key) ?keybindings.SpecialKey {
         return switch (key) {
             .insert => .insert,
             .delete => .delete,

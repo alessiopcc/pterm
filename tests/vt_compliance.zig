@@ -210,7 +210,7 @@ test "observer callback fires on feedBytes" {
 
 var screen_change_called: bool = false;
 
-fn testScreenChangeCallback() void {
+fn testScreenChangeCallback(_: ?*anyopaque) void {
     screen_change_called = true;
 }
 

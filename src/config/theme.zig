@@ -27,6 +27,7 @@ pub const UiColors = struct {
     tab_active: [3]u8,
     tab_inactive: [3]u8,
     pane_border: [3]u8,
+    pane_border_active: [3]u8,
     status_bar_bg: [3]u8,
     agent_alert: [3]u8,
 };
@@ -66,6 +67,7 @@ pub const RendererPalette = struct {
     ui_tab_active: Color,
     ui_tab_inactive: Color,
     ui_pane_border: Color,
+    ui_pane_border_active: Color,
     ui_status_bar_bg: Color,
     ui_agent_alert: Color,
 
@@ -114,6 +116,7 @@ pub fn buildRendererPalette(palette: ColorPalette) !RendererPalette {
         .ui_tab_active = colorFromU8Array(palette.ui.tab_active),
         .ui_tab_inactive = colorFromU8Array(palette.ui.tab_inactive),
         .ui_pane_border = colorFromU8Array(palette.ui.pane_border),
+        .ui_pane_border_active = colorFromU8Array(palette.ui.pane_border_active),
         .ui_status_bar_bg = colorFromU8Array(palette.ui.status_bar_bg),
         .ui_agent_alert = colorFromU8Array(palette.ui.agent_alert),
     };

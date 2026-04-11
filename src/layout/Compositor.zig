@@ -105,15 +105,19 @@ pub const Compositor = struct {
         // Compute bounds for all panes in active tab
         tree_ops.computeBounds(active_tab.root, available, cell_w, cell_h, border_px);
 
-        // Collect all leaf pane IDs with bounds in a single tree walk
-        const leaf_infos = tree_ops.collectLeafInfos(active_tab.root, std.heap.page_allocator) catch return;
-        defer std.heap.page_allocator.free(leaf_infos);
+        // Collect all leaf pane IDs
+        const leaves = tree_ops.collectLeaves(active_tab.root, std.heap.page_allocator) catch return;
+        defer std.heap.page_allocator.free(leaves);
 
         // Render each pane
-        for (leaf_infos) |li| {
-            if (pane_registry.get(li.pane_id)) |pane_state| {
-                pane_state.bounds = li.bounds;
-                render_pane_fn(pane_state, li.bounds, render_ctx);
+        for (leaves) |pane_id| {
+            if (pane_registry.get(pane_id)) |pane_state| {
+                // Find the leaf node to get its computed bounds
+                if (tree_ops.findLeaf(active_tab.root, pane_id)) |leaf_node| {
+                    const bounds = leaf_node.leaf.bounds;
+                    pane_state.bounds = bounds;
+                    render_pane_fn(pane_state, bounds, render_ctx);
+                }
             }
         }
 

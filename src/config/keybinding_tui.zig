@@ -79,12 +79,19 @@ pub fn run(allocator: Allocator, config_path: []const u8, _: ?[]const kb.UserBin
     var modified = false;
 
     while (true) {
+        // Build display index -> action index mapping
+        var display_map: [actions.len]usize = undefined;
+        var display_count: usize = 0;
+
         // Display menu each iteration
         std.debug.print("\n=== TermP Keybinding Configuration ===\n\n", .{});
 
         for (actions, 0..) |info, i| {
             if (info.action == .none) continue;
-            std.debug.print("  {d:>2}. {s:<24}", .{ i + 1, info.name });
+            if (kb.isReservedAction(info.action)) continue;
+            display_map[display_count] = i;
+            display_count += 1;
+            std.debug.print("  {d:>2}. {s:<24}", .{ display_count, info.name });
 
             var combo_buf: [64]u8 = undefined;
             var found = false;
@@ -129,16 +136,12 @@ pub fn run(allocator: Allocator, config_path: []const u8, _: ?[]const kb.UserBin
             std.debug.print("Invalid input.\n", .{});
             continue;
         };
-        if (num < 1 or num > actions.len) {
-            std.debug.print("Out of range (1-{d}).\n", .{actions.len});
+        if (num < 1 or num > display_count) {
+            std.debug.print("Out of range (1-{d}).\n", .{display_count});
             continue;
         }
 
-        const selected = actions[num - 1];
-        if (selected.action == .none) {
-            std.debug.print("Cannot rebind 'none'.\n", .{});
-            continue;
-        }
+        const selected = actions[display_map[num - 1]];
 
         std.debug.print("\nType combo for '{s}' (e.g. ctrl+n, shift+insert), or 'unbind', or 'cancel':\n> ", .{selected.name});
 

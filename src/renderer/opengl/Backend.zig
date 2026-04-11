@@ -11,6 +11,7 @@ const gl = @import("gl");
 const shaders = @import("shaders");
 const Program = @import("Program.zig").Program;
 const types = @import("renderer_types");
+const layout_types = @import("layout_types");
 
 const CellInstance = types.CellInstance;
 const RenderState = types.RenderState;
@@ -56,6 +57,10 @@ pub const OpenGLBackend = struct {
     // Viewport dimensions
     viewport_width: u32,
     viewport_height: u32,
+
+    // Icon texture for title bar logo
+    icon_texture: gl.uint,
+    icon_size: u32,
 
     // Diagnostics (D-17)
     diag: Diagnostics,
@@ -193,6 +198,8 @@ pub const OpenGLBackend = struct {
             .atlas_size = 0,
             .color_atlas_texture = color_atlas_texture,
             .color_atlas_size = 512,
+            .icon_texture = 0,
+            .icon_size = 0,
             .projection = identityMatrix(),
             .viewport_width = 0,
             .viewport_height = 0,
@@ -365,6 +372,7 @@ pub const OpenGLBackend = struct {
             self.text_program.setUniformMat4("uProjection", self.projection);
             self.text_program.setUniformVec2("uCellSize", state.cell_width, state.cell_height);
             self.text_program.setUniformVec2("uGridOffset", grid_offset_x, grid_offset_y);
+            self.text_program.setUniformFloat("uTextScale", 1.0);
             self.text_program.setUniformVec2(
                 "uAtlasSize",
                 @floatFromInt(self.atlas_size),
@@ -445,12 +453,168 @@ pub const OpenGLBackend = struct {
         return self.diag;
     }
 
+    /// Draw a complete frame within a specific pixel rectangle (viewport/scissor).
+    /// Used by the Compositor to render individual panes in their allocated screen areas.
+    /// GL origin is bottom-left; this method converts from top-left Rect coordinates.
+    pub fn drawFrameInRect(self: *OpenGLBackend, state: *const types.RenderState, bg_color: ?Color, rect: layout_types.Rect) void {
+        // GL origin is bottom-left; convert from top-left Rect coordinates
+        const gl_y: i32 = @as(i32, @intCast(self.viewport_height)) - rect.y - @as(i32, @intCast(rect.h));
+        gl.Viewport(@intCast(rect.x), gl_y, @intCast(rect.w), @intCast(rect.h));
+        gl.Enable(gl.SCISSOR_TEST);
+        gl.Scissor(@intCast(rect.x), gl_y, @intCast(rect.w), @intCast(rect.h));
+
+        // Recompute projection for this pane's dimensions
+        self.projection = computeOrthoMatrix(0.0, @floatFromInt(rect.w), @floatFromInt(rect.h), 0.0, -1.0, 1.0);
+
+        // Delegate to existing drawFrame (clears within scissor, runs 3-pass pipeline)
+        self.drawFrame(state, bg_color);
+
+        gl.Disable(gl.SCISSOR_TEST);
+    }
+
+    /// Draw a filled rectangle with a solid color. Used for tab bar backgrounds,
+    /// pane borders, and other UI chrome elements.
+    /// Uses the bg_program shader with a single CellInstance covering the rect.
+    pub fn drawFilledRect(self: *OpenGLBackend, rect: layout_types.Rect, color: Color) void {
+        // Set viewport to full window, use scissor to clip to rect
+        gl.Viewport(0, 0, @intCast(self.viewport_width), @intCast(self.viewport_height));
+        const gl_y: i32 = @as(i32, @intCast(self.viewport_height)) - rect.y - @as(i32, @intCast(rect.h));
+        gl.Enable(gl.SCISSOR_TEST);
+        gl.Scissor(@intCast(rect.x), gl_y, @intCast(rect.w), @intCast(rect.h));
+
+        // Use full-window orthographic projection
+        const proj = computeOrthoMatrix(0.0, @floatFromInt(self.viewport_width), @floatFromInt(self.viewport_height), 0.0, -1.0, 1.0);
+
+        self.bg_program.use();
+        self.bg_program.setUniformMat4("uProjection", proj);
+        // Use the rect dimensions as the "cell size" so one instance fills the area
+        self.bg_program.setUniformVec2("uCellSize", @floatFromInt(rect.w), @floatFromInt(rect.h));
+        self.bg_program.setUniformVec2("uGridOffset", @floatFromInt(rect.x), @floatFromInt(rect.y));
+
+        gl.Disable(gl.BLEND);
+
+        // Create a single CellInstance at grid position (0,0) with the desired bg color
+        const instance = CellInstance{
+            .grid_col = 0,
+            .grid_row = 0,
+            .atlas_x = 0,
+            .atlas_y = 0,
+            .atlas_w = 0,
+            .atlas_h = 0,
+            .bearing_x = 0,
+            .bearing_y = 0,
+            .fg_color = 0,
+            .bg_color = color.toU32(),
+            .flags = 0,
+        };
+
+        gl.BindVertexArray(self.quad_vao);
+        gl.BindBuffer(gl.ARRAY_BUFFER, self.bg_instance_vbo);
+        gl.BufferSubData(gl.ARRAY_BUFFER, 0, @intCast(@sizeOf(CellInstance)), @ptrCast(&instance));
+        setupInstanceAttributes(self.bg_instance_vbo);
+        gl.DrawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, 1);
+        gl.BindVertexArray(0);
+
+        gl.Disable(gl.SCISSOR_TEST);
+    }
+
+    /// Upload RGBA icon pixels for title bar logo rendering.
+    pub fn uploadIcon(self: *OpenGLBackend, pixels: []const u8, size: u32) void {
+        if (self.icon_texture == 0) {
+            gl.GenTextures(1, @ptrCast(&self.icon_texture));
+        }
+        gl.BindTexture(gl.TEXTURE_2D, self.icon_texture);
+        gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.TexImage2D(
+            gl.TEXTURE_2D, 0, gl.RGBA,
+            @intCast(size), @intCast(size), 0,
+            gl.RGBA, gl.UNSIGNED_BYTE, @ptrCast(pixels.ptr),
+        );
+        self.icon_size = size;
+    }
+
+    /// Draw the icon at a pixel position with a given display size.
+    /// Uses the color atlas shader (text_program) with a single instance whose
+    /// atlas coords span the full icon texture.
+    pub fn drawIcon(self: *OpenGLBackend, px_x: i32, px_y: i32, display_size: u32) void {
+        if (self.icon_texture == 0 or self.icon_size == 0) return;
+
+        const proj = computeOrthoMatrix(0.0, @floatFromInt(self.viewport_width), @floatFromInt(self.viewport_height), 0.0, -1.0, 1.0);
+        gl.Viewport(0, 0, @intCast(self.viewport_width), @intCast(self.viewport_height));
+        gl.Disable(gl.SCISSOR_TEST);
+
+        self.text_program.use();
+        self.text_program.setUniformMat4("uProjection", proj);
+        self.text_program.setUniformVec2("uCellSize", @floatFromInt(display_size), @floatFromInt(display_size));
+        self.text_program.setUniformVec2("uGridOffset", @floatFromInt(px_x), @floatFromInt(px_y));
+        self.text_program.setUniformFloat("uTextScale", 1.0);
+        self.text_program.setUniformVec2("uAtlasSize", @floatFromInt(self.icon_size), @floatFromInt(self.icon_size));
+        self.text_program.setUniformVec2("uColorAtlasSize", @floatFromInt(self.icon_size), @floatFromInt(self.icon_size));
+
+        gl.Enable(gl.BLEND);
+        gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+        // Bind icon texture to both texture units (color glyph path)
+        gl.ActiveTexture(gl.TEXTURE0);
+        gl.BindTexture(gl.TEXTURE_2D, self.icon_texture);
+        self.text_program.setUniformInt("uAtlasTexture", 0);
+        gl.ActiveTexture(gl.TEXTURE1);
+        gl.BindTexture(gl.TEXTURE_2D, self.icon_texture);
+        self.text_program.setUniformInt("uColorAtlasTexture", 1);
+
+        // Single instance: grid pos (0,0), atlas covers full icon, color glyph flag
+        const instance = CellInstance{
+            .grid_col = 0,
+            .grid_row = 0,
+            .atlas_x = 0,
+            .atlas_y = 0,
+            .atlas_w = @intCast(self.icon_size),
+            .atlas_h = @intCast(self.icon_size),
+            .bearing_x = 0,
+            .bearing_y = 0,
+            .fg_color = 0xFFFFFFFF,
+            .bg_color = 0,
+            .flags = 0x0010, // COLOR_GLYPH flag — use color atlas path
+        };
+
+        gl.BindVertexArray(self.quad_vao);
+        gl.BindBuffer(gl.ARRAY_BUFFER, self.text_instance_vbo);
+        gl.BufferSubData(gl.ARRAY_BUFFER, 0, @intCast(@sizeOf(CellInstance)), @ptrCast(&instance));
+        setupInstanceAttributes(self.text_instance_vbo);
+        gl.DrawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, 1);
+        gl.BindVertexArray(0);
+
+        // Restore atlas textures
+        gl.ActiveTexture(gl.TEXTURE0);
+        gl.BindTexture(gl.TEXTURE_2D, self.atlas_texture);
+        gl.ActiveTexture(gl.TEXTURE1);
+        gl.BindTexture(gl.TEXTURE_2D, self.color_atlas_texture);
+    }
+
+    /// Restore viewport to full window dimensions and disable scissor test.
+    /// Call after per-pane rendering to reset GL state for full-window operations.
+    pub fn setFullViewport(self: *OpenGLBackend) void {
+        gl.Viewport(0, 0, @intCast(self.viewport_width), @intCast(self.viewport_height));
+        gl.Disable(gl.SCISSOR_TEST);
+        self.projection = computeOrthoMatrix(
+            0.0,
+            @floatFromInt(self.viewport_width),
+            @floatFromInt(self.viewport_height),
+            0.0,
+            -1.0,
+            1.0,
+        );
+    }
+
     // -- Private helpers ------------------------------------------------
 
     /// Set up per-instance vertex attributes matching CellInstance layout.
     /// Must be called with the desired instance VBO already bound to GL_ARRAY_BUFFER
     /// (or pass the VBO to bind it here).
-    fn setupInstanceAttributes(instance_vbo: gl.uint) void {
+    pub fn setupInstanceAttributes(instance_vbo: gl.uint) void {
         gl.BindBuffer(gl.ARRAY_BUFFER, instance_vbo);
 
         const stride: gl.sizei = @intCast(@sizeOf(CellInstance));

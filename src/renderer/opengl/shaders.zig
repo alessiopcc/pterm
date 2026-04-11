@@ -90,6 +90,7 @@ pub const text_vertex_src =
     \\uniform vec2 uAtlasSize;      // grayscale atlas texture dimensions
     \\uniform vec2 uColorAtlasSize; // color atlas texture dimensions
     \\uniform vec2 uGridOffset;     // top-left padding
+    \\uniform float uTextScale;     // glyph scale factor (1.0 = normal)
     \\
     \\out vec2 vTexCoord;
     \\flat out vec4 vFgColor;
@@ -98,9 +99,9 @@ pub const text_vertex_src =
     \\
 ++ unpack_color_fn ++
     \\void main() {
-    \\    vec2 cellOrigin = uGridOffset + vec2(aGridPos) * uCellSize;
-    \\    vec2 glyphOffset = vec2(aBearing);
-    \\    vec2 glyphSize = vec2(aAtlasRect.zw);
+    \\    vec2 cellOrigin = uGridOffset + vec2(aGridPos) * uCellSize * uTextScale;
+    \\    vec2 glyphOffset = vec2(aBearing) * uTextScale;
+    \\    vec2 glyphSize = vec2(aAtlasRect.zw) * uTextScale;
     \\
     \\    vec2 pos = cellOrigin + glyphOffset + aQuadPos * glyphSize;
     \\    gl_Position = uProjection * vec4(pos, 0.0, 1.0);

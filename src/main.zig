@@ -58,6 +58,7 @@ pub fn main() !void {
     var app = try App.init(allocator, config, .{
         .perf_logging = cli_args.perf_logging,
         .debug_keys = cli_args.debug_keys,
+        .layout_name = cli_args.layout,
     });
     defer app.deinit();
 

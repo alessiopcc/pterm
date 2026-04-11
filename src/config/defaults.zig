@@ -103,6 +103,7 @@ pub fn dumpConfig() void {
         \\# tab_active = "#1e1e2e"
         \\# tab_inactive = "#313244"
         \\# pane_border = "#45475a"
+        \\# pane_border_active = "#89B4FA"
         \\# status_bar_bg = "#181825"
         \\# agent_alert = "#f9e2af"
         \\

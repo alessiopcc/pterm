@@ -16,6 +16,7 @@ pub const CliArgs = struct {
     dump_config: bool = false, // --dump-config
     check_config: bool = false, // --check-config
     set_keybindings: bool = false, // --set-keybindings (D-22)
+    layout: ?[]const u8 = null, // --layout <name> (D-38)
     perf_logging: bool = false, // --perf
     debug_keys: bool = false, // --debug-keys
 };
@@ -56,6 +57,8 @@ pub fn parse(allocator: std.mem.Allocator) !CliArgs {
             result.check_config = true;
         } else if (std.mem.eql(u8, arg, "--set-keybindings")) {
             result.set_keybindings = true;
+        } else if (std.mem.eql(u8, arg, "--layout")) {
+            if (args.next()) |v| result.layout = try allocator.dupe(u8, v);
         } else if (std.mem.eql(u8, arg, "--perf")) {
             result.perf_logging = true;
         } else if (std.mem.eql(u8, arg, "--debug-keys")) {
@@ -93,6 +96,7 @@ fn printHelp(cli_config_path: ?[]const u8, allocator: std.mem.Allocator) void {
         \\  --dump-config         Print default config to stdout
         \\  --check-config        Validate config and exit
         \\  --set-keybindings     Interactive keybinding configuration
+        \\  --layout <name>       Start with named layout preset
         \\  --perf                Enable performance logging
         \\  --debug-keys          Log keystrokes to termp_debug.log
         \\  -h, --help            Show this help

@@ -16,7 +16,8 @@ pub const Event = union(enum) {
 
 pub const Observer = struct {
     onOutput: ?*const fn (bytes: []const u8) void = null,
-    onScreenChange: ?*const fn () void = null,
+    onScreenChange: ?*const fn (ctx: ?*anyopaque) void = null,
+    screen_change_ctx: ?*anyopaque = null,
     onModeChange: ?*const fn (mode: u16, enabled: bool) void = null,
     /// Phase 7 integration point. Fired when custom VT parser replaces ghostty-vt (D-01).
     onSequence: ?*const fn (action: u8, params: []const u16) void = null,
@@ -24,7 +25,7 @@ pub const Observer = struct {
     pub fn notify(self: *const Observer, event: Event) void {
         switch (event) {
             .output => |bytes| if (self.onOutput) |cb| cb(bytes),
-            .screen_change => if (self.onScreenChange) |cb| cb(),
+            .screen_change => if (self.onScreenChange) |cb| cb(self.screen_change_ctx),
             .mode_change => |m| if (self.onModeChange) |cb| cb(m.mode, m.enabled),
             .sequence => |s| if (self.onSequence) |cb| cb(s.action, s.params),
         }
