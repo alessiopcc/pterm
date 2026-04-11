@@ -135,4 +135,61 @@ pub const Shaper = struct {
 
         return result;
     }
+
+    /// Shape emoji codepoints for multi-codepoint composition (ZWJ, flags, skin-tone).
+    ///
+    /// Unlike shape(), this passes NO explicit features to hb_shape(), allowing
+    /// HarfBuzz to apply all default GSUB/GPOS features from the emoji font
+    /// (ccmp, rlig, and emoji-specific composition lookups).
+    pub fn shapeEmoji(self: *Shaper, codepoints: []const u21) ![]ShapedGlyph {
+        c.hb_buffer_clear_contents(self.hb_buf);
+
+        // Use hb_buffer_add_codepoints for the full sequence — lets HarfBuzz
+        // manage cluster assignment and enables GSUB sequence lookups (rlig,
+        // ccmp) that compose multi-codepoint emoji into single glyphs.
+        // Cast u21 slice to u32 array for the C API.
+        var cp32: [32]u32 = undefined;
+        const len = @min(codepoints.len, cp32.len);
+        for (0..len) |i| {
+            cp32[i] = @intCast(codepoints[i]);
+        }
+        c.hb_buffer_add_codepoints(self.hb_buf, &cp32, @intCast(len), 0, @intCast(len));
+
+        c.hb_buffer_set_content_type(self.hb_buf, c.HB_BUFFER_CONTENT_TYPE_UNICODE);
+        c.hb_buffer_set_direction(self.hb_buf, c.HB_DIRECTION_LTR);
+        c.hb_buffer_guess_segment_properties(self.hb_buf);
+
+        // Pass null features so HarfBuzz applies ALL default GSUB/GPOS from the font.
+        c.hb_shape(self.hb_font, self.hb_buf, null, 0);
+
+        var glyph_count: c_uint = 0;
+        const infos = c.hb_buffer_get_glyph_infos(self.hb_buf, &glyph_count);
+        const positions = c.hb_buffer_get_glyph_positions(self.hb_buf, &glyph_count);
+
+        if (glyph_count == 0) {
+            return try self.allocator.alloc(ShapedGlyph, 0);
+        }
+
+        const result = try self.allocator.alloc(ShapedGlyph, glyph_count);
+        errdefer self.allocator.free(result);
+
+        for (0..glyph_count) |i| {
+            result[i] = ShapedGlyph{
+                .glyph_id = infos[i].codepoint,
+                .cluster = infos[i].cluster,
+                .x_advance = @intCast(@as(i32, @intCast(positions[i].x_advance >> 6))),
+                .x_offset = @intCast(@as(i32, @intCast(positions[i].x_offset >> 6))),
+                .y_offset = @intCast(@as(i32, @intCast(positions[i].y_offset >> 6))),
+                .num_chars = 0,
+            };
+        }
+
+        const total_codepoints: u32 = @intCast(codepoints.len);
+        for (0..glyph_count) |i| {
+            const next_cluster = if (i + 1 < glyph_count) result[i + 1].cluster else total_codepoints;
+            result[i].num_chars = next_cluster - result[i].cluster;
+        }
+
+        return result;
+    }
 };

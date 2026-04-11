@@ -170,6 +170,7 @@ pub const cursor_vertex_src =
     \\
     \\flat out vec4 vCursorColor;
     \\flat out uint vFlags;
+    \\out vec2 vQuadUV;
     \\
     \\
 ++ unpack_color_fn ++
@@ -179,6 +180,7 @@ pub const cursor_vertex_src =
     \\    gl_Position = uProjection * vec4(pos, 0.0, 1.0);
     \\    vCursorColor = unpackColor(aFgColor);
     \\    vFlags = aFlags;
+    \\    vQuadUV = aQuadPos;
     \\}
     \\
 ;
@@ -188,12 +190,37 @@ pub const cursor_fragment_src =
     \\
     \\flat in vec4 vCursorColor;
     \\flat in uint vFlags;
+    \\in vec2 vQuadUV;
+    \\
+    \\uniform vec2 uCellSize;
     \\
     \\out vec4 FragColor;
     \\
     \\void main() {
-    \\    // Cursor style: 0 = block (fill), 1 = ibeam (left edge), 2 = underline (bottom edge)
-    \\    FragColor = vec4(vCursorColor.rgb, vCursorColor.a * 0.7);
+    \\    uint style = vFlags & 0xFFu;
+    \\    float alpha = 0.7;
+    \\
+    \\    if (style == 1u) {
+    \\        // ibeam: 2px wide left edge
+    \\        float px = vQuadUV.x * uCellSize.x;
+    \\        if (px > 2.0) discard;
+    \\    } else if (style == 2u) {
+    \\        // underline: 2px tall bottom edge
+    \\        float py = (1.0 - vQuadUV.y) * uCellSize.y;
+    \\        if (py > 2.0) discard;
+    \\    } else if (style == 3u) {
+    \\        // hollow: 1px outline rectangle
+    \\        float px = vQuadUV.x * uCellSize.x;
+    \\        float py = vQuadUV.y * uCellSize.y;
+    \\        float maxX = uCellSize.x;
+    \\        float maxY = uCellSize.y;
+    \\        bool onEdge = (px < 1.5 || px > maxX - 1.5 || py < 1.5 || py > maxY - 1.5);
+    \\        if (!onEdge) discard;
+    \\        alpha = 0.9;
+    \\    }
+    \\    // style == 0: block (full fill)
+    \\
+    \\    FragColor = vec4(vCursorColor.rgb, vCursorColor.a * alpha);
     \\}
     \\
 ;

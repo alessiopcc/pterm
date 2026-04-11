@@ -28,6 +28,7 @@ const FontMetrics = font_types.FontMetrics;
 const PTermTerminal = terminal_mod.PTermTerminal;
 const Shaper = shaper_mod.Shaper;
 const ShapedGlyph = shaper_mod.ShapedGlyph;
+const dwrite_emoji = @import("dwrite_emoji");
 
 /// Intermediate cell data copied from terminal under mutex.
 const CellSnapshot = struct {
@@ -78,12 +79,14 @@ pub fn snapshotCells(
     allocator: std.mem.Allocator,
     terminal: *const PTermTerminal,
     pal: ?*const RendererPalette,
+    scroll_offset: u32,
 ) !struct {
     cells: []CellSnapshot,
     cols: u16,
     rows: u16,
     cursor_col: u16,
     cursor_row: u16,
+    in_scrollback: bool,
 } {
     const screens = @constCast(terminal).getScreens();
     const screen = screens.active;
@@ -91,6 +94,14 @@ pub fn snapshotCells(
     const cols: u16 = @intCast(screen.pages.cols);
     const rows: u16 = @intCast(screen.pages.rows);
     const total: usize = @as(usize, cols) * @as(usize, rows);
+
+    // Compute screen-coordinate base row for scrollback viewport
+    const total_rows = screen.pages.total_rows;
+    const active_rows = screen.pages.rows;
+    const history_rows: u32 = if (total_rows > active_rows) @intCast(total_rows - active_rows) else 0;
+    const clamped_offset = @min(scroll_offset, history_rows);
+    // Base row in screen coordinates: history_rows - offset is where the viewport starts
+    const viewport_base: u32 = history_rows - clamped_offset;
 
     // Use config-driven palette if provided, else compile-time defaults
     const default_fg = if (pal) |p| p.default_fg else palette.default_fg;
@@ -105,10 +116,19 @@ pub fn snapshotCells(
         while (col < cols) : (col += 1) {
             const empty_grapheme = [_]u21{0} ** cell_mod.MAX_GRAPHEME_CODEPOINTS;
 
-            const pin = screen.pages.pin(.{ .active = .{
-                .x = @intCast(col),
-                .y = @intCast(row),
-            } }) orelse {
+            // When scrolled back, use screen coordinates; otherwise use active
+            const pin = if (clamped_offset > 0)
+                screen.pages.pin(.{ .screen = .{
+                    .x = @intCast(col),
+                    .y = @intCast(viewport_base + row),
+                } })
+            else
+                screen.pages.pin(.{ .active = .{
+                    .x = @intCast(col),
+                    .y = @intCast(row),
+                } });
+
+            const pin_val = pin orelse {
                 cells[i] = .{
                     .grapheme = empty_grapheme,
                     .grapheme_len = 0,
@@ -123,7 +143,7 @@ pub fn snapshotCells(
                 continue;
             };
 
-            const rac = pin.rowAndCell();
+            const rac = pin_val.rowAndCell();
             const cell = rac.cell;
 
             var fg = default_fg;
@@ -131,7 +151,7 @@ pub fn snapshotCells(
             var inverse = false;
 
             if (cell.style_id != 0) {
-                const style = pin.style(cell);
+                const style = pin_val.style(cell);
                 fg = resolveColor(style.fg_color, default_fg, pal);
                 bg = resolveColor(style.bg_color, default_bg, pal);
                 inverse = style.flags.inverse;
@@ -144,8 +164,16 @@ pub fn snapshotCells(
             if (cp > 0) {
                 grapheme_buf[0] = cp;
                 grapheme_len = 1;
-                // TODO: extract extra grapheme codepoints for multi-codepoint clusters
-                // when ghostty-vt's grapheme API is verified working.
+                // Extract extra grapheme codepoints from ghostty-vt
+                if (cell.hasGrapheme()) {
+                    if (pin_val.grapheme(cell)) |extra_cps| {
+                        for (extra_cps) |ecp| {
+                            if (grapheme_len >= cell_mod.MAX_GRAPHEME_CODEPOINTS) break;
+                            grapheme_buf[grapheme_len] = ecp;
+                            grapheme_len += 1;
+                        }
+                    }
+                }
             }
 
             cells[i] = .{
@@ -170,6 +198,7 @@ pub fn snapshotCells(
         .rows = rows,
         .cursor_col = @intCast(cursor_pos.col),
         .cursor_row = @intCast(cursor_pos.row),
+        .in_scrollback = clamped_offset > 0,
     };
 }
 
@@ -374,29 +403,233 @@ fn shapeRowInto(
         const is_wide_run = cell0.wide;
 
         if (is_emoji or is_wide_run) {
-            // Emoji and wide chars: use codepoint-based fallback (walks font chain).
-            for (run_start..run_end) |ci| {
-                const c = row_cells[ci];
-                if (c.grapheme_len == 0 or c.grapheme[0] == 0 or c.wide_spacer) continue;
-                const cp = c.grapheme[0];
-                if (cp == ' ') continue;
+            // Renderer-level emoji sequence detection.
+            // Without grapheme cluster mode (2027), multi-codepoint emoji are
+            // spread across separate cells. We scan ahead from the current
+            // position to find adjacent cells that form a logical emoji sequence
+            // (flags, ZWJ families, skin-tone modifiers) and combine their
+            // codepoints for HarfBuzz shaping.
+            var emoji_shaped = false;
+            if (is_emoji) {
+                // Scan ahead past run_end to find the full emoji sequence.
+                // This looks beyond the current style-based run because emoji
+                // sequences span multiple cells that may differ in style_id.
+                var seq_cps: [32]u21 = undefined;
+                var seq_len: usize = 0;
+                var seq_end: u16 = run_start; // column past the last consumed cell
+                var scan: u16 = run_start;
 
-                var flags: u16 = 0;
-                if (c.wide) flags |= CellFlags.WIDE_CHAR;
-                if (cell_mod.isEmojiCodepoint(cp)) flags |= CellFlags.COLOR_GLYPH;
+                while (scan < cols and seq_len < seq_cps.len) {
+                    const sc = row_cells[scan];
+                    if (sc.wide_spacer) {
+                        scan += 1;
+                        continue;
+                    }
+                    if (sc.grapheme_len == 0 or sc.grapheme[0] == 0) break;
 
-                const gr = font_grid.getGlyph(cp) catch continue;
-                const sby: i32 = @as(i32, @intFromFloat(metrics.ascender)) - gr.bearing_y;
-                text_buf[text_count.*] = CellInstance{
-                    .grid_col = @intCast(ci), .grid_row = row,
-                    .atlas_x = gr.region.x, .atlas_y = gr.region.y,
-                    .atlas_w = gr.region.w, .atlas_h = gr.region.h,
-                    .bearing_x = @intCast(std.math.clamp(gr.bearing_x, -32768, 32767)),
-                    .bearing_y = @intCast(std.math.clamp(sby, -32768, 32767)),
-                    .fg_color = fg.toU32(), .bg_color = bg.toU32(),
-                    .flags = flags,
-                };
-                text_count.* += 1;
+                    const scp = sc.grapheme[0];
+
+                    if (seq_len == 0) {
+                        // First cell — always include.
+                        for (0..sc.grapheme_len) |gi| {
+                            if (seq_len < seq_cps.len) {
+                                seq_cps[seq_len] = sc.grapheme[gi];
+                                seq_len += 1;
+                            }
+                        }
+                        seq_end = scan + 1;
+                        // Skip spacer_tail if wide.
+                        if (sc.wide and scan + 1 < cols and row_cells[scan + 1].wide_spacer) {
+                            seq_end = scan + 2;
+                        }
+                        scan = seq_end;
+                        continue;
+                    }
+
+                    // Check if this cell continues the emoji sequence:
+                    // - Regional indicator following another regional indicator (flags)
+                    // - Emoji following a ZWJ (ZWJ sequence continuation)
+                    // - Fitzpatrick modifier (U+1F3FB-U+1F3FF) following emoji (skin-tone)
+                    // - Variation selector (already appended as grapheme, but check anyway)
+                    const prev_ends_with_zwj = seq_len > 0 and seq_cps[seq_len - 1] == 0x200D;
+                    const is_regional = scp >= 0x1F1E0 and scp <= 0x1F1FF;
+                    const prev_is_regional = seq_cps[0] >= 0x1F1E0 and seq_cps[0] <= 0x1F1FF;
+                    const is_skin_tone = scp >= 0x1F3FB and scp <= 0x1F3FF;
+
+                    const continues = prev_ends_with_zwj or
+                        (is_regional and prev_is_regional and seq_len <= 2) or
+                        is_skin_tone;
+
+                    if (!continues) break;
+
+                    for (0..sc.grapheme_len) |gi| {
+                        if (seq_len < seq_cps.len) {
+                            seq_cps[seq_len] = sc.grapheme[gi];
+                            seq_len += 1;
+                        }
+                    }
+                    seq_end = scan + 1;
+                    if (sc.wide and scan + 1 < cols and row_cells[scan + 1].wide_spacer) {
+                        seq_end = scan + 2;
+                    }
+                    scan = seq_end;
+                }
+
+                // If we found a multi-codepoint sequence, shape it.
+                if (seq_len > 1) {
+                    const emoji_shaper_opt = font_grid.getEmojiShaper();
+                    const emoji_idx_opt = font_grid.getEmojiFontIndex();
+                    if (emoji_shaper_opt) |emoji_shaper| {
+                        if (emoji_idx_opt) |emoji_idx| {
+                            const shaped = emoji_shaper.shapeEmoji(seq_cps[0..seq_len]) catch null;
+                            if (shaped) |glyphs| {
+                                defer emoji_shaper.allocator.free(glyphs);
+
+                                if (glyphs.len == 1 and glyphs[0].glyph_id != 0) {
+                                    emoji_shaped = true;
+
+                                    // Emit backgrounds for all cells in the emoji sequence.
+                                    var bg_col: u16 = run_start;
+                                    while (bg_col < seq_end) : (bg_col += 1) {
+                                        if (bg_col < cols) {
+                                            emitBg(row_cells[bg_col], bg_col, row, bg_buf, bg_count);
+                                        }
+                                    }
+
+                                    // Render composed glyph at run_start position.
+                                    const glyph = glyphs[0];
+
+                                    const glyph_result = font_grid.getGlyphByID(emoji_idx, glyph.glyph_id, true) catch blk: {
+                                        const fallback_cp = first_cp;
+                                        break :blk font_grid.getGlyph(fallback_cp) catch {
+                                            // Complete fallback failure — skip to per-codepoint path.
+                                            run_start = seq_end;
+                                            continue;
+                                        };
+                                    };
+
+                                    const glyph_flags: u16 = CellFlags.WIDE_CHAR |
+                                        if (glyph_result.is_color) CellFlags.COLOR_GLYPH else @as(u16, 0);
+
+                                    const sby: i32 = @as(i32, @intFromFloat(metrics.ascender)) - glyph_result.bearing_y;
+                                    text_buf[text_count.*] = CellInstance{
+                                        .grid_col = run_start, .grid_row = row,
+                                        .atlas_x = glyph_result.region.x, .atlas_y = glyph_result.region.y,
+                                        .atlas_w = glyph_result.region.w, .atlas_h = glyph_result.region.h,
+                                        .bearing_x = @intCast(std.math.clamp(glyph_result.bearing_x, -32768, 32767)),
+                                        .bearing_y = @intCast(std.math.clamp(sby, -32768, 32767)),
+                                        .fg_color = fg.toU32(), .bg_color = bg.toU32(),
+                                        .flags = glyph_flags,
+                                    };
+                                    text_count.* += 1;
+
+                                    // Emit WIDE_CONTINUATION for remaining columns.
+                                    var cont_col: u16 = run_start + 1;
+                                    while (cont_col < seq_end) : (cont_col += 1) {
+                                        text_buf[text_count.*] = CellInstance{
+                                            .grid_col = cont_col, .grid_row = row,
+                                            .atlas_x = 0, .atlas_y = 0, .atlas_w = 0, .atlas_h = 0,
+                                            .bearing_x = 0, .bearing_y = 0,
+                                            .fg_color = 0, .bg_color = 0,
+                                            .flags = CellFlags.WIDE_CONTINUATION,
+                                        };
+                                        text_count.* += 1;
+                                    }
+
+                                    // Skip past the entire emoji sequence.
+                                    run_start = seq_end;
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // DirectWrite fallback (Windows): when HarfBuzz can't compose,
+                // use DirectWrite which has built-in emoji composition.
+                if (!emoji_shaped and seq_len > 1) {
+                    if (dwrite_emoji.render(font_grid.allocator, seq_cps[0..seq_len], metrics.cell_height)) |bitmap| {
+                        defer font_grid.allocator.free(bitmap.data);
+
+                        if (bitmap.width > 0 and bitmap.height > 0) {
+                            // Insert into color atlas with a synthetic key.
+                            const atlas_key = font_types.GlyphKey{
+                                .font_index = 255, // synthetic font index for DWrite emoji
+                                .glyph_id = seq_cps[0], // use first codepoint as key discriminator
+                                .size_px = @intFromFloat(@round(metrics.cell_height)),
+                                .is_glyph_index = true,
+                            };
+                            const cached = font_grid.getAtlasMut().insertColor(atlas_key, bitmap) catch null;
+                            if (cached) |entry| {
+                                emoji_shaped = true;
+
+                                // Emit backgrounds for all cells in the emoji sequence.
+                                var bg_col: u16 = run_start;
+                                while (bg_col < seq_end) : (bg_col += 1) {
+                                    if (bg_col < cols) {
+                                        emitBg(row_cells[bg_col], bg_col, row, bg_buf, bg_count);
+                                    }
+                                }
+
+                                const glyph_flags: u16 = CellFlags.COLOR_GLYPH | CellFlags.WIDE_CHAR;
+                                const sby: i32 = @as(i32, @intFromFloat(metrics.ascender)) - entry.bearing_y;
+                                text_buf[text_count.*] = CellInstance{
+                                    .grid_col = run_start, .grid_row = row,
+                                    .atlas_x = entry.region.x, .atlas_y = entry.region.y,
+                                    .atlas_w = entry.region.w, .atlas_h = entry.region.h,
+                                    .bearing_x = @intCast(std.math.clamp(entry.bearing_x, -32768, 32767)),
+                                    .bearing_y = @intCast(std.math.clamp(sby, -32768, 32767)),
+                                    .fg_color = fg.toU32(), .bg_color = bg.toU32(),
+                                    .flags = glyph_flags,
+                                };
+                                text_count.* += 1;
+
+                                // Emit WIDE_CONTINUATION for remaining columns.
+                                var cont_col: u16 = run_start + 1;
+                                while (cont_col < seq_end) : (cont_col += 1) {
+                                    text_buf[text_count.*] = CellInstance{
+                                        .grid_col = cont_col, .grid_row = row,
+                                        .atlas_x = 0, .atlas_y = 0, .atlas_w = 0, .atlas_h = 0,
+                                        .bearing_x = 0, .bearing_y = 0,
+                                        .fg_color = 0, .bg_color = 0,
+                                        .flags = CellFlags.WIDE_CONTINUATION,
+                                    };
+                                    text_count.* += 1;
+                                }
+
+                                run_start = seq_end;
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Single-codepoint emoji/CJK fallback: per-codepoint rendering through font chain.
+            if (!emoji_shaped) {
+                for (run_start..run_end) |ci| {
+                    const c = row_cells[ci];
+                    if (c.grapheme_len == 0 or c.grapheme[0] == 0 or c.wide_spacer) continue;
+                    const cp = c.grapheme[0];
+                    if (cp == ' ') continue;
+
+                    var per_cp_flags: u16 = 0;
+                    if (c.wide) per_cp_flags |= CellFlags.WIDE_CHAR;
+                    if (cell_mod.isEmojiCodepoint(cp)) per_cp_flags |= CellFlags.COLOR_GLYPH;
+
+                    const gr = font_grid.getGlyph(cp) catch continue;
+                    const sby: i32 = @as(i32, @intFromFloat(metrics.ascender)) - gr.bearing_y;
+                    text_buf[text_count.*] = CellInstance{
+                        .grid_col = @intCast(ci), .grid_row = row,
+                        .atlas_x = gr.region.x, .atlas_y = gr.region.y,
+                        .atlas_w = gr.region.w, .atlas_h = gr.region.h,
+                        .bearing_x = @intCast(std.math.clamp(gr.bearing_x, -32768, 32767)),
+                        .bearing_y = @intCast(std.math.clamp(sby, -32768, 32767)),
+                        .fg_color = fg.toU32(), .bg_color = bg.toU32(),
+                        .flags = per_cp_flags,
+                    };
+                    text_count.* += 1;
+                }
             }
         } else {
             // Normal text: HarfBuzz shaping for ligatures.
@@ -577,7 +810,7 @@ pub fn buildRenderState(
     viewport_height: u32,
     pal: ?*const RendererPalette,
 ) !RenderState {
-    const snap = try snapshotCells(allocator, terminal, pal);
+    const snap = try snapshotCells(allocator, terminal, pal, 0);
     return buildFromSnapshot(allocator, snap, font_grid, viewport_width, viewport_height, pal, null);
 }
 

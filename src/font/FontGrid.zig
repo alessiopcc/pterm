@@ -21,6 +21,7 @@ pub const GlyphResult = struct {
     region: AtlasRegion,
     bearing_x: i32,
     bearing_y: i32,
+    is_color: bool = false,
 };
 
 /// A font handle in the fallback chain.
@@ -37,6 +38,7 @@ pub const FontGrid = struct {
     config: FontConfig,
     metrics: FontMetrics,
     shaper: Shaper,
+    emoji_shaper: ?Shaper,
     emoji_font_index: ?u8,
 
     /// Initialize the font grid with the given configuration.
@@ -92,6 +94,14 @@ pub const FontGrid = struct {
             }
         }
 
+        // Create emoji HarfBuzz shaper if an emoji font was loaded.
+        var emoji_shaper: ?Shaper = null;
+        if (emoji_font_index) |idx| {
+            const emoji_face = fonts.items[idx].rasterizer.getFace();
+            emoji_shaper = Shaper.init(allocator, @ptrCast(emoji_face));
+        }
+        errdefer if (emoji_shaper) |*s| s.deinit();
+
         // Discover and append CJK fallback font.
         if (discovery.discoverCJKFont(allocator)) |result| {
             if (loadFont(allocator, result, config.size_pt, dpi)) |entry| {
@@ -111,12 +121,14 @@ pub const FontGrid = struct {
             .config = config,
             .metrics = metrics,
             .shaper = shaper,
+            .emoji_shaper = emoji_shaper,
             .emoji_font_index = emoji_font_index,
         };
     }
 
     /// Release all resources.
     pub fn deinit(self: *FontGrid) void {
+        if (self.emoji_shaper) |*s| s.deinit();
         self.shaper.deinit();
         for (self.fonts.items) |*entry| {
             entry.rasterizer.deinit();
@@ -146,6 +158,7 @@ pub const FontGrid = struct {
                         .region = cached.region,
                         .bearing_x = cached.bearing_x,
                         .bearing_y = cached.bearing_y,
+                        .is_color = true,
                     };
                 }
             } else {
@@ -178,6 +191,7 @@ pub const FontGrid = struct {
                     .region = cached.region,
                     .bearing_x = cached.bearing_x,
                     .bearing_y = cached.bearing_y,
+                    .is_color = true,
                 };
             } else {
                 const cached = try self.atlas.insert(key, bitmap);
@@ -220,8 +234,9 @@ pub const FontGrid = struct {
             try entry.rasterizer.setSize(clamped, dpi);
         }
 
-        // Notify shaper that the underlying FreeType face size changed.
+        // Notify shapers that the underlying FreeType face size changed.
         self.shaper.fontChanged();
+        if (self.emoji_shaper) |*s| s.fontChanged();
 
         // Clear and rebuild atlas (full invalidation per UI-SPEC).
         self.atlas.clear();
@@ -246,6 +261,7 @@ pub const FontGrid = struct {
                     .region = cached.region,
                     .bearing_x = cached.bearing_x,
                     .bearing_y = cached.bearing_y,
+                    .is_color = true,
                 };
             }
 
@@ -253,11 +269,20 @@ pub const FontGrid = struct {
             const bitmap = try self.fonts.items[font_index].rasterizer.rasterizeGlyphByID(self.allocator, glyph_id, true);
             defer if (bitmap.data.len > 0) self.allocator.free(bitmap.data);
 
-            const cached = try self.atlas.insertColor(key, bitmap);
+            // FreeType may return grayscale even when color was requested
+            // (e.g., composed emoji glyph without a color layer in the font).
+            // Route grayscale bitmaps through the grayscale atlas to avoid
+            // the RGBA copy assuming 4 bytes per pixel on 1-byte data.
+            const is_rgba = bitmap.format == .rgba;
+            const cached = if (is_rgba)
+                try self.atlas.insertColor(key, bitmap)
+            else
+                try self.atlas.insert(key, bitmap);
             return GlyphResult{
                 .region = cached.region,
                 .bearing_x = cached.bearing_x,
                 .bearing_y = cached.bearing_y,
+                .is_color = is_rgba,
             };
         } else {
             if (self.atlas.lookup(key)) |cached| {
@@ -289,6 +314,12 @@ pub const FontGrid = struct {
     /// Return a mutable pointer to the HarfBuzz shaper (non-optional, fail-fast on init).
     pub fn getShaper(self: *FontGrid) *Shaper {
         return &self.shaper;
+    }
+
+    /// Return a mutable pointer to the emoji HarfBuzz shaper, or null if no emoji font loaded.
+    pub fn getEmojiShaper(self: *FontGrid) ?*Shaper {
+        if (self.emoji_shaper != null) return &self.emoji_shaper.?;
+        return null;
     }
 
     /// Return the emoji font index in the fallback chain, or null if no emoji font loaded.

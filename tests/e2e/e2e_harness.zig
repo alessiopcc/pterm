@@ -43,7 +43,7 @@ pub const TestApp = struct {
         const path_z = try allocator.dupeZ(u8, shell_path);
         const path_ptr: [*:0]const u8 = path_z.ptr;
 
-        try p.spawn(path_ptr, shell_args, null);
+        try p.spawn(path_ptr, shell_args);
 
         return .{
             .allocator = allocator,

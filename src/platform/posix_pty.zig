@@ -12,6 +12,7 @@ const posix = std.posix;
 const c = @cImport({
     @cInclude("pty.h"); // forkpty
     @cInclude("unistd.h"); // execvp, close, read, write
+    @cInclude("stdlib.h"); // setenv
     @cInclude("sys/ioctl.h"); // ioctl, TIOCSWINSZ
     @cInclude("sys/wait.h"); // waitpid, WNOHANG
     @cInclude("signal.h"); // kill
@@ -60,6 +61,10 @@ pub const PosixPty = struct {
             // Child process -- exec the shell
             const default_args = [_:null]?[*:0]const u8{shell_path};
             const exec_args = if (args) |a| a else &default_args;
+
+            // Set TERM and COLORTERM for proper terminal capability detection (D-48)
+            _ = c.setenv("TERM", "xterm-256color", 1);
+            _ = c.setenv("COLORTERM", "truecolor", 1);
 
             // Set up environment if provided
             if (self.config.env) |env| {
@@ -133,9 +138,15 @@ pub const PosixPty = struct {
             var status: c_int = 0;
             const waited = c.waitpid(self.child_pid, &status, c.WNOHANG);
             if (waited == 0) {
-                // Child still running, send SIGTERM
+                // Child still running, send SIGTERM and wait briefly
                 _ = c.kill(self.child_pid, c.SIGTERM);
-                _ = c.waitpid(self.child_pid, &status, 0);
+                _ = c.usleep(200_000); // 200ms grace period
+                const still_running = c.waitpid(self.child_pid, &status, c.WNOHANG);
+                if (still_running == 0) {
+                    // Child ignored SIGTERM, force kill
+                    _ = c.kill(self.child_pid, c.SIGKILL);
+                    _ = c.waitpid(self.child_pid, &status, 0);
+                }
             }
             self.child_pid = -1;
         }

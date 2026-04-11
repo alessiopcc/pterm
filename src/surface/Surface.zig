@@ -295,6 +295,7 @@ pub const Surface = struct {
                     self.frame_arena.allocator(),
                     snapshot,
                     &self.renderer_palette,
+                    0, // Surface render path has no scrollback viewport
                 ) catch {
                     self.termio.unlockTerminal();
                     _ = self.frame_arena.reset(.retain_capacity);

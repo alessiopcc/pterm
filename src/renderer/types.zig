@@ -136,7 +136,7 @@ pub const CursorState = struct {
     color: u32,
 };
 
-pub const CursorStyle = enum { block, ibeam, underline };
+pub const CursorStyle = enum { block, hollow, ibeam, underline };
 
 /// Adaptive frame scheduler (D-16).
 pub const FrameScheduler = struct {

@@ -700,6 +700,7 @@ pub const OpenGLBackend = struct {
             .block => 0,
             .ibeam => 1,
             .underline => 2,
+            .hollow => 3,
         };
         return CellInstance{
             .grid_col = cursor.col,

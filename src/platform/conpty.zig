@@ -172,6 +172,11 @@ extern "kernel32" fn WaitForSingleObject(
 
 extern "kernel32" fn GetLastError() callconv(.c) DWORD;
 
+extern "kernel32" fn SetEnvironmentVariableA(
+    lpName: [*:0]const u8,
+    lpValue: [*:0]const u8,
+) callconv(.c) BOOL;
+
 const EXTENDED_STARTUPINFO_PRESENT: DWORD = 0x00080000;
 const PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE: usize = 0x00020016;
 
@@ -263,6 +268,7 @@ pub const ConPty = struct {
         _ = InitializeProcThreadAttributeList(null, 1, 0, &attr_list_size);
 
         const attr_buf = self.allocator.alloc(u8, attr_list_size) catch return ConPtyError.AllocFailed;
+        errdefer self.allocator.free(attr_buf);
         self.attribute_list_buf = attr_buf;
 
         const attr_list: LPPROC_THREAD_ATTRIBUTE_LIST = @ptrCast(attr_buf.ptr);
@@ -284,6 +290,12 @@ pub const ConPty = struct {
         ) == 0) {
             return ConPtyError.UpdateAttributeFailed;
         }
+
+        // Set TERM and COLORTERM for proper terminal capability detection (D-48).
+        // These are set in the parent process env and inherited by the child
+        // via lpEnvironment=null in CreateProcessW.
+        _ = SetEnvironmentVariableA("TERM", "xterm-256color");
+        _ = SetEnvironmentVariableA("COLORTERM", "truecolor");
 
         var startup_info = STARTUPINFOEXW{
             .StartupInfo = .{ .cb = @sizeOf(STARTUPINFOEXW) },
@@ -392,7 +404,14 @@ pub const ConPty = struct {
             fn run(hpc: HPCON) void {
                 ClosePseudoConsole(hpc);
             }
-        }.run, .{hpc_copy}) catch null;
+        }.run, .{hpc_copy}) catch blk: {
+            // Fallback: close synchronously to avoid infinite hang in the drain loop.
+            // This may deadlock under heavy I/O, but that is preferable to a guaranteed
+            // infinite hang when no thread is available to break the pipe.
+            ClosePseudoConsole(hpc_copy);
+            self.hpc = INVALID_HANDLE_VALUE;
+            break :blk null;
+        };
 
         // 4. Drain output pipe on main thread (blocking ReadFile loop).
         //    When ClosePseudoConsole completes, it breaks the pipe, and

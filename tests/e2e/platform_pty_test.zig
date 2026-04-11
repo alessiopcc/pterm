@@ -17,7 +17,7 @@ test "PTY creation succeeds on current platform" {
         "cmd.exe"
     else
         "/bin/sh";
-    try p.spawn(shell_path, null, null);
+    try p.spawn(shell_path, null);
 
     // Verify child process was created
     const pid = p.getChildPid();
@@ -33,7 +33,7 @@ test "PTY resize works on current platform" {
         "cmd.exe"
     else
         "/bin/sh";
-    try p.spawn(shell_path, null, null);
+    try p.spawn(shell_path, null);
 
     // Wait for shell to start
     std.Thread.sleep(300 * std.time.ns_per_ms);
@@ -57,7 +57,7 @@ test "PTY read produces output after spawn" {
         "cmd.exe"
     else
         "/bin/sh";
-    try p.spawn(shell_path, null, null);
+    try p.spawn(shell_path, null);
 
     // Read some output (shell prompt, VT sequences)
     var buf: [4096]u8 = undefined;
@@ -111,7 +111,7 @@ test "ConPTY specific: creation with different sizes" {
 
     for (sizes) |size| {
         var p = try Pty.init(testing.allocator, .{ .cols = size[0], .rows = size[1] });
-        try p.spawn("cmd.exe", null, null);
+        try p.spawn("cmd.exe", null);
         const pid = p.getChildPid();
         try testing.expect(pid != null);
         p.deinit();
@@ -133,7 +133,7 @@ test "Posix PTY specific: creation with different sizes" {
 
     for (sizes) |size| {
         var p = try Pty.init(testing.allocator, .{ .cols = size[0], .rows = size[1] });
-        try p.spawn("/bin/sh", null, null);
+        try p.spawn("/bin/sh", null);
         const pid = p.getChildPid();
         try testing.expect(pid != null);
         p.deinit();

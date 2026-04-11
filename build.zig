@@ -16,6 +16,11 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // Build options: version string injected at compile time (D-09, D-15)
+    const options = b.addOptions();
+    options.addOption([]const u8, "version", b.option([]const u8, "version", "Version string") orelse "0.1.0-dev");
+    exe_mod.addOptions("build_options", options);
+
     if (ghostty_dep) |dep| {
         exe_mod.addImport("ghostty-vt", dep.module("ghostty-vt"));
     }
@@ -364,6 +369,25 @@ pub fn build(b: *std.Build) void {
     // Wire shaper into fontgrid (post-declaration)
     fontgrid_mod.addImport("shaper", shaper_mod);
 
+    // DirectWrite emoji rasterizer (Windows only)
+    const dwrite_emoji_mod = b.createModule(.{
+        .root_source_file = b.path("src/font/dwrite_emoji.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    dwrite_emoji_mod.addImport("font_types", font_types_mod);
+    if (target.result.os.tag == .windows) {
+        dwrite_emoji_mod.addCSourceFile(.{
+            .file = b.path("src/font/dwrite_emoji.cpp"),
+            .flags = &.{"-std=c++17"},
+        });
+        dwrite_emoji_mod.addIncludePath(b.path("src/font"));
+        dwrite_emoji_mod.linkSystemLibrary("dwrite", .{});
+        dwrite_emoji_mod.linkSystemLibrary("d2d1", .{});
+        dwrite_emoji_mod.linkSystemLibrary("ole32", .{});
+        dwrite_emoji_mod.linkSystemLibrary("windowscodecs", .{});
+    }
+
     // -------------------------------------------------------
     // Phase 2 Plan 04: Integration modules (Window, Input, Surface, App)
     // -------------------------------------------------------
@@ -412,6 +436,7 @@ pub fn build(b: *std.Build) void {
     render_state_mod.addImport("cell", cell_mod);
     render_state_mod.addImport("fontgrid", fontgrid_mod);
     render_state_mod.addImport("shaper", shaper_mod);
+    render_state_mod.addImport("dwrite_emoji", dwrite_emoji_mod);
     if (ghostty_vt_mod) |m| {
         render_state_mod.addImport("ghostty-vt", m);
     }
@@ -544,6 +569,12 @@ pub fn build(b: *std.Build) void {
     exe_mod.addImport("config", config_mod);
     exe_mod.addImport("cli", config_cli_mod);
     exe_mod.addImport("defaults", config_defaults_mod);
+
+    // Wire zglfw into exe_mod for GPU probe in main.zig (D-49)
+    if (zglfw_dep) |dep| {
+        exe_mod.addImport("zglfw", dep.module("root"));
+        exe_mod.linkLibrary(dep.artifact("glfw"));
+    }
 
     // -------------------------------------------------------
     // Phase 5 Plan 01: Layout module (binary tree pane model, tabs)
@@ -1114,4 +1145,108 @@ pub fn build(b: *std.Build) void {
     const status_bar_tests = b.addTest(.{ .root_module = status_bar_renderer_mod });
     const run_status_bar_tests = b.addRunArtifact(status_bar_tests);
     test_step.dependOn(&run_status_bar_tests.step);
+
+    // -------------------------------------------------------
+    // Phase 9 Plan 02: E2E test step (headless PTY-based platform tests)
+    // -------------------------------------------------------
+    const e2e_test_step = b.step("test-e2e", "Run E2E platform tests (spawns real shells)");
+
+    // E2E harness module (shared across E2E tests)
+    const e2e_harness_mod = b.createModule(.{
+        .root_source_file = b.path("tests/e2e/e2e_harness.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    e2e_harness_mod.addImport("pty", platform_pty_mod);
+
+    // Shell spawn tests
+    const shell_spawn_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/e2e/shell_spawn_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    shell_spawn_test_mod.addImport("e2e_harness", e2e_harness_mod);
+    shell_spawn_test_mod.addImport("pty", platform_pty_mod);
+    const shell_spawn_tests = b.addTest(.{ .root_module = shell_spawn_test_mod });
+    const run_shell_spawn = b.addRunArtifact(shell_spawn_tests);
+    e2e_test_step.dependOn(&run_shell_spawn.step);
+
+    // CLI flags tests (spawns pterm binary, needs it built first)
+    const cli_flags_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/e2e/cli_flags_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const cli_flags_tests = b.addTest(.{ .root_module = cli_flags_test_mod });
+    const run_cli_flags = b.addRunArtifact(cli_flags_tests);
+    run_cli_flags.step.dependOn(&exe.step);
+    e2e_test_step.dependOn(&run_cli_flags.step);
+
+    // Env vars tests
+    const env_vars_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/e2e/env_vars_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    env_vars_test_mod.addImport("e2e_harness", e2e_harness_mod);
+    env_vars_test_mod.addImport("pty", platform_pty_mod);
+    const env_vars_tests = b.addTest(.{ .root_module = env_vars_test_mod });
+    const run_env_vars = b.addRunArtifact(env_vars_tests);
+    e2e_test_step.dependOn(&run_env_vars.step);
+
+    // Platform PTY tests
+    const platform_pty_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/e2e/platform_pty_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    platform_pty_test_mod.addImport("pty", platform_pty_mod);
+    const platform_pty_e2e_tests = b.addTest(.{ .root_module = platform_pty_test_mod });
+    const run_platform_pty_e2e = b.addRunArtifact(platform_pty_e2e_tests);
+    e2e_test_step.dependOn(&run_platform_pty_e2e.step);
+
+    // Stability tests
+    const stability_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/e2e/stability_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    stability_test_mod.addImport("e2e_harness", e2e_harness_mod);
+    stability_test_mod.addImport("pty", platform_pty_mod);
+    const stability_tests = b.addTest(.{ .root_module = stability_test_mod });
+    const run_stability = b.addRunArtifact(stability_tests);
+    e2e_test_step.dependOn(&run_stability.step);
+
+    // Pane/tab lifecycle tests (headless, no PTY or GPU needed)
+    const pane_tab_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/e2e/pane_tab_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    pane_tab_test_mod.addImport("layout", layout_mod);
+    const pane_tab_tests = b.addTest(.{ .root_module = pane_tab_test_mod });
+    const run_pane_tab = b.addRunArtifact(pane_tab_tests);
+    e2e_test_step.dependOn(&run_pane_tab.step);
+
+    // Agent detection tests (headless, no PTY or GPU needed)
+    const agent_detection_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/e2e/agent_detection_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    agent_detection_test_mod.addImport("agent_detector", agent_detector_mod);
+    const agent_detection_tests = b.addTest(.{ .root_module = agent_detection_test_mod });
+    const run_agent_detection = b.addRunArtifact(agent_detection_tests);
+    e2e_test_step.dependOn(&run_agent_detection.step);
+
+    // Config loading + hot-reload tests (D-37)
+    const config_e2e_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/e2e/config_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const config_e2e_tests = b.addTest(.{ .root_module = config_e2e_test_mod });
+    const run_config_e2e = b.addRunArtifact(config_e2e_tests);
+    run_config_e2e.step.dependOn(&exe.step);
+    e2e_test_step.dependOn(&run_config_e2e.step);
 }

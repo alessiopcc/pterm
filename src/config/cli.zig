@@ -1,7 +1,8 @@
 /// CLI argument parsing for PTerm configuration.
 ///
-/// Parses command-line flags: --config, --font-size, --title, --cols, --rows,
-/// --working-dir, --dump-config, --check-config, --set-keybindings, --perf, --debug-keys.
+/// Parses command-line flags: --version, --init-config, --config, --font-size,
+/// --title, --cols, --rows, --working-dir, --dump-config, --check-config,
+/// --set-keybindings, --perf, --debug-keys.
 /// CLI flags have highest priority in the four-tier config pipeline.
 const std = @import("std");
 const Config = @import("Config.zig").Config;
@@ -19,6 +20,8 @@ pub const CliArgs = struct {
     layout: ?[]const u8 = null, // --layout <name> (D-38)
     perf_logging: bool = false, // --perf
     debug_keys: bool = false, // --debug-keys
+    version: bool = false, // --version
+    init_config: bool = false, // --init-config
 };
 
 /// Parse CLI arguments from std.process args.
@@ -63,6 +66,10 @@ pub fn parse(allocator: std.mem.Allocator) !CliArgs {
             result.perf_logging = true;
         } else if (std.mem.eql(u8, arg, "--debug-keys")) {
             result.debug_keys = true;
+        } else if (std.mem.eql(u8, arg, "--version")) {
+            result.version = true;
+        } else if (std.mem.eql(u8, arg, "--init-config")) {
+            result.init_config = true;
         }
     }
     if (wants_help) {
@@ -99,6 +106,8 @@ fn printHelp(cli_config_path: ?[]const u8, allocator: std.mem.Allocator) void {
         \\  --layout <name>       Start with named layout preset
         \\  --perf                Enable performance logging
         \\  --debug-keys          Log keystrokes to pterm_debug.log
+        \\  --version             Print version and exit
+        \\  --init-config         Create default config file and exit
         \\  -h, --help            Show this help
         \\
     , .{resolved});

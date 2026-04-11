@@ -1,9 +1,9 @@
-/// Platform-specific config path detection and --dump-config formatting.
+/// Cross-platform config path detection and --dump-config formatting.
 ///
-/// Default config paths per platform (D-01):
-///   Linux:   ~/.config/pterm/config.toml (XDG_CONFIG_HOME)
-///   macOS:   ~/Library/Application Support/pterm/config.toml
-///   Windows: %APPDATA%\pterm\config.toml
+/// Default config paths (D-11: cross-platform consistency):
+///   All platforms: ~/.config/pterm/config.toml
+///   Linux: Respects XDG_CONFIG_HOME if set
+///   Windows: Uses %USERPROFILE%/.config/pterm/config.toml
 const std = @import("std");
 const builtin = @import("builtin");
 
@@ -14,47 +14,28 @@ pub fn defaultConfigPath() ?[]const u8 {
 }
 
 fn defaultConfigPathImpl() ?[]const u8 {
-    if (builtin.os.tag == .windows) {
-        // %APPDATA%\pterm\config.toml
-        const appdata = std.process.getEnvVarOwned(std.heap.page_allocator, "APPDATA") catch return null;
-        // Note: This leaks the appdata string, but it's called at most once at startup.
-        // A proper implementation would use an allocator, but for the default path
-        // detection this is acceptable.
-        _ = appdata;
-        // For now, return a well-known pattern. The actual path construction
-        // needs an allocator which we don't want to require here.
-        return null; // Caller should check APPDATA env var
-    } else if (builtin.os.tag == .macos) {
-        return null; // ~/Library/Application Support/pterm/config.toml -- needs HOME
-    } else {
-        // Linux/other: XDG_CONFIG_HOME or ~/.config
-        return null; // $XDG_CONFIG_HOME/pterm/config.toml or ~/.config/pterm/config.toml
-    }
+    // D-11: All platforms use ~/.config/pterm/config.toml
+    // This non-allocator version cannot construct dynamic paths,
+    // so it returns null. Callers should use defaultConfigPathAlloc().
+    return null;
 }
 
 /// Return the default config path using an allocator for dynamic path construction.
+/// D-11: All platforms use ~/.config/pterm/config.toml for cross-platform consistency.
 pub fn defaultConfigPathAlloc(allocator: std.mem.Allocator) !?[]const u8 {
     if (builtin.os.tag == .windows) {
-        const appdata = std.process.getEnvVarOwned(allocator, "APPDATA") catch return null;
-        defer allocator.free(appdata);
-        const path = try std.fmt.allocPrint(allocator, "{s}\\pterm\\config.toml", .{appdata});
-        return path;
-    } else if (builtin.os.tag == .macos) {
-        const home = std.process.getEnvVarOwned(allocator, "HOME") catch return null;
+        const home = std.process.getEnvVarOwned(allocator, "USERPROFILE") catch return null;
         defer allocator.free(home);
-        const path = try std.fmt.allocPrint(allocator, "{s}/Library/Application Support/pterm/config.toml", .{home});
-        return path;
+        return try std.fmt.allocPrint(allocator, "{s}/.config/pterm/config.toml", .{home});
     } else {
-        // Linux: XDG_CONFIG_HOME or ~/.config
+        // macOS + Linux: XDG_CONFIG_HOME or ~/.config
         const config_home = std.process.getEnvVarOwned(allocator, "XDG_CONFIG_HOME") catch {
             const home = std.process.getEnvVarOwned(allocator, "HOME") catch return null;
             defer allocator.free(home);
-            const path = try std.fmt.allocPrint(allocator, "{s}/.config/pterm/config.toml", .{home});
-            return path;
+            return try std.fmt.allocPrint(allocator, "{s}/.config/pterm/config.toml", .{home});
         };
         defer allocator.free(config_home);
-        const path = try std.fmt.allocPrint(allocator, "{s}/pterm/config.toml", .{config_home});
-        return path;
+        return try std.fmt.allocPrint(allocator, "{s}/pterm/config.toml", .{config_home});
     }
 }
 
@@ -124,6 +105,12 @@ pub fn dumpConfig() void {
         \\
     ;
     const stdout_file = std.fs.File.stdout();
-    stdout_file.writeAll(output) catch {};
-    stdout_file.writeAll("\n") catch {};
+    stdout_file.writeAll(output) catch |err| {
+        std.debug.print("Error writing config: {}\n", .{err});
+        std.process.exit(1);
+    };
+    stdout_file.writeAll("\n") catch |err| {
+        std.debug.print("Error writing config: {}\n", .{err});
+        std.process.exit(1);
+    };
 }

@@ -132,6 +132,9 @@ pub const PaneData = struct {
 
     /// Suppress agent state transitions during resize (PTY redraws cause false positives).
     suppress_agent_output: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    /// Scrollback viewport offset: 0 = live (bottom), >0 = scrolled up N lines into history.
+    scroll_offset: u32 = 0,
 };
 
 // Static state for config reload callback (FileWatcher callback has no context pointer).
@@ -221,6 +224,9 @@ pub const App = struct {
     window_drag_screen_x: i32,
     window_drag_screen_y: i32,
 
+    // Title bar double-click detection (maximize/restore)
+    titlebar_last_click_time: i128,
+
     // Window control hover state (0=none, 1=minimize, 2=maximize, 3=close)
     hovered_control: u8,
 
@@ -229,6 +235,15 @@ pub const App = struct {
 
     // URL hover cursor (Phase 6, D-20: pointing hand on URL hover)
     hand_cursor: ?*glfw.Cursor,
+
+    // Text selection drag state (mouse click-drag to select text)
+    text_select_active: bool,
+    text_select_pane_id: ?u32,
+    text_select_click_count: u8, // 1=normal, 2=word, 3=line
+    text_select_last_click_time: i128,
+    text_select_pending: bool, // true = click registered, waiting for drag to start selection
+    text_select_start_row: u32,
+    text_select_start_col: u16,
 
     // Window edge resize state (frameless window)
     window_resize_active: bool,
@@ -369,6 +384,13 @@ pub const App = struct {
             .pending_layout_name = options.layout_name,
             .pending_ops = .{},
             .pending_ops_mutex = .{},
+            .text_select_active = false,
+            .text_select_pane_id = null,
+            .text_select_click_count = 0,
+            .text_select_last_click_time = 0,
+            .text_select_pending = false,
+            .text_select_start_row = 0,
+            .text_select_start_col = 0,
             .border_drag_active = false,
             .border_drag_branch = null,
             .border_drag_start_pos = 0,
@@ -379,6 +401,7 @@ pub const App = struct {
             .window_drag_tab_hit = null,
             .window_drag_screen_x = 0,
             .window_drag_screen_y = 0,
+            .titlebar_last_click_time = 0,
             .hovered_control = 0,
             .suppress_activity_frames = std.atomic.Value(u32).init(0),
             .hand_cursor = glfw.Cursor.createStandard(.hand) catch null,
@@ -404,7 +427,7 @@ pub const App = struct {
         first_tab.root.leaf.pane_id = pane_id;
         first_tab.focused_pane_id = pane_id;
         first_tab.next_pane_id = pane_id + 1;
-        std.log.info("TAB 1: created (pane_id={d})", .{pane_id});
+
 
         // Set GLFW callbacks routing to App
         self.window.setUserPointer(@ptrCast(self));
@@ -693,6 +716,32 @@ pub const App = struct {
 
         self.last_mods = glfwModsToModifiers(mods);
 
+        // Clear text selection on any keypress except clipboard keys (Esc or typing deselects)
+        if (self.getFocusedPaneData()) |pd| {
+            if (pd.surface.selection.range != null) {
+                // Don't clear for modifier-only keys or Ctrl+C/V — clipboard handler needs the selection
+                const is_modifier = key == .left_shift or key == .right_shift or
+                    key == .left_control or key == .right_control or
+                    key == .left_alt or key == .right_alt or
+                    key == .left_super or key == .right_super;
+                const is_clipboard = mods.control and !mods.alt and !mods.super and
+                    (key == .c or key == .v);
+                if (!is_modifier and !is_clipboard) {
+                    pd.surface.selection.clear();
+                    self.requestFrame();
+                    if (key == .escape) return;
+                }
+            }
+        }
+
+        // Reset scrollback viewport on keypress (snap to live terminal)
+        if (self.getFocusedPaneData()) |pd| {
+            if (pd.scroll_offset > 0) {
+                pd.scroll_offset = 0;
+                self.requestFrame();
+            }
+        }
+
         // Intercept input when preset picker is visible
         if (self.preset_picker.visible) {
             self.handlePickerInput(key);
@@ -842,6 +891,21 @@ pub const App = struct {
                 self.resizeAllPanes();
                 self.requestFrame();
             }
+            if (self.text_select_pending) {
+                // Single click released without drag — no selection
+                self.text_select_pending = false;
+                self.text_select_pane_id = null;
+            }
+            if (self.text_select_active) {
+                self.text_select_active = false;
+                if (self.text_select_pane_id) |pid| {
+                    if (self.pane_data.get(pid)) |pd| {
+                        _ = pd.surface.selection.finish();
+                        self.requestFrame();
+                    }
+                }
+                self.text_select_pane_id = null;
+            }
             return;
         }
 
@@ -908,6 +972,16 @@ pub const App = struct {
                 .window_maximize => self.window.toggleMaximize(),
                 .window_close => self.window.requestClose(),
                 else => {
+                    // Double-click on title bar area → maximize/restore
+                    const now = std.time.nanoTimestamp();
+                    const elapsed_ns = now - self.titlebar_last_click_time;
+                    self.titlebar_last_click_time = now;
+                    if (elapsed_ns > 0 and elapsed_ns < 400_000_000) { // 400ms threshold
+                        self.window.toggleMaximize();
+                        self.titlebar_last_click_time = 0; // Reset to prevent triple-click trigger
+                        return;
+                    }
+
                     // Tab clicks, drag region, empty space — all start a drag.
                     // If released without movement, treat as tab click (see release handler).
                     self.window_drag_active = true;
@@ -1017,6 +1091,100 @@ pub const App = struct {
             if (tree_ops.findLeaf(active_tab.root, pane_id)) |leaf_node| {
                 if (leaf_node.leaf.bounds.contains(fb_x, fb_y)) {
                     active_tab.focused_pane_id = pane_id;
+
+                    // Start text selection at click position
+                    // Detect multi-click: double-click = word, triple-click = line
+                    if (self.pane_data.get(pane_id)) |pd| {
+                        const m = self.font_grid.getMetrics();
+                        const cw: u32 = @intFromFloat(m.cell_width);
+                        const ch: u32 = @intFromFloat(m.cell_height);
+                        if (cw > 0 and ch > 0) {
+                            const bounds = leaf_node.leaf.bounds;
+                            const rel_x = fb_x - bounds.x;
+                            const rel_y = fb_y - bounds.y;
+                            if (rel_x >= 0 and rel_y >= 0) {
+                                const col: u16 = @intCast(@min(@as(u32, @intCast(rel_x)) / cw, 65535));
+                                const row: u32 = @as(u32, @intCast(rel_y)) / ch;
+                                const cols: u16 = if (cw > 0) @intCast(@as(u32, @intCast(bounds.w)) / cw) else 80;
+
+                                // Multi-click detection (400ms threshold)
+                                const now = std.time.nanoTimestamp();
+                                const elapsed_ns = now - self.text_select_last_click_time;
+                                self.text_select_last_click_time = now;
+                                if (elapsed_ns > 0 and elapsed_ns < 400_000_000) {
+                                    self.text_select_click_count = @min(self.text_select_click_count + 1, 3);
+                                } else {
+                                    self.text_select_click_count = 1;
+                                }
+
+                                pd.surface.selection.clear();
+
+                                if (self.text_select_click_count >= 2) {
+                                    // Double/triple click: select immediately
+                                    if (self.text_select_click_count >= 3) {
+                                        // Line select
+                                        pd.surface.selection.begin(row, 0, .line);
+                                        pd.surface.selection.update(row, cols);
+                                    } else {
+                                        // Word select: expand to word boundaries
+                                        const snapshot = pd.termio.lockTerminal();
+                                        const screens = @constCast(snapshot).getScreens();
+                                        const screen = screens.active;
+                                        const tcols: u16 = @intCast(screen.pages.cols);
+
+                                        // Read codepoint at position
+                                        const isWordChar = struct {
+                                            fn f(cp: u21) bool {
+                                                if (cp == 0 or cp == ' ' or cp == '\t') return false;
+                                                // Punctuation/delimiters break words
+                                                if (cp < 128) {
+                                                    const c: u8 = @intCast(cp);
+                                                    return std.ascii.isAlphanumeric(c) or c == '_' or c == '-' or c == '.';
+                                                }
+                                                return true; // Non-ASCII = part of word
+                                            }
+                                        }.f;
+
+                                        const getCp = struct {
+                                            fn f(scr: anytype, r: u32, c: u16) u21 {
+                                                const p = scr.pages.pin(.{ .active = .{
+                                                    .x = @intCast(c),
+                                                    .y = @intCast(r),
+                                                } }) orelse return 0;
+                                                return p.rowAndCell().cell.codepoint();
+                                            }
+                                        }.f;
+
+                                        // Find word start (scan left)
+                                        var word_start: u16 = col;
+                                        while (word_start > 0 and isWordChar(getCp(screen, row, word_start -| 1))) {
+                                            word_start -= 1;
+                                        }
+                                        // Find word end (scan right)
+                                        var word_end: u16 = col;
+                                        while (word_end + 1 < tcols and isWordChar(getCp(screen, row, word_end + 1))) {
+                                            word_end += 1;
+                                        }
+                                        pd.termio.unlockTerminal();
+
+                                        pd.surface.selection.begin(row, word_start, .word);
+                                        pd.surface.selection.update(row, word_end);
+                                    }
+
+                                    self.text_select_active = true;
+                                    self.text_select_pending = false;
+                                } else {
+                                    // Single click: defer selection until drag
+                                    self.text_select_pending = true;
+                                    self.text_select_start_row = row;
+                                    self.text_select_start_col = col;
+                                    self.text_select_active = false;
+                                }
+                                self.text_select_pane_id = pane_id;
+                            }
+                        }
+                    }
+
                     self.requestFrame();
                     return;
                 }
@@ -1109,6 +1277,45 @@ pub const App = struct {
 
             self.resizeAllPanes();
             self.requestFrame();
+            return;
+        }
+
+        // Text selection: start selection on first drag movement (single click deferred)
+        if (self.text_select_pending) {
+            if (self.text_select_pane_id) |pid| {
+                if (self.pane_data.get(pid)) |pd| {
+                    pd.surface.selection.begin(self.text_select_start_row, self.text_select_start_col, .normal);
+                    self.text_select_active = true;
+                    self.text_select_pending = false;
+                }
+            }
+        }
+
+        // Text selection drag: update selection endpoint as cursor moves
+        if (self.text_select_active) {
+            if (self.text_select_pane_id) |pid| {
+                if (self.pane_data.get(pid)) |pd| {
+                    const active_tab_sel = self.tab_manager.getActiveTab();
+                    if (active_tab_sel) |at| {
+                        if (tree_ops.findLeaf(at.root, pid)) |leaf_node| {
+                            const m = self.font_grid.getMetrics();
+                            const cw: u32 = @intFromFloat(m.cell_width);
+                            const ch: u32 = @intFromFloat(m.cell_height);
+                            if (cw > 0 and ch > 0) {
+                                const bounds = leaf_node.leaf.bounds;
+                                const rel_x = @as(i32, @intFromFloat(xpos)) - bounds.x;
+                                const rel_y = @as(i32, @intFromFloat(ypos)) - bounds.y;
+                                const clamped_x: u32 = if (rel_x < 0) 0 else @intCast(rel_x);
+                                const clamped_y: u32 = if (rel_y < 0) 0 else @intCast(rel_y);
+                                const col: u16 = @intCast(@min(clamped_x / cw, 65535));
+                                const row: u32 = clamped_y / ch;
+                                pd.surface.selection.update(row, col);
+                                self.requestFrame();
+                            }
+                        }
+                    }
+                }
+            }
             return;
         }
 
@@ -1434,7 +1641,7 @@ pub const App = struct {
 
         // Set tab_index on the pane and start TermIO
         const new_tab_idx: u32 = @intCast(self.tab_manager.tabCount() - 1);
-        std.log.info("TAB {d}: created (pane_id={d})", .{ new_tab_idx + 1, pane_id });
+
         if (self.pane_data.get(pane_id)) |pd| {
             pd.tab_index = new_tab_idx;
             pd.termio.start() catch {};
@@ -2129,8 +2336,11 @@ pub const App = struct {
                 const fb = self.window.getFramebufferSize();
                 if (fb.width == 0 or fb.height == 0) {
                     // Window is minimized — skip rendering to avoid GL errors
+                    // Re-request frame so we redraw once the window is restored
+                    self.frame_requested.store(true, .release);
                     self.window.swapBuffers();
                     _ = self.frame_arena.reset(.retain_capacity);
+                    std.Thread.sleep(16_000_000); // Sleep 16ms to avoid busy-loop while minimized
                     continue;
                 }
                 const metrics = self.font_grid.getMetrics();
@@ -2297,6 +2507,7 @@ pub const App = struct {
                                     self.frame_arena.allocator(),
                                     snapshot,
                                     &self.renderer_palette,
+                                    pd.scroll_offset,
                                 ) catch {
                                     pd.termio.unlockTerminal();
                                     continue;
@@ -2314,9 +2525,17 @@ pub const App = struct {
                                     &pd.row_cache,
                                 ) catch continue;
 
-                                // Cursor visibility
+                                // Cursor visibility — hide when scrolled into history
                                 const is_focused = info.pane_id == active_tab.focused_pane_id;
-                                rs.cursor.visible = self.cursor_visible and self.focused and is_focused;
+                                const blink_vis = if (self.config.cursor.blink) self.cursor_visible else true;
+                                rs.cursor.visible = blink_vis and self.focused and is_focused and pd.scroll_offset == 0;
+                                // Apply configured cursor style
+                                rs.cursor.style = switch (self.config.cursor.style) {
+                                    .block => .block,
+                                    .hollow => .hollow,
+                                    .bar => .ibeam,
+                                    .underline => .underline,
+                                };
                                 rs.cell_width = metrics.cell_width;
                                 rs.cell_height = metrics.cell_height;
 
@@ -2404,6 +2623,29 @@ pub const App = struct {
                                     }
                                 }
 
+                                // Phase 8: Selection highlight rendering
+                                if (pd.surface.selection.range) |sel_range| {
+                                    const norm = sel_range.normalized();
+                                    const sel_cw: u32 = @intFromFloat(metrics.cell_width);
+                                    const sel_ch: u32 = @intFromFloat(metrics.cell_height);
+                                    const sel_pad: i32 = @intFromFloat(rs.grid_padding);
+                                    const sel_color = renderer_types.Color{ .r = 0x45, .g = 0x47, .b = 0x5a, .a = 120 };
+                                    var sel_row: u32 = norm.start_row;
+                                    while (sel_row <= norm.end_row) : (sel_row += 1) {
+                                        const sc: u16 = if (sel_row == norm.start_row) norm.start_col else 0;
+                                        const ec: u16 = if (sel_row == norm.end_row) norm.end_col + 1 else rs.grid_cols;
+                                        var sel_col: u16 = sc;
+                                        while (sel_col < ec) : (sel_col += 1) {
+                                            backend.drawFilledRectAlpha(RendererRect{
+                                                .x = bounds.x + sel_pad + @as(i32, @intCast(@as(u32, sel_col) * sel_cw)),
+                                                .y = bounds.y + sel_pad + @as(i32, @intCast(sel_row * sel_ch)),
+                                                .w = sel_cw,
+                                                .h = sel_ch,
+                                            }, sel_color);
+                                        }
+                                    }
+                                }
+
                                 // Phase 6 D-14: URL hover underline rendering
                                 if (pd.url_state.hovered_url) |hurl| {
                                     const url_color = self.renderer_palette.ui_url_hover;
@@ -2421,10 +2663,18 @@ pub const App = struct {
                                 }
 
                                 // Phase 6 D-26/D-27: Bell flash overlay + sound + window attention
-                                self.processBellForPane(pd, toRendererRect(bounds), &backend);
+                                // Never flash the active pane — only background panes
+                                if (!is_focused) {
+                                    self.processBellForPane(pd, toRendererRect(bounds), &backend);
+                                } else {
+                                    // Still consume the trigger so it doesn't fire later
+                                    _ = pd.bell_state.consumeTrigger();
+                                }
 
                                 // Phase 7: Agent flash overlay (D-16: 150ms flash on waiting entry)
-                                self.processAgentFlashForPane(pd, toRendererRect(bounds), &backend);
+                                if (!is_focused) {
+                                    self.processAgentFlashForPane(pd, toRendererRect(bounds), &backend);
+                                }
 
                                 // Phase 6: Search overlay rendering
                                 if (pd.search_state.is_open and is_focused) {
@@ -2866,7 +3116,7 @@ pub const App = struct {
     }
 
     fn updateCursorBlink(self: *App) void {
-        if (!self.focused) {
+        if (!self.focused or !self.config.cursor.blink) {
             self.cursor_visible = true;
             return;
         }
@@ -3142,6 +3392,16 @@ pub const App = struct {
 
     fn framebufferSizeCallback(handle: *glfw.Window, width: c_int, height: c_int) callconv(.c) void {
         const app = Window.getUserPointer(App, handle) orelse return;
+        // Ignore 0x0 (minimized window) — don't store it so restore sees correct old size
+        if (width <= 0 or height <= 0) return;
+        // Skip if size hasn't actually changed (e.g., restore from minimize)
+        // to avoid terminal reflow that repositions cursor to top
+        const old_w = app.new_fb_width.load(.acquire);
+        const old_h = app.new_fb_height.load(.acquire);
+        if (old_w == @as(u32, @intCast(width)) and old_h == @as(u32, @intCast(height))) {
+            app.requestFrame(); // Still redraw, just don't resize terminal
+            return;
+        }
         // Suppress agent state transitions immediately — before any render thread
         // processes the resize and triggers PTY output that would flip state to working
         var pd_iter = app.pane_data.iterator();
@@ -3160,12 +3420,45 @@ pub const App = struct {
         if (app.focused) {
             app.cursor_blink_timer = std.time.nanoTimestamp();
             app.cursor_visible = true;
+            // Invalidate row caches to force full redraw after minimize/restore.
+            // This avoids triggering pending_resize which would reflow the terminal.
+            var pd_iter = app.pane_data.iterator();
+            while (pd_iter.next()) |entry| {
+                entry.value_ptr.*.row_cache.invalidate();
+            }
         }
         app.requestFrame();
     }
 
-    fn scrollCallback(handle: *glfw.Window, _: f64, _: f64) callconv(.c) void {
+    fn scrollCallback(handle: *glfw.Window, _: f64, yoffset: f64) callconv(.c) void {
         const app = Window.getUserPointer(App, handle) orelse return;
+        // Mouse wheel scrollback: scroll 3 lines per notch
+        if (yoffset != 0) {
+            if (app.getFocusedPaneData()) |pd| {
+                const lines: i32 = @intFromFloat(yoffset * 3.0);
+                if (lines > 0) {
+                    // Scroll up (into history)
+                    pd.scroll_offset +|= @intCast(lines);
+                    // Clamp to available history
+                    const snapshot = pd.termio.lockTerminal();
+                    const screens = @constCast(snapshot).getScreens();
+                    const screen = screens.active;
+                    const total_rows = screen.pages.total_rows;
+                    const active_rows = screen.pages.rows;
+                    pd.termio.unlockTerminal();
+                    const max_scroll: u32 = if (total_rows > active_rows) @intCast(total_rows - active_rows) else 0;
+                    pd.scroll_offset = @min(pd.scroll_offset, max_scroll);
+                } else {
+                    // Scroll down (toward live)
+                    const down: u32 = @intCast(-lines);
+                    if (down >= pd.scroll_offset) {
+                        pd.scroll_offset = 0;
+                    } else {
+                        pd.scroll_offset -= down;
+                    }
+                }
+            }
+        }
         app.requestFrame();
     }
 

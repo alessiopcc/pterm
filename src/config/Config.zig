@@ -112,10 +112,10 @@ pub const Config = struct {
 
     pub const Cursor = struct {
         style: CursorStyle = .block,
-        blink: bool = true,
+        blink: bool = false,
     };
 
-    pub const CursorStyle = enum { block, bar, underline };
+    pub const CursorStyle = enum { block, hollow, bar, underline };
 
     pub const Scrollback = struct {
         lines: i64 = 10_000,
