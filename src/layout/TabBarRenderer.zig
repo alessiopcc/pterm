@@ -38,6 +38,14 @@ pub const TabBarConfig = struct {
     /// Per-tab bell badge flags. Slice length matches tab count.
     /// null means no bell badge info available (skip rendering).
     tab_bell_badges: ?[]const bool = null,
+
+    /// Phase 7: Per-tab agent waiting flags (any pane in tab has show_badge).
+    /// null means no agent badge info available (skip rendering).
+    tab_agent_badges: ?[]const bool = null,
+
+    /// Phase 7: Per-tab agent tab flags (any pane in tab has is_agent_tab).
+    /// null means no agent tab info available (skip rendering).
+    tab_is_agent: ?[]const bool = null,
 };
 
 // Control button colors
@@ -144,10 +152,13 @@ pub const TabBarRenderer = struct {
                 draw_rect_fn(.{ .x = bx, .y = 0, .w = btn_w, .h = title_h - 1 }, hover_color, draw_ctx);
             }
             const cx = bx + @divFloor(btn_w_i, 2);
-            draw_rect_fn(.{ .x = cx - half, .y = cy - half, .w = icon_sz, .h = 2 }, color_maximize, draw_ctx);
-            draw_rect_fn(.{ .x = cx - half, .y = cy + half - 2, .w = icon_sz, .h = 2 }, color_maximize, draw_ctx);
-            draw_rect_fn(.{ .x = cx - half, .y = cy - half, .w = 2, .h = icon_sz }, color_maximize, draw_ctx);
-            draw_rect_fn(.{ .x = cx + half - 2, .y = cy - half, .w = 2, .h = icon_sz }, color_maximize, draw_ctx);
+            // Use explicit size so vertical bars don't extend past horizontal bars
+            const sq: i32 = @intCast(icon_sz);
+            const sq_u: u32 = icon_sz;
+            draw_rect_fn(.{ .x = cx - half, .y = cy - half, .w = sq_u, .h = 2 }, color_maximize, draw_ctx);
+            draw_rect_fn(.{ .x = cx - half, .y = cy - half + sq - 2, .w = sq_u, .h = 2 }, color_maximize, draw_ctx);
+            draw_rect_fn(.{ .x = cx - half, .y = cy - half, .w = 2, .h = sq_u }, color_maximize, draw_ctx);
+            draw_rect_fn(.{ .x = cx - half + sq - 2, .y = cy - half, .w = 2, .h = sq_u }, color_maximize, draw_ctx);
         }
 
         // Minimize (leftmost of three) — yellow horizontal line
@@ -209,6 +220,15 @@ pub const TabBarRenderer = struct {
 
             // Always reserve space for activity indicator so title doesn't shift
             var text_x: i32 = tab_x + @as(i32, @intCast(config.tab_pad_h));
+
+            // Phase 7 D-11: Agent tab icon prefix (*) for agent-designated tabs
+            if (config.tab_is_agent) |agent_flags| {
+                if (idx < agent_flags.len and agent_flags[idx]) {
+                    draw_text_fn("*", text_x, text_y, config.agent_alert, draw_ctx);
+                    text_x += cell_w_int;
+                }
+            }
+
             const indicator_x = text_x;
             text_x += cell_w_int; // reserved slot
 
@@ -261,6 +281,26 @@ pub const TabBarRenderer = struct {
                             .w = @intCast(@as(u32, @intCast(span * 2 + 1))),
                             .h = 1,
                         }, config.bell_badge_color, draw_ctx);
+                    }
+                }
+            }
+
+            // Phase 7 D-15: Agent waiting badge — agent_alert colored dot (4px gap after bell badge)
+            if (config.tab_agent_badges) |agent_badges| {
+                if (idx < agent_badges.len and agent_badges[idx] and !is_active) {
+                    const agent_badge_r: i32 = @intFromFloat(config.cell_height * 0.12);
+                    // Position: right of bell badge area, with 4px gap
+                    const agent_badge_x = tab_x + @as(i32, @intCast(tab_w)) - cell_w_int * 4;
+                    const agent_badge_cy = tab_y + @divFloor(@as(i32, @intCast(tab_h)), 2);
+                    var abi: i32 = -agent_badge_r;
+                    while (abi <= agent_badge_r) : (abi += 1) {
+                        const aspan = agent_badge_r - @as(i32, if (abi < 0) -abi else abi);
+                        draw_rect_fn(.{
+                            .x = agent_badge_x - aspan,
+                            .y = agent_badge_cy + abi,
+                            .w = @intCast(@as(u32, @intCast(aspan * 2 + 1))),
+                            .h = 1,
+                        }, config.agent_alert, draw_ctx);
                     }
                 }
             }

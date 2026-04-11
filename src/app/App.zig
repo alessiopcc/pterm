@@ -63,6 +63,14 @@ const bell_state_mod = @import("bell_state");
 const BellState = bell_state_mod.BellState;
 const system_beep = @import("system_beep");
 
+const AgentState = @import("agent_state").AgentState;
+const AgentDetector = @import("agent_detector").AgentDetector;
+const IdleTracker = @import("idle_tracker").IdleTracker;
+const notification_manager_mod = @import("notification_manager");
+const NotificationManager = notification_manager_mod.NotificationManager;
+const status_bar_mod = @import("status_bar_renderer");
+const StatusBarRenderer = status_bar_mod.StatusBarRenderer;
+
 const TabManager = layout_mod.TabManager.TabManager;
 const Tab = layout_mod.Tab.Tab;
 const PaneTree = layout_mod.PaneTree;
@@ -112,6 +120,18 @@ pub const PaneData = struct {
 
     /// Per-pane bell state (Phase 6, D-26: per-pane flash + badge).
     bell_state: BellState = .{},
+
+    /// Per-pane agent monitoring state (Phase 7, D-17: independent per pane).
+    agent_state: AgentState = .{},
+
+    /// Per-pane idle tracker (Phase 7, D-09: optional idle detection).
+    idle_tracker: IdleTracker = IdleTracker.init(5, false),
+
+    /// Flag set by observer callback, consumed by render snapshot for debounced scan.
+    needs_agent_scan: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    /// Suppress agent state transitions during resize (PTY redraws cause false positives).
+    suppress_agent_output: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 };
 
 // Static state for config reload callback (FileWatcher callback has no context pointer).
@@ -170,6 +190,12 @@ pub const App = struct {
 
     // Frame arena for per-frame allocations
     frame_arena: std.heap.ArenaAllocator,
+
+    /// Shared agent detector (one per app, patterns are global per D-03).
+    agent_detector: ?AgentDetector = null,
+
+    /// Notification manager: per-pane cooldown, focus suppression, OS notification dispatch.
+    notification_manager: NotificationManager,
 
     // Layout preset picker overlay
     preset_picker: PresetPicker,
@@ -325,6 +351,20 @@ pub const App = struct {
             .cursor_visible = true,
             .focused = true,
             .frame_arena = std.heap.ArenaAllocator.init(allocator),
+            .agent_detector = if (config.agent.enabled)
+                AgentDetector.init(
+                    config.agent.preset,
+                    config.agent.custom_patterns orelse &[_][]const u8{},
+                    @intCast(config.agent.scan_lines),
+                )
+            else
+                null,
+            .notification_manager = NotificationManager.init(
+                config.agent.notification_cooldown,
+                config.agent.notifications,
+                config.agent.suppress_when_focused,
+                config.agent.notification_sound,
+            ),
             .preset_picker = .{},
             .pending_layout_name = options.layout_name,
             .pending_ops = .{},
@@ -494,6 +534,10 @@ pub const App = struct {
             .process_name_len = proc_name_len,
             .screen_change_fn = null,
             .row_cache = .{},
+            .idle_tracker = IdleTracker.init(
+                @intCast(self.config.agent.idle_timeout),
+                self.config.agent.idle_detection,
+            ),
         };
 
         // Fix up internal pointers to point to PaneData's copies (not the stack locals)
@@ -508,6 +552,10 @@ pub const App = struct {
         // Wire bell detection: Observer fires bellCallback when BEL (0x07) found in output.
         pd.termio.terminal.observer.onBell = bellCallback;
         pd.termio.terminal.observer.bell_ctx = @ptrCast(&pd.bell_state);
+
+        // Wire agent output detection: Observer fires agentOutputCallback on raw output.
+        pd.termio.terminal.observer.onAgentOutput = agentOutputCallback;
+        pd.termio.terminal.observer.agent_ctx = @ptrCast(pd);
 
         // Create PaneState for registry
         const ps = try self.allocator.create(PaneState);
@@ -525,6 +573,9 @@ pub const App = struct {
 
     /// Destroy a pane: stop its TermIO, deinit PTY, remove from registries.
     pub fn destroyPane(self: *App, pane_id: u32) void {
+        // Clean up notification cooldown entry for this pane
+        self.notification_manager.removePane(self.allocator, pane_id);
+
         if (self.pane_data.get(pane_id)) |pd| {
             // Stop TermIO threads
             pd.termio.stop();
@@ -556,6 +607,13 @@ pub const App = struct {
             return;
         };
         self.renderer_palette = theme_mod.buildRendererPaletteFromConfig(new_config.colors);
+        // Update notification manager from new config (D-20 hot-reload)
+        self.notification_manager.updateConfig(
+            new_config.agent.notification_cooldown,
+            new_config.agent.notifications,
+            new_config.agent.suppress_when_focused,
+            new_config.agent.notification_sound,
+        );
         self.config = new_config;
         self.requestFrame();
         std.log.info("Config hot-reloaded", .{});
@@ -593,6 +651,9 @@ pub const App = struct {
             self.allocator.destroy(entry.value_ptr.*);
         }
         self.pane_registry.deinit(self.allocator);
+
+        // Clean up notification manager
+        self.notification_manager.deinit(self.allocator);
 
         // Clean up remaining resources
         self.pending_ops.deinit(self.allocator);
@@ -863,6 +924,27 @@ pub const App = struct {
             return;
         }
 
+        // Phase 8 D-16: Right-click context-sensitive copy/paste in pane area
+        if (button == .right and action == .press) {
+            if (self.getFocusedPaneData()) |pd| {
+                if (pd.surface.selection.range != null) {
+                    pd.surface.copySelection();
+                    // copySelection already clears selection
+                } else {
+                    pd.surface.pasteFromClipboard();
+                }
+            }
+            return;
+        }
+
+        // Phase 8 D-18: Middle-click paste in pane area
+        if (button == .middle and action == .press) {
+            if (self.getFocusedPaneData()) |pd| {
+                pd.surface.pasteFromClipboard();
+            }
+            return;
+        }
+
         if (button != .left) return;
 
         // Pane bounds are in framebuffer space (fb_x/fb_y already computed above)
@@ -887,6 +969,41 @@ pub const App = struct {
                     if (pd.url_state.getHoveredUrl()) |url| {
                         open_url.openUrl(url);
                         return; // Consume click (D-16: no terminal selection)
+                    }
+                }
+            }
+        }
+
+        // Check status bar click: focus the corresponding pane
+        if (self.config.status_bar.visible) {
+            const sb_height = StatusBarRenderer.statusBarHeight(metrics.cell_height);
+            const sb_top: i32 = @intCast(if (fb.height > sb_height) fb.height - sb_height else 0);
+            if (fb_y >= sb_top) {
+                // Build the same pane_number→pane_id mapping used in render
+                const leaf_infos = tree_ops.collectLeafInfos(active_tab.root, std.heap.page_allocator) catch &.{};
+                defer if (leaf_infos.len > 0) std.heap.page_allocator.free(leaf_infos);
+
+                var sb_pane_infos: [32]status_bar_mod.PaneStatusInfo = undefined;
+                var sb_count: usize = 0;
+                for (leaf_infos) |li| {
+                    if (sb_count >= 32) break;
+                    if (self.pane_data.get(li.pane_id)) |_| {
+                        sb_pane_infos[sb_count] = .{
+                            .pane_number = @intCast(sb_count + 1),
+                            .state = .idle,
+                            .is_focused = false,
+                        };
+                        sb_count += 1;
+                    }
+                }
+
+                if (StatusBarRenderer.hitTest(sb_pane_infos[0..sb_count], fb_x, metrics.cell_height)) |pane_number| {
+                    // pane_number is 1-indexed, leaf_infos is 0-indexed
+                    const idx = pane_number - 1;
+                    if (idx < leaf_infos.len) {
+                        active_tab.focused_pane_id = leaf_infos[idx].pane_id;
+                        self.requestFrame();
+                        return;
                     }
                 }
             }
@@ -1255,6 +1372,13 @@ pub const App = struct {
                     self.requestFrame();
                 }
             },
+            // Phase 7: Agent monitoring actions
+            .toggle_agent_tab => {
+                if (self.getFocusedPaneData()) |pd| {
+                    pd.agent_state.toggleAgentTab();
+                    self.requestFrame();
+                }
+            },
             .scroll_to_top, .scroll_to_bottom => {},
             .search => {
                 // Phase 6: Toggle search overlay on focused pane (D-08 viewport save/restore)
@@ -1553,13 +1677,23 @@ pub const App = struct {
         // Suppress activity for 30 frames — async PTY redraws from resize cause false positives
         self.suppress_activity_frames.store(30, .release);
         for (self.tab_manager.tabs.items) |*t| t.has_activity = false;
+        // Suppress agent state transitions on ALL panes during resize
+        var pd_iter = self.pane_data.iterator();
+        while (pd_iter.next()) |entry| {
+            entry.value_ptr.*.suppress_agent_output.store(true, .release);
+        }
         const tab = self.tab_manager.getActiveTab() orelse return;
         const fb = self.window.getFramebufferSize();
         const metrics = self.font_grid.getMetrics();
         const tab_bar_height = TabBarRenderer.computeHeight(metrics.cell_height, 4);
+        const status_bar_height: u32 = if (self.config.status_bar.visible)
+            StatusBarRenderer.statusBarHeight(metrics.cell_height)
+        else
+            0;
 
         const content_y: i32 = @intCast(tab_bar_height);
-        const content_h: u32 = if (fb.height > tab_bar_height) fb.height - tab_bar_height else 0;
+        const total_chrome = tab_bar_height + status_bar_height;
+        const content_h: u32 = if (fb.height > total_chrome) fb.height - total_chrome else 0;
         const available = Rect{
             .x = 0,
             .y = content_y,
@@ -1589,7 +1723,7 @@ pub const App = struct {
     /// Format: "N: basename: process [count] [Z]"
     /// Called periodically from the render loop.
     fn updateTabTitles(self: *App) void {
-        for (self.tab_manager.tabs.items, 0..) |*tab, idx| {
+        for (self.tab_manager.tabs.items) |*tab| {
             var title_buf: [128]u8 = undefined;
             var offset: usize = 0;
 
@@ -1632,11 +1766,6 @@ pub const App = struct {
             }
 
             const new_title = title_buf[0..offset];
-            // Log when title changes
-            const old_title = tab.title[0..tab.title_len];
-            if (!std.mem.eql(u8, old_title, new_title)) {
-                std.log.info("TAB {d}: title changed \"{s}\" -> \"{s}\"", .{ idx + 1, old_title, new_title });
-            }
             tab.setTitle(new_title);
         }
     }
@@ -1720,6 +1849,13 @@ pub const App = struct {
                             pd.termio.writeInput(cmd) catch {};
                             pd.termio.writeInput("\n") catch {};
                         }
+                    }
+                }
+
+                // Phase 7 D-12: Set agent tab flag from preset definition
+                if (tab_def.agent) {
+                    if (self.pane_data.get(actual_id)) |pd| {
+                        pd.agent_state.is_agent_tab.store(true, .release);
                     }
                 }
             }
@@ -2031,19 +2167,28 @@ pub const App = struct {
                     backend.uploadIcon(img.pixels[0..byte_count], sz);
                 }
 
-                // Build per-tab bell badge flags for TabBarRenderer (D-29)
+                // Build per-tab bell badge and agent badge flags for TabBarRenderer (D-29, Phase 7 D-15)
                 var bell_badges_buf: [64]bool = [_]bool{false} ** 64;
+                var agent_badges_buf: [64]bool = [_]bool{false} ** 64;
+                var agent_tab_buf: [64]bool = [_]bool{false} ** 64;
                 const tab_count = self.tab_manager.tabCount();
                 const badge_count = @min(tab_count, 64);
                 for (self.tab_manager.tabs.items, 0..) |tab, ti| {
                     if (ti >= 64) break;
-                    // Check if any pane in this tab has show_badge set
+                    // Check if any pane in this tab has show_badge or agent state
                     const leaf_infos = tree_ops.collectLeafInfos(tab.root, self.frame_arena.allocator()) catch &.{};
                     for (leaf_infos) |info| {
                         if (self.pane_data.getPtr(info.pane_id)) |pd_ptr| {
                             if (pd_ptr.*.bell_state.show_badge) {
                                 bell_badges_buf[ti] = true;
-                                break;
+                            }
+                            // Phase 7: Agent waiting badge
+                            if (pd_ptr.*.agent_state.show_badge) {
+                                agent_badges_buf[ti] = true;
+                            }
+                            // Phase 7: Agent tab icon
+                            if (pd_ptr.*.agent_state.is_agent_tab.load(.acquire)) {
+                                agent_tab_buf[ti] = true;
                             }
                         }
                     }
@@ -2063,6 +2208,8 @@ pub const App = struct {
                         .hovered_control = self.hovered_control,
                         .bell_badge_color = self.renderer_palette.ui_bell_badge.toU32(),
                         .tab_bell_badges = bell_badges_buf[0..badge_count],
+                        .tab_agent_badges = agent_badges_buf[0..badge_count],
+                        .tab_is_agent = agent_tab_buf[0..badge_count],
                     },
                     fb.width,
                     tab_bar_height,
@@ -2073,9 +2220,15 @@ pub const App = struct {
                 );
 
                 // Render panes in active tab
+                const status_bar_height: u32 = if (self.config.status_bar.visible)
+                    StatusBarRenderer.statusBarHeight(metrics.cell_height)
+                else
+                    0;
+
                 if (self.tab_manager.getActiveTab()) |active_tab| {
                     const content_y: i32 = @intCast(tab_bar_height);
-                    const content_h: u32 = if (fb.height > tab_bar_height) fb.height - tab_bar_height else 0;
+                    const total_chrome = tab_bar_height + status_bar_height;
+                    const content_h: u32 = if (fb.height > total_chrome) fb.height - total_chrome else 0;
                     const available = Rect{
                         .x = 0,
                         .y = content_y,
@@ -2113,6 +2266,29 @@ pub const App = struct {
                                     } else {
                                         self.requestFrame(); // keep rendering until debounce fires
                                     }
+                                }
+
+                                // Phase 7: Debounced agent scan — check flag set by observer callback
+                                // Skip scan while resize suppress is active (PTY redraws produce false matches)
+                                if (pd.suppress_agent_output.load(.acquire)) {
+                                    pd.needs_agent_scan.store(false, .release);
+                                } else if (pd.needs_agent_scan.load(.acquire)) {
+                                    pd.needs_agent_scan.store(false, .release);
+                                    if (self.agent_detector) |*detector| {
+                                        // Extract last N visible lines from terminal for pattern scan
+                                        const scan_snap = pd.termio.lockTerminal();
+                                        var line_buf: [20][256]u8 = undefined;
+                                        var lines: [20][]const u8 = undefined;
+                                        const n_lines = extractVisibleLines(scan_snap, &line_buf, &lines, detector.scan_lines);
+                                        pd.termio.unlockTerminal();
+                                        if (detector.scanLines(lines[0..n_lines])) {
+                                            pd.agent_state.triggerWaiting();
+                                        }
+                                    }
+                                }
+                                // Phase 7: Idle detection check (skip during resize suppress)
+                                if (!pd.suppress_agent_output.load(.acquire) and pd.idle_tracker.isIdle(std.time.nanoTimestamp())) {
+                                    pd.agent_state.triggerWaiting();
                                 }
 
                                 // Snapshot under mutex
@@ -2247,6 +2423,9 @@ pub const App = struct {
                                 // Phase 6 D-26/D-27: Bell flash overlay + sound + window attention
                                 self.processBellForPane(pd, toRendererRect(bounds), &backend);
 
+                                // Phase 7: Agent flash overlay (D-16: 150ms flash on waiting entry)
+                                self.processAgentFlashForPane(pd, toRendererRect(bounds), &backend);
+
                                 // Phase 6: Search overlay rendering
                                 if (pd.search_state.is_open and is_focused) {
                                     const search_metrics = SearchOverlay.computeMetrics(
@@ -2280,7 +2459,7 @@ pub const App = struct {
 
                     // Render pane borders (after all panes, full viewport, no scissor)
                     backend.setFullViewport();
-                    renderPaneBorders(active_tab.root, active_tab.focused_pane_id, &backend, &self.renderer_palette);
+                    renderPaneBorders(active_tab.root, active_tab.focused_pane_id, &backend, &self.renderer_palette, &self.pane_data);
 
                     // Re-draw tab bar bottom separator on top of pane content
                     // (pane background clear can bleed into the separator line)
@@ -2300,6 +2479,72 @@ pub const App = struct {
                             .w = fb.width,
                             .h = 1,
                         }, lighter);
+                    }
+
+                    // Phase 7: Render status bar at window bottom
+                    if (self.config.status_bar.visible and status_bar_height > 0) {
+                        backend.setFullViewport();
+
+                        // Build PaneStatusInfo array for current tab
+                        var pane_infos: [32]status_bar_mod.PaneStatusInfo = undefined;
+                        var pane_count: usize = 0;
+                        const current_leaf_infos = tree_ops.collectLeafInfos(active_tab.root, self.frame_arena.allocator()) catch &.{};
+                        for (current_leaf_infos) |li| {
+                            if (pane_count >= 32) break;
+                            if (self.pane_data.get(li.pane_id)) |lpd| {
+                                const raw_state = lpd.agent_state.state.load(.acquire);
+                                pane_infos[pane_count] = .{
+                                    .pane_number = @intCast(pane_count + 1),
+                                    .state = switch (raw_state) {
+                                        .idle => .idle,
+                                        .working => .working,
+                                        .waiting => .waiting,
+                                    },
+                                    .is_focused = li.pane_id == active_tab.focused_pane_id,
+                                };
+                                pane_count += 1;
+                            }
+                        }
+
+                        // Count waiting panes in background (non-active) tabs
+                        var bg_waiting: u32 = 0;
+                        for (self.tab_manager.tabs.items, 0..) |bg_tab, bti| {
+                            if (bti == self.tab_manager.active_idx) continue;
+                            const bg_leaves = tree_ops.collectLeafInfos(bg_tab.root, self.frame_arena.allocator()) catch &.{};
+                            for (bg_leaves) |bli| {
+                                if (self.pane_data.get(bli.pane_id)) |bpd| {
+                                    if (bpd.agent_state.state.load(.acquire) == .waiting) {
+                                        bg_waiting += 1;
+                                    }
+                                }
+                            }
+                        }
+
+                        const sb_y_offset: u32 = if (fb.height > status_bar_height) fb.height - status_bar_height else 0;
+                        const sb_config = status_bar_mod.StatusBarConfig{
+                            .bg_color = self.renderer_palette.ui_tab_bar_bg.toU32(),
+                            .border_color = self.renderer_palette.ui_pane_border.toU32(),
+                            .idle_color = lightenColorU32(self.renderer_palette.ui_tab_bar_bg.toU32(), 30),
+                            .working_color = self.renderer_palette.ansi_normal[2].toU32(),
+                            .waiting_color = self.renderer_palette.ui_agent_alert.toU32(),
+                            .focused_bg_color = lightenColorU32(self.renderer_palette.ui_tab_bar_bg.toU32(), 15),
+                        };
+
+                        var sb_render_ctx = TabBarRenderCtx{
+                            .backend = &backend,
+                            .font_grid = self.font_grid,
+                        };
+                        StatusBarRenderer.render(
+                            pane_infos[0..pane_count],
+                            sb_config,
+                            fb.width,
+                            sb_y_offset,
+                            metrics.cell_height,
+                            bg_waiting,
+                            statusBarDrawRect,
+                            statusBarDrawText,
+                            @ptrCast(&sb_render_ctx),
+                        );
                     }
                 }
 
@@ -2503,7 +2748,34 @@ pub const App = struct {
         drawTextCallback(text, px_x, px_y, color, @ptrCast(rc));
     }
 
-    fn renderPaneBorders(node: *PaneNode, focused_id: u32, backend: *OpenGLBackend, pal: *const RendererPalette) void {
+    // -- Status bar render callbacks (Phase 7) --
+
+    fn statusBarDrawRect(x: i32, y: i32, w: u32, h: u32, color: u32, ctx: *anyopaque) void {
+        const rc: *TabBarRenderCtx = @ptrCast(@alignCast(ctx));
+        const c = renderer_types.Color.fromU32(color);
+        rc.backend.drawFilledRect(.{ .x = x, .y = y, .w = w, .h = h }, c);
+    }
+
+    fn statusBarDrawText(text: []const u8, px_x: i32, px_y: i32, color: u32, scale: f32, ctx: *anyopaque) void {
+        _ = scale; // Scale is handled by StatusBarRenderer; we use the same glyph renderer
+        const rc: *TabBarRenderCtx = @ptrCast(@alignCast(ctx));
+        // Reuse the same glyph text rendering as tab bar
+        drawTextCallback(text, px_x, px_y, color, @ptrCast(rc));
+    }
+
+    /// Lighten a packed RGBA u32 color by a percentage (0-100).
+    fn lightenColorU32(color: u32, percent: u32) u32 {
+        const r = @as(u8, @truncate((color >> 24) & 0xFF));
+        const g = @as(u8, @truncate((color >> 16) & 0xFF));
+        const b_ch = @as(u8, @truncate((color >> 8) & 0xFF));
+        const a = @as(u8, @truncate(color & 0xFF));
+        const nr: u8 = @intCast(@min(255, @as(u16, r) + @as(u16, @intCast(((@as(u32, 255 - r) * percent) / 100)))));
+        const ng: u8 = @intCast(@min(255, @as(u16, g) + @as(u16, @intCast(((@as(u32, 255 - g) * percent) / 100)))));
+        const nb: u8 = @intCast(@min(255, @as(u16, b_ch) + @as(u16, @intCast(((@as(u32, 255 - b_ch) * percent) / 100)))));
+        return (@as(u32, nr) << 24) | (@as(u32, ng) << 16) | (@as(u32, nb) << 8) | @as(u32, a);
+    }
+
+    fn renderPaneBorders(node: *PaneNode, focused_id: u32, backend: *OpenGLBackend, pal: *const RendererPalette, pane_data_map: *const std.AutoHashMapUnmanaged(u32, *PaneData)) void {
         switch (node.*) {
             .branch => |b| {
                 // Use the FULL parent bounds so the border line spans the entire split
@@ -2513,7 +2785,35 @@ pub const App = struct {
                 // Use active border color if focused pane is adjacent
                 const focus_in_first = tree_ops.findLeaf(b.first, focused_id) != null;
                 const focus_in_second = tree_ops.findLeaf(b.second, focused_id) != null;
-                const border_color = if (focus_in_first or focus_in_second) pal.ui_pane_border_active else pal.ui_pane_border;
+
+                // Phase 7: Check if any adjacent pane is in waiting state for agent_alert border
+                var has_waiting = false;
+                var has_agent_tab_waiting = false;
+                _ = &has_agent_tab_waiting; // Reserved for pulse alpha in future
+                {
+                    const subtrees = [_]*PaneNode{ b.first, b.second };
+                    for (subtrees) |subtree| {
+                        const leaves = tree_ops.collectLeaves(subtree, std.heap.page_allocator) catch &[_]u32{};
+                        defer if (leaves.len > 0) std.heap.page_allocator.free(leaves);
+                        for (leaves) |pid| {
+                            if (pane_data_map.get(pid)) |pd| {
+                                if (pd.agent_state.state.load(.acquire) == .waiting) {
+                                    has_waiting = true;
+                                    if (pd.agent_state.is_agent_tab.load(.acquire)) {
+                                        has_agent_tab_waiting = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                const border_color = if (has_waiting)
+                    pal.ui_agent_alert
+                else if (focus_in_first or focus_in_second)
+                    pal.ui_pane_border_active
+                else
+                    pal.ui_pane_border;
 
                 switch (b.direction) {
                     .vertical => {
@@ -2538,8 +2838,8 @@ pub const App = struct {
                     },
                 }
 
-                renderPaneBorders(b.first, focused_id, backend, pal);
-                renderPaneBorders(b.second, focused_id, backend, pal);
+                renderPaneBorders(b.first, focused_id, backend, pal, pane_data_map);
+                renderPaneBorders(b.second, focused_id, backend, pal, pane_data_map);
             },
             .leaf => {},
         }
@@ -2702,6 +3002,132 @@ pub const App = struct {
         }
     }
 
+    /// Process agent flash state for a pane during render: consume trigger, draw flash overlay.
+    /// Mirrors processBellForPane pattern (D-16: 150ms amber flash at 15% alpha).
+    fn processAgentFlashForPane(self: *App, pd: *PaneData, bounds: RendererRect, backend: *OpenGLBackend) void {
+        // Idle transition: if in .working and no output for 500ms, go back to .idle
+        // Also clears resize suppress flag so normal detection resumes
+        if (pd.agent_state.state.load(.acquire) == .working or
+            pd.suppress_agent_output.load(.acquire))
+        {
+            const now = std.time.nanoTimestamp();
+            if (pd.idle_tracker.last_output_ns > 0 and
+                (now - pd.idle_tracker.last_output_ns) >= 500_000_000)
+            {
+                pd.suppress_agent_output.store(false, .release);
+                pd.agent_state.markIdle();
+            }
+        }
+        // Consume notification pending flag and fire OS notification
+        if (pd.agent_state.notification_pending.load(.acquire)) {
+            pd.agent_state.notification_pending.store(false, .release);
+            // Build pane identity string "Tab N, Pane M"
+            var identity_buf: [64]u8 = undefined;
+            var identity_stream = std.io.fixedBufferStream(&identity_buf);
+            identity_stream.writer().print("Tab {d}, Pane {d}", .{
+                pd.tab_index + 1,
+                pd.pane_id,
+            }) catch {};
+            const pane_identity = identity_buf[0..identity_stream.pos];
+            self.notification_manager.notify(
+                self.allocator,
+                pd.pane_id,
+                pane_identity,
+                null, // matched_text not available at render time
+                self.focused,
+            );
+        }
+
+        _ = pd.agent_state.consumeFlash();
+        pd.agent_state.updateFlash();
+        if (pd.agent_state.flash_active) {
+            const alert_color = self.renderer_palette.ui_agent_alert;
+            const flash_color = renderer_types.Color{
+                .r = alert_color.r,
+                .g = alert_color.g,
+                .b = alert_color.b,
+                .a = 38, // 15% of 255 ~= 38
+            };
+            backend.drawFilledRectAlpha(bounds, flash_color);
+            self.requestFrame(); // Keep rendering until flash ends
+        }
+        // Keep rendering while in waiting state (for pulse animation)
+        if (pd.agent_state.state.load(.acquire) == .waiting) {
+            self.requestFrame();
+        }
+    }
+
+    /// Extract the last N visible lines from the terminal for agent pattern scanning.
+    /// Returns the number of lines extracted. Each line is written into line_buf/lines arrays.
+    /// Uses the same ghostty-vt pin API as snapshotCells.
+    fn extractVisibleLines(
+        terminal_snapshot: anytype,
+        line_buf: *[20][256]u8,
+        lines: *[20][]const u8,
+        max_lines: u32,
+    ) usize {
+        const n = @min(max_lines, 20);
+        const screens = @constCast(terminal_snapshot).getScreens();
+        const screen = screens.active;
+        const rows: usize = @intCast(screen.pages.rows);
+        const cols: usize = @intCast(screen.pages.cols);
+        const cursor_row: usize = @intCast(screen.cursor.y);
+
+        var count: usize = 0;
+        // Scan from (cursor_row - n + 1) to cursor_row
+        const start_row: usize = if (cursor_row >= n - 1) cursor_row - (n - 1) else 0;
+        var row_idx: usize = 0;
+        while (row_idx < n and (start_row + row_idx) < rows) : (row_idx += 1) {
+            const r = start_row + row_idx;
+            var buf_pos: usize = 0;
+            var col: usize = 0;
+            while (col < cols and buf_pos < 255) : (col += 1) {
+                const pin = screen.pages.pin(.{ .active = .{
+                    .x = @intCast(col),
+                    .y = @intCast(r),
+                } });
+                if (pin) |p| {
+                    const rac = p.rowAndCell();
+                    const cell = rac.cell;
+                    // Get first codepoint (char_data or grapheme)
+                    const cp: u21 = cell.codepoint();
+                    if (cp == 0) {
+                        line_buf[count][buf_pos] = ' ';
+                    } else if (cp < 128) {
+                        line_buf[count][buf_pos] = @intCast(cp);
+                    } else {
+                        line_buf[count][buf_pos] = '?';
+                    }
+                } else {
+                    line_buf[count][buf_pos] = ' ';
+                }
+                buf_pos += 1;
+            }
+            // Trim trailing spaces
+            while (buf_pos > 0 and line_buf[count][buf_pos - 1] == ' ') : (buf_pos -= 1) {}
+            lines[count] = line_buf[count][0..buf_pos];
+            count += 1;
+        }
+        return count;
+    }
+
+    /// Agent output callback: invoked from read thread on every raw output event.
+    /// Context pointer points to PaneData. Clears waiting state (D-04),
+    /// resets idle timer, and schedules scan for next render snapshot.
+    fn agentOutputCallback(ctx: ?*anyopaque) void {
+        if (ctx) |c| {
+            const pd: *PaneData = @ptrCast(@alignCast(c));
+            // Suppress agent state transitions during resize (PTY redraws cause false positives)
+            if (pd.suppress_agent_output.load(.acquire)) {
+                pd.idle_tracker.recordOutputNow();
+                return;
+            }
+            pd.agent_state.onOutput();
+            pd.idle_tracker.recordOutputNow();
+            pd.needs_agent_scan.store(true, .release);
+        }
+    }
+
     // -- Static GLFW callbacks --
 
     fn keyCallback(handle: *glfw.Window, key: glfw.Key, _: c_int, action: glfw.Action, mods: glfw.Mods) callconv(.c) void {
@@ -2716,6 +3142,12 @@ pub const App = struct {
 
     fn framebufferSizeCallback(handle: *glfw.Window, width: c_int, height: c_int) callconv(.c) void {
         const app = Window.getUserPointer(App, handle) orelse return;
+        // Suppress agent state transitions immediately — before any render thread
+        // processes the resize and triggers PTY output that would flip state to working
+        var pd_iter = app.pane_data.iterator();
+        while (pd_iter.next()) |entry| {
+            entry.value_ptr.*.suppress_agent_output.store(true, .release);
+        }
         app.new_fb_width.store(@intCast(width), .release);
         app.new_fb_height.store(@intCast(height), .release);
         app.pending_resize.store(true, .release);

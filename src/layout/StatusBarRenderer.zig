@@ -6,13 +6,24 @@
 /// Uses callback-based rendering (same pattern as TabBarRenderer) so it
 /// can be tested without a GPU context.
 const std = @import("std");
-const AgentState = @import("agent_state").AgentState;
 
 /// Color type alias matching Compositor.ColorU32.
 pub const ColorU32 = u32;
 
-/// Agent state enum, re-exported from AgentState for convenience.
-pub const AgentStateEnum = AgentState.State;
+/// Agent state for a pane -- matches AgentState.State from detection engine.
+pub const AgentStateEnum = enum(u8) {
+    idle,
+    working,
+    waiting,
+
+    pub fn str(self: AgentStateEnum) []const u8 {
+        return switch (self) {
+            .idle => "idle",
+            .working => "working",
+            .waiting => "waiting",
+        };
+    }
+};
 
 /// Per-pane status info, ordered by visual position (left-to-right, top-to-bottom).
 pub const PaneStatusInfo = struct {

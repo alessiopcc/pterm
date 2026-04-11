@@ -20,6 +20,7 @@ const opengl_backend_mod = @import("opengl_backend");
 const config_mod = @import("config");
 const keybindings = @import("keybindings");
 const theme_mod = @import("theme");
+const selection_mod = @import("selection");
 
 const TermIO = termio_mod.TermIO;
 const Renderer = renderer_mod.Renderer;
@@ -86,6 +87,9 @@ pub const Surface = struct {
     // Frame counter for periodic diagnostics logging (D-17)
     frame_count: u64,
 
+    // Text selection state (Phase 8 Plan 02: clipboard integration)
+    selection: selection_mod.Selection,
+
     // Keybinding map for action dispatch (Phase 4 Plan 02)
     keybinding_map: keybindings.KeybindingMap,
     last_mods: keybindings.Modifiers,
@@ -143,6 +147,7 @@ pub const Surface = struct {
             .new_font_size = std.atomic.Value(u32).init(@intFromFloat(config.font_size_pt() * 100.0)),
             .renderer_palette = theme_mod.buildRendererPaletteFromConfig(config.colors),
             .frame_count = 0,
+            .selection = selection_mod.Selection.init(),
             .keybinding_map = kb_map,
             .last_mods = .{},
             .perf_logging = options.perf_logging,
@@ -533,27 +538,123 @@ pub const Surface = struct {
             .open_layout_picker => {},
             .scroll_to_top, .scroll_to_bottom => {},
             .search => {}, // Phase 6
+            .toggle_agent_tab => {}, // Phase 7: handled in App.dispatchAction
             .none => {},
         }
     }
 
     /// Handle clipboard action for reserved keys (D-19).
+    /// D-17: Smart Ctrl+C -- copies selection when active, sends SIGINT (0x03) when not.
     pub fn handleClipboardAction(self: *Surface, combo: keybindings.KeyCombo) void {
         const is_c = switch (combo.key) {
             .char => |c| c == 'c',
             .special => false,
         };
         if (is_c) {
-            self.copySelection();
+            // D-17: Smart Ctrl+C -- copy if selection active, send SIGINT if not
+            if (self.selection.range != null) {
+                self.copySelection();
+                // selection.clear() already called inside copySelection
+            } else {
+                // Send Ctrl+C (0x03 ETX) to terminal as SIGINT
+                self.termio.writeInput("\x03") catch {};
+            }
         } else {
             self.pasteFromClipboard();
         }
     }
 
-    /// Copy current selection to clipboard.
+    /// Copy current selection to clipboard (D-15: clipboard integration).
+    /// Extracts text from terminal screen buffer via Selection.getSelectedText
+    /// and sets the GLFW system clipboard. Clears selection after copy.
     pub fn copySelection(self: *Surface) void {
-        // TODO: Get selected text from terminal (Phase 5: selection system)
-        _ = self;
+        const range = self.selection.range orelse return;
+
+        // Lock terminal to access screen data
+        const snapshot = self.termio.lockTerminal();
+
+        const screens = @constCast(snapshot).getScreens();
+        const screen = screens.active;
+        const cols: u16 = @intCast(screen.pages.cols);
+        const rows: u16 = @intCast(screen.pages.rows);
+
+        // Build UTF-8 screen lines from terminal cells
+        const alloc = std.heap.page_allocator;
+        const screen_rows: usize = @min(@as(usize, rows), 500);
+        const line_ptrs = alloc.alloc([]const u8, screen_rows) catch {
+            self.termio.unlockTerminal();
+            return;
+        };
+
+        // Flat buffer for UTF-8 bytes: each cell can produce up to 4 UTF-8 bytes
+        const bytes_per_row: usize = @as(usize, cols) * 4;
+        const flat_buf = alloc.alloc(u8, screen_rows * bytes_per_row) catch {
+            alloc.free(line_ptrs);
+            self.termio.unlockTerminal();
+            return;
+        };
+
+        var row: u16 = 0;
+        while (row < screen_rows) : (row += 1) {
+            const row_offset = @as(usize, row) * bytes_per_row;
+            var byte_len: usize = 0;
+            var col: u16 = 0;
+            while (col < cols) : (col += 1) {
+                const pin = screen.pages.pin(.{ .active = .{
+                    .x = @intCast(col),
+                    .y = @intCast(row),
+                } }) orelse {
+                    // No cell at this position, emit space
+                    flat_buf[row_offset + byte_len] = ' ';
+                    byte_len += 1;
+                    continue;
+                };
+                const rac = pin.rowAndCell();
+                const cp: u21 = rac.cell.codepoint();
+                if (cp == 0) {
+                    flat_buf[row_offset + byte_len] = ' ';
+                    byte_len += 1;
+                } else {
+                    // Encode codepoint as UTF-8
+                    const dest = flat_buf[row_offset + byte_len .. row_offset + bytes_per_row];
+                    const enc_len = std.unicode.utf8Encode(cp, dest) catch 0;
+                    if (enc_len > 0) {
+                        byte_len += enc_len;
+                    } else {
+                        flat_buf[row_offset + byte_len] = ' ';
+                        byte_len += 1;
+                    }
+                }
+            }
+            line_ptrs[row] = flat_buf[row_offset .. row_offset + byte_len];
+        }
+
+        self.termio.unlockTerminal();
+
+        // Extract selected text using Selection API
+        const selected_text = selection_mod.Selection.getSelectedText(
+            range,
+            line_ptrs,
+            alloc,
+        ) catch return;
+        defer alloc.free(selected_text);
+
+        // Set GLFW clipboard (needs null-terminated string)
+        if (selected_text.len > 0) {
+            const clipboard_str = alloc.alloc(u8, selected_text.len + 1) catch return;
+            defer alloc.free(clipboard_str);
+            @memcpy(clipboard_str[0..selected_text.len], selected_text);
+            clipboard_str[selected_text.len] = 0;
+            const sentinel_str: [:0]const u8 = clipboard_str[0..selected_text.len :0];
+            glfw.setClipboardString(self.window.handle, sentinel_str);
+        }
+
+        // Clean up screen line buffers
+        alloc.free(flat_buf);
+        alloc.free(line_ptrs);
+
+        // Clear selection after successful copy
+        self.selection.clear();
     }
 
     /// Paste clipboard contents to terminal PTY.

@@ -61,6 +61,8 @@ pub const Action = enum {
     scroll_to_top,
     scroll_to_bottom,
     search,
+    // Phase 7: agent monitoring actions
+    toggle_agent_tab,
     none,
 };
 
@@ -333,14 +335,14 @@ pub fn isReservedAction(action: Action) bool {
 }
 
 /// Check if a key combo is a reserved clipboard key.
-/// Only Ctrl+V / Super+V for paste. Ctrl+C passes to terminal (SIGINT).
-/// Copy is handled by selection, not keybinding.
+/// Ctrl+C / Super+C for smart copy (D-17: copy if selection, SIGINT if not).
+/// Ctrl+V / Super+V for paste.
 pub fn isReservedClipboardKey(combo: KeyCombo) bool {
-    const is_v = switch (combo.key) {
-        .char => |c| c == 'v',
+    const is_cv = switch (combo.key) {
+        .char => |c| c == 'c' or c == 'v',
         .special => false,
     };
-    if (!is_v) return false;
+    if (!is_cv) return false;
 
     const ctrl_only = combo.mods.ctrl and !combo.mods.shift and !combo.mods.alt and !combo.mods.super;
     const super_only = combo.mods.super and !combo.mods.shift and !combo.mods.alt and !combo.mods.ctrl;
@@ -403,6 +405,8 @@ pub fn defaultBindings() []const DefaultBinding {
         .{ .action = .goto_tab_9, .combo_str = "alt+9" },
         .{ .action = .goto_tab_last, .combo_str = "alt+0" },
         .{ .action = .open_layout_picker, .combo_str = "ctrl+shift+l" },
+        // Phase 7: agent monitoring bindings
+        .{ .action = .toggle_agent_tab, .combo_str = "ctrl+shift+a" },
     };
 }
 
@@ -604,9 +608,9 @@ test "parseKeyCombo: invalid returns error" {
     try std.testing.expectError(ParseError.InvalidKeyCombo, parseKeyCombo("invalid"));
 }
 
-test "isReservedClipboardKey: ctrl+c is NOT reserved (passes to terminal)" {
+test "isReservedClipboardKey: ctrl+c IS reserved (D-17 smart copy/SIGINT)" {
     const combo = try parseKeyCombo("ctrl+c");
-    try std.testing.expect(!isReservedClipboardKey(combo));
+    try std.testing.expect(isReservedClipboardKey(combo));
 }
 
 test "isReservedClipboardKey: ctrl+v IS reserved (paste)" {
@@ -614,9 +618,9 @@ test "isReservedClipboardKey: ctrl+v IS reserved (paste)" {
     try std.testing.expect(isReservedClipboardKey(combo));
 }
 
-test "isReservedClipboardKey: super+c is NOT reserved (copy-on-selection)" {
+test "isReservedClipboardKey: super+c IS reserved (D-17 smart copy/SIGINT)" {
     const combo = try parseKeyCombo("super+c");
-    try std.testing.expect(!isReservedClipboardKey(combo));
+    try std.testing.expect(isReservedClipboardKey(combo));
 }
 
 test "isReservedClipboardKey: ctrl+shift+t is NOT reserved" {

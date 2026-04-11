@@ -65,9 +65,6 @@ pub fn sendNotification(title: []const u8, body: []const u8, play_sound: bool) v
     }
 }
 
-/// PowerShell AppUserModelID for toast notifications (registered system app).
-const PS_AUMID = "{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe";
-
 /// Windows: PowerShell toast notification via WinRT (D-09).
 fn sendWindows(title: []const u8, body: []const u8, play_sound: bool) void {
     const sound_attr = if (play_sound) "src=\"ms-winsoundevent:Notification.Default\"" else "silent=\"true\"";
@@ -80,13 +77,12 @@ fn sendWindows(title: []const u8, body: []const u8, play_sound: bool) void {
 
     sw.print(
         "[Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime] | Out-Null; " ++
-            "[Windows.Data.Xml.Dom.XmlDocument,Windows.Data,ContentType=WindowsRuntime] | Out-Null; " ++
             "$template = '<toast duration=\"short\"><visual><binding template=\"ToastGeneric\"><text>{s}</text><text>{s}</text></binding></visual><audio {s}/></toast>'; " ++
             "$xml = New-Object Windows.Data.Xml.Dom.XmlDocument; " ++
             "$xml.LoadXml($template); " ++
             "$toast = [Windows.UI.Notifications.ToastNotification]::new($xml); " ++
-            "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{s}').Show($toast);",
-        .{ title, body, sound_attr, PS_AUMID },
+            "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier(\"PTerm\").Show($toast);",
+        .{ title, body, sound_attr },
     ) catch return;
 
     const script_len = script_stream.pos;

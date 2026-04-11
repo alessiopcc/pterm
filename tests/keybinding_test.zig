@@ -67,9 +67,9 @@ test "parse empty string returns error" {
 // isReservedClipboardKey tests
 // -------------------------------------------------------
 
-test "not reserved: ctrl+c (passes to terminal as SIGINT)" {
+test "reserved: ctrl+c (D-17 smart copy/SIGINT)" {
     const combo = try kb.parseKeyCombo("ctrl+c");
-    try std.testing.expect(!kb.isReservedClipboardKey(combo));
+    try std.testing.expect(kb.isReservedClipboardKey(combo));
 }
 
 test "reserved: ctrl+v" {
@@ -77,9 +77,9 @@ test "reserved: ctrl+v" {
     try std.testing.expect(kb.isReservedClipboardKey(combo));
 }
 
-test "not reserved: super+c (copy-on-selection, not intercepted)" {
+test "reserved: super+c (D-17 smart copy/SIGINT on macOS)" {
     const combo = try kb.parseKeyCombo("super+c");
-    try std.testing.expect(!kb.isReservedClipboardKey(combo));
+    try std.testing.expect(kb.isReservedClipboardKey(combo));
 }
 
 test "reserved: super+v (macOS Cmd+V)" {

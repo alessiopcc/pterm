@@ -261,6 +261,12 @@ fn mergeConfigs(base: Config, over: Config) Config {
     if (over.colors.ui.bell_flash) |v| result.colors.ui.bell_flash = v;
     if (over.colors.ui.bell_badge) |v| result.colors.ui.bell_badge = v;
 
+    // Agent notification fields (Phase 8)
+    if (!over.agent.notifications) result.agent.notifications = over.agent.notifications;
+    if (!over.agent.notification_sound) result.agent.notification_sound = over.agent.notification_sound;
+    if (over.agent.notification_cooldown != 30) result.agent.notification_cooldown = over.agent.notification_cooldown;
+    if (!over.agent.suppress_when_focused) result.agent.suppress_when_focused = over.agent.suppress_when_focused;
+
     // Bell
     if (over.bell.mode != .visual) result.bell.mode = over.bell.mode;
 

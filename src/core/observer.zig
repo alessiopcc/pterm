@@ -27,6 +27,11 @@ pub const Observer = struct {
     onBell: ?*const fn (ctx: ?*anyopaque) void = null,
     bell_ctx: ?*anyopaque = null,
 
+    /// Phase 7: Agent output callback. Fired on every raw output event.
+    /// Used to clear waiting state (D-04), reset idle timer, and schedule scan.
+    onAgentOutput: ?*const fn (ctx: ?*anyopaque) void = null,
+    agent_ctx: ?*anyopaque = null,
+
     pub fn notify(self: *const Observer, event: Event) void {
         switch (event) {
             .output => |bytes| {
@@ -39,6 +44,10 @@ pub const Observer = struct {
                             break;
                         }
                     }
+                }
+                // Phase 7: Agent output notification (D-04 instant clear, idle reset, scan schedule)
+                if (self.onAgentOutput) |agent_cb| {
+                    agent_cb(self.agent_ctx);
                 }
             },
             .screen_change => if (self.onScreenChange) |cb| cb(self.screen_change_ctx),

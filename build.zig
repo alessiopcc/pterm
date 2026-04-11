@@ -496,6 +496,7 @@ pub fn build(b: *std.Build) void {
     surface_mod.addImport("opengl_backend", opengl_backend_mod);
     surface_mod.addImport("gl", gl_bindings);
     surface_mod.addImport("config", config_mod);
+    surface_mod.addImport("selection", selection_mod);
     if (zglfw_dep) |dep| {
         surface_mod.addImport("zglfw", dep.module("root"));
         surface_mod.linkLibrary(dep.artifact("glfw"));
@@ -1012,4 +1013,105 @@ pub fn build(b: *std.Build) void {
     const system_beep_tests = b.addTest(.{ .root_module = system_beep_mod });
     const run_system_beep_tests = b.addRunArtifact(system_beep_tests);
     test_step.dependOn(&run_system_beep_tests.step);
+
+    // -------------------------------------------------------
+    // Phase 7 Plan 01: Agent monitoring modules
+    // -------------------------------------------------------
+
+    const presets_mod = b.createModule(.{
+        .root_source_file = b.path("src/agent/presets.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const agent_state_mod = b.createModule(.{
+        .root_source_file = b.path("src/agent/AgentState.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const idle_tracker_mod = b.createModule(.{
+        .root_source_file = b.path("src/agent/IdleTracker.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const agent_detector_mod = b.createModule(.{
+        .root_source_file = b.path("src/agent/AgentDetector.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    agent_detector_mod.addImport("presets", presets_mod);
+
+    // Wire agent modules into app
+    app_mod.addImport("agent_state", agent_state_mod);
+    app_mod.addImport("agent_detector", agent_detector_mod);
+    app_mod.addImport("idle_tracker", idle_tracker_mod);
+    app_mod.addImport("presets", presets_mod);
+
+    // Agent module inline tests
+    const agent_state_tests = b.addTest(.{ .root_module = agent_state_mod });
+    const run_agent_state_tests = b.addRunArtifact(agent_state_tests);
+    test_step.dependOn(&run_agent_state_tests.step);
+
+    const presets_tests = b.addTest(.{ .root_module = presets_mod });
+    const run_presets_tests = b.addRunArtifact(presets_tests);
+    test_step.dependOn(&run_presets_tests.step);
+
+    const idle_tracker_tests = b.addTest(.{ .root_module = idle_tracker_mod });
+    const run_idle_tracker_tests = b.addRunArtifact(idle_tracker_tests);
+    test_step.dependOn(&run_idle_tracker_tests.step);
+
+    const agent_detector_tests = b.addTest(.{ .root_module = agent_detector_mod });
+    const run_agent_detector_tests = b.addRunArtifact(agent_detector_tests);
+    test_step.dependOn(&run_agent_detector_tests.step);
+
+    // -------------------------------------------------------
+    // Phase 8 Plan 01: Notification modules
+    // -------------------------------------------------------
+
+    const notification_mod = b.createModule(.{
+        .root_source_file = b.path("src/platform/notification.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const notification_manager_mod = b.createModule(.{
+        .root_source_file = b.path("src/agent/notification_manager.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    notification_manager_mod.addImport("notification", notification_mod);
+
+    // Wire notification modules into app
+    app_mod.addImport("notification", notification_mod);
+    app_mod.addImport("notification_manager", notification_manager_mod);
+
+    // notification inline tests
+    const notification_tests = b.addTest(.{ .root_module = notification_mod });
+    const run_notification_tests = b.addRunArtifact(notification_tests);
+    test_step.dependOn(&run_notification_tests.step);
+
+    // notification_manager inline tests
+    const notification_manager_tests = b.addTest(.{ .root_module = notification_manager_mod });
+    const run_notification_manager_tests = b.addRunArtifact(notification_manager_tests);
+    test_step.dependOn(&run_notification_manager_tests.step);
+
+    // -------------------------------------------------------
+    // Phase 7 Plan 02: Status bar renderer module
+    // -------------------------------------------------------
+
+    const status_bar_renderer_mod = b.createModule(.{
+        .root_source_file = b.path("src/layout/StatusBarRenderer.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Wire into app
+    app_mod.addImport("status_bar_renderer", status_bar_renderer_mod);
+
+    // StatusBarRenderer inline tests
+    const status_bar_tests = b.addTest(.{ .root_module = status_bar_renderer_mod });
+    const run_status_bar_tests = b.addRunArtifact(status_bar_tests);
+    test_step.dependOn(&run_status_bar_tests.step);
 }
