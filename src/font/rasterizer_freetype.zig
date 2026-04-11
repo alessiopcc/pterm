@@ -6,6 +6,7 @@ const std = @import("std");
 const font_types = @import("font_types");
 
 const GlyphBitmap = font_types.GlyphBitmap;
+const GlyphFormat = font_types.GlyphFormat;
 const FontMetrics = font_types.FontMetrics;
 
 const c = @cImport({
@@ -168,6 +169,76 @@ pub const FreeTypeRasterizer = struct {
     /// Check whether the font contains a glyph for the given codepoint.
     pub fn hasGlyph(self: *FreeTypeRasterizer, codepoint: u21) bool {
         return c.FT_Get_Char_Index(self.face, @as(c.FT_ULong, codepoint)) != 0;
+    }
+
+    /// Rasterize a glyph by its FreeType glyph index (not codepoint).
+    /// When `color` is true, attempts to load as a color (emoji) glyph.
+    pub fn rasterizeGlyphByID(self: *FreeTypeRasterizer, allocator: std.mem.Allocator, glyph_index: u32, color: bool) !GlyphBitmap {
+        if (glyph_index == 0) return error.GlyphNotFound;
+
+        const load_flags: c_int = if (color)
+            c.FT_LOAD_RENDER | c.FT_LOAD_COLOR | c.FT_LOAD_TARGET_LIGHT
+        else
+            c.FT_LOAD_RENDER | c.FT_LOAD_TARGET_LIGHT;
+
+        if (c.FT_Load_Glyph(self.face, glyph_index, load_flags) != 0) {
+            return error.GlyphRenderFailed;
+        }
+
+        const slot = self.face.*.glyph;
+        const bitmap = slot.*.bitmap;
+
+        const width: u32 = bitmap.width;
+        const height: u32 = bitmap.rows;
+        const pixel_mode = bitmap.pixel_mode;
+
+        // Determine format based on actual pixel mode returned by FreeType.
+        const is_bgra = pixel_mode == c.FT_PIXEL_MODE_BGRA;
+        const format: GlyphFormat = if (is_bgra) .rgba else .grayscale;
+        const bytes_per_pixel: usize = if (is_bgra) 4 else 1;
+
+        const pixel_count = @as(usize, width) * @as(usize, height) * bytes_per_pixel;
+        const data = if (pixel_count > 0) blk: {
+            const buf = try allocator.alloc(u8, pixel_count);
+            if (bitmap.buffer != null) {
+                const pitch: usize = @intCast(@as(u32, @bitCast(bitmap.pitch)));
+                const row_bytes = @as(usize, width) * bytes_per_pixel;
+                for (0..height) |row| {
+                    const src_offset = row * pitch;
+                    const dst_offset = row * row_bytes;
+                    @memcpy(buf[dst_offset .. dst_offset + row_bytes], bitmap.buffer[src_offset .. src_offset + row_bytes]);
+                }
+                // Swizzle BGRA -> RGBA if color glyph.
+                if (is_bgra) {
+                    var i: usize = 0;
+                    while (i < pixel_count) : (i += 4) {
+                        const tmp = buf[i]; // B
+                        buf[i] = buf[i + 2]; // R
+                        buf[i + 2] = tmp; // B
+                    }
+                }
+            } else {
+                @memset(buf, 0);
+            }
+            break :blk buf;
+        } else blk: {
+            break :blk @as([]u8, &.{});
+        };
+
+        return GlyphBitmap{
+            .data = data,
+            .width = width,
+            .height = height,
+            .bearing_x = @intCast(@as(i32, @intCast(slot.*.bitmap_left))),
+            .bearing_y = @intCast(@as(i32, @intCast(slot.*.bitmap_top))),
+            .advance = @intCast(@as(u32, @intCast(slot.*.advance.x >> 6))),
+            .format = format,
+        };
+    }
+
+    /// Return the underlying FreeType face for HarfBuzz font creation.
+    pub fn getFace(self: *FreeTypeRasterizer) c.FT_Face {
+        return self.face;
     }
 
     // -- internal helpers --

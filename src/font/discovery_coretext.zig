@@ -64,3 +64,8 @@ pub fn discoverDefaultMonospace(allocator: std.mem.Allocator) ?DiscoverResult {
     }
     return null;
 }
+
+/// Discover the Apple Color Emoji font (macOS default color emoji font).
+pub fn discoverEmojiFont(allocator: std.mem.Allocator) ?DiscoverResult {
+    return discover(allocator, "Apple Color Emoji");
+}

@@ -45,8 +45,7 @@ pub const Surface = struct {
     config: Config,
     perf_logging: bool,
     debug_keys: bool,
-    debug_key_log: [64 * 1024]u8,
-    debug_key_log_len: usize,
+    debug_key_file: ?std.fs.File,
 
     // Cursor blink state
     cursor_blink_timer: i128,
@@ -127,19 +126,16 @@ pub const Surface = struct {
             .frame_count = 0,
             .perf_logging = options.perf_logging,
             .debug_keys = options.debug_keys,
-            .debug_key_log = undefined,
-            .debug_key_log_len = 0,
+            .debug_key_file = if (options.debug_keys)
+                std.fs.cwd().createFile("termp_debug.log", .{}) catch null
+            else
+                null,
             .gl_procs = undefined,
         };
     }
 
     pub fn deinit(self: *Surface) void {
-        if (self.debug_keys and self.debug_key_log_len > 0) {
-            if (std.fs.cwd().createFile("termp_debug.log", .{})) |f| {
-                defer f.close();
-                _ = f.write(self.debug_key_log[0..self.debug_key_log_len]) catch 0;
-            } else |_| {}
-        }
+        if (self.debug_key_file) |f| f.close();
         self.frame_arena.deinit();
         self.font_grid.deinit();
         self.allocator.destroy(self.font_grid);
@@ -193,11 +189,14 @@ pub const Surface = struct {
             self.termio.resize(cols, rows) catch {};
         }
 
-        // 5. Upload initial atlas texture
+        // 5. Upload initial atlas textures (grayscale + color)
         {
             const atlas = self.font_grid.getAtlas();
             backend.uploadAtlas(atlas.getPixels(), atlas.getSize());
             self.font_grid.getAtlasMut().clearDirty();
+            // Upload initial color atlas (empty but properly sized)
+            backend.uploadColorAtlas(atlas.getColorPixels(), atlas.getColorSize());
+            self.font_grid.getAtlasMut().clearColorDirty();
         }
 
         // 6. Open perf log file if --perf flag (D-17: observable latency measurement)
@@ -206,9 +205,22 @@ pub const Surface = struct {
         else
             null;
 
-        // 7. Render loop
+        // 7. Render loop with frame rate limiting (~60fps = 16.6ms minimum between frames)
+        const min_frame_ns: i128 = 16_000_000; // 16ms
+        var last_frame_ns: i128 = 0;
+
         while (!self.should_quit.load(.acquire)) {
             if (self.frame_requested.swap(false, .acq_rel)) {
+                // Throttle: skip if less than 16ms since last frame
+                const now = std.time.nanoTimestamp();
+                if (now - last_frame_ns < min_frame_ns) {
+                    // Re-request so we render on the next cycle
+                    self.frame_requested.store(true, .release);
+                    std.Thread.sleep(1_000_000); // 1ms
+                    continue;
+                }
+                last_frame_ns = now;
+
                 self.scheduler.markActive();
 
                 // Handle pending font size change
@@ -250,22 +262,31 @@ pub const Surface = struct {
                     self.termio.resize(cols, rows) catch {};
                 }
 
-                // Lock terminal, build render state, unlock
+                // Phase 1: snapshot cell data under mutex (fast copy, no glyph lookups)
                 const snapshot = self.termio.lockTerminal();
-                const metrics = self.font_grid.getMetrics();
-                const fb = self.window.getFramebufferSize();
-                var rs = render_state.buildRenderState(
+                const snap = render_state.snapshotCells(
                     self.frame_arena.allocator(),
                     snapshot,
-                    self.font_grid,
-                    fb.width,
-                    fb.height,
                 ) catch {
                     self.termio.unlockTerminal();
                     _ = self.frame_arena.reset(.retain_capacity);
                     continue;
                 };
                 self.termio.unlockTerminal();
+
+                // Phase 2: build CellInstances with glyph lookups (no mutex held)
+                const metrics = self.font_grid.getMetrics();
+                const fb = self.window.getFramebufferSize();
+                var rs = render_state.buildFromSnapshot(
+                    self.frame_arena.allocator(),
+                    snap,
+                    self.font_grid,
+                    fb.width,
+                    fb.height,
+                ) catch {
+                    _ = self.frame_arena.reset(.retain_capacity);
+                    continue;
+                };
 
                 // Update cursor blink state
                 self.updateCursorBlink();
@@ -287,6 +308,13 @@ pub const Surface = struct {
                     const atlas = self.font_grid.getAtlas();
                     backend.uploadAtlas(atlas.getPixels(), atlas.getSize());
                     self.font_grid.getAtlasMut().clearDirty();
+                }
+
+                // Upload color atlas if dirty (new emoji/color glyphs rasterized)
+                if (self.font_grid.getAtlas().isColorDirty()) {
+                    const atlas = self.font_grid.getAtlas();
+                    backend.uploadColorAtlas(atlas.getColorPixels(), atlas.getColorSize());
+                    self.font_grid.getAtlasMut().clearColorDirty();
                 }
 
                 // Draw frame
@@ -347,16 +375,13 @@ pub const Surface = struct {
         // Only handle press and repeat events
         if (action != .press and action != .repeat) return;
 
-        // --debug-keys: buffer key events in memory, flush to termp_debug.log on exit
-        if (self.debug_keys) {
+        // --debug-keys: write each keystroke to termp_debug.log (file opened once at init)
+        if (self.debug_key_file) |f| {
             var tmp: [128]u8 = undefined;
             const line = std.fmt.bufPrint(&tmp, "[key] code={d} action={d} ctrl={} shift={} alt={}\n", .{
                 @intFromEnum(key), @intFromEnum(action), mods.control, mods.shift, mods.alt,
             }) catch "";
-            if (line.len > 0 and self.debug_key_log_len + line.len <= self.debug_key_log.len) {
-                @memcpy(self.debug_key_log[self.debug_key_log_len..][0..line.len], line);
-                self.debug_key_log_len += line.len;
-            }
+            if (line.len > 0) _ = f.write(line) catch 0;
         }
 
         // Font zoom: handle directly before encoder to catch all key combos.

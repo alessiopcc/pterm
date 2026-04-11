@@ -24,3 +24,12 @@ pub const discoverDefaultMonospace = switch (builtin.os.tag) {
     .windows => @import("discovery_windows.zig").discoverDefaultMonospace,
     else => @compileError("unsupported platform for font discovery"),
 };
+
+/// Discover a color emoji font for the current platform.
+/// Returns null if no emoji font is found (emoji will render as missing glyph rectangles).
+pub const discoverEmojiFont = switch (builtin.os.tag) {
+    .linux => @import("discovery_fontconfig.zig").discoverEmojiFont,
+    .macos => @import("discovery_coretext.zig").discoverEmojiFont,
+    .windows => @import("discovery_windows.zig").discoverEmojiFont,
+    else => @compileError("unsupported platform for font discovery"),
+};

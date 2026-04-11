@@ -1,5 +1,8 @@
 /// Shared types for the font subsystem.
 
+/// Glyph bitmap pixel format.
+pub const GlyphFormat = enum { grayscale, rgba };
+
 /// Result of rasterizing a single glyph via FreeType.
 pub const GlyphBitmap = struct {
     data: []const u8,
@@ -8,6 +11,7 @@ pub const GlyphBitmap = struct {
     bearing_x: i32,
     bearing_y: i32,
     advance: u32,
+    format: GlyphFormat = .grayscale,
 };
 
 /// Cache key for glyph atlas lookup.

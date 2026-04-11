@@ -86,12 +86,14 @@ pub const text_vertex_src =
     \\layout (location = 6) in uint  aFlags;       // bit flags
     \\
     \\uniform mat4 uProjection;
-    \\uniform vec2 uCellSize;    // pixels per cell
-    \\uniform vec2 uAtlasSize;   // atlas texture dimensions
-    \\uniform vec2 uGridOffset;  // top-left padding
+    \\uniform vec2 uCellSize;       // pixels per cell
+    \\uniform vec2 uAtlasSize;      // grayscale atlas texture dimensions
+    \\uniform vec2 uColorAtlasSize; // color atlas texture dimensions
+    \\uniform vec2 uGridOffset;     // top-left padding
     \\
     \\out vec2 vTexCoord;
     \\flat out vec4 vFgColor;
+    \\flat out uint vFlags;
     \\
     \\
 ++ unpack_color_fn ++
@@ -103,10 +105,13 @@ pub const text_vertex_src =
     \\    vec2 pos = cellOrigin + glyphOffset + aQuadPos * glyphSize;
     \\    gl_Position = uProjection * vec4(pos, 0.0, 1.0);
     \\
-    \\    // Atlas UV coordinates
-    \\    vTexCoord = (vec2(aAtlasRect.xy) + aQuadPos * vec2(aAtlasRect.zw)) / uAtlasSize;
+    \\    // Select atlas size based on whether this is a color glyph
+    \\    uint COLOR_GLYPH = 0x0010u;
+    \\    vec2 atlasSize = ((aFlags & COLOR_GLYPH) != 0u) ? uColorAtlasSize : uAtlasSize;
+    \\    vTexCoord = (vec2(aAtlasRect.xy) + aQuadPos * vec2(aAtlasRect.zw)) / atlasSize;
     \\
     \\    vFgColor = unpackColor(aFgColor);
+    \\    vFlags = aFlags;
     \\}
     \\
 ;
@@ -116,15 +121,26 @@ pub const text_fragment_src =
     \\
     \\in vec2 vTexCoord;
     \\flat in vec4 vFgColor;
+    \\flat in uint vFlags;
     \\
-    \\uniform sampler2D uAtlasTexture;
+    \\uniform sampler2D uAtlasTexture;       // texture unit 0: grayscale
+    \\uniform sampler2D uColorAtlasTexture;  // texture unit 1: RGBA color
     \\
     \\out vec4 FragColor;
     \\
     \\void main() {
-    \\    float alpha = texture(uAtlasTexture, vTexCoord).r;
-    \\    if (alpha < 0.01) discard;
-    \\    FragColor = vec4(vFgColor.rgb, vFgColor.a * alpha);
+    \\    uint COLOR_GLYPH = 0x0010u;
+    \\    if ((vFlags & COLOR_GLYPH) != 0u) {
+    \\        // Color emoji: sample RGBA directly from color atlas
+    \\        vec4 texel = texture(uColorAtlasTexture, vTexCoord);
+    \\        if (texel.a < 0.01) discard;
+    \\        FragColor = texel;
+    \\    } else {
+    \\        // Grayscale text: use red channel as alpha, tint with fg color
+    \\        float alpha = texture(uAtlasTexture, vTexCoord).r;
+    \\        if (alpha < 0.01) discard;
+    \\        FragColor = vec4(vFgColor.rgb, vFgColor.a * alpha);
+    \\    }
     \\}
     \\
 ;

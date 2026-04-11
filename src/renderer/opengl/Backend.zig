@@ -44,9 +44,11 @@ pub const OpenGLBackend = struct {
     text_instance_vbo: gl.uint,
     cursor_instance_vbo: gl.uint,
 
-    // Atlas texture (uploaded from GlyphAtlas pixel data)
+    // Atlas textures (uploaded from GlyphAtlas pixel data)
     atlas_texture: gl.uint,
     atlas_size: u32,
+    color_atlas_texture: gl.uint,
+    color_atlas_size: u32,
 
     // Projection matrix (orthographic, updated on resize)
     projection: [16]gl.float,
@@ -141,7 +143,7 @@ pub const OpenGLBackend = struct {
         // are configured here once and rebound per-pass in drawFrame.
         setupInstanceAttributes(text_instance_vbo);
 
-        // Create atlas texture
+        // Create grayscale atlas texture (unit 0)
         var atlas_texture: gl.uint = 0;
         gl.GenTextures(1, @ptrCast(&atlas_texture));
         if (atlas_texture == 0) return error.GLResourceCreation;
@@ -151,6 +153,20 @@ pub const OpenGLBackend = struct {
         gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
         gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
         gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.BindTexture(gl.TEXTURE_2D, 0);
+
+        // Create color (RGBA) atlas texture (unit 1) for emoji
+        var color_atlas_texture: gl.uint = 0;
+        gl.GenTextures(1, @ptrCast(&color_atlas_texture));
+        if (color_atlas_texture == 0) return error.GLResourceCreation;
+
+        gl.BindTexture(gl.TEXTURE_2D, color_atlas_texture);
+        gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        // Initialize with 512x512 empty RGBA data
+        gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 512, 512, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
         gl.BindTexture(gl.TEXTURE_2D, 0);
 
         gl.BindVertexArray(0);
@@ -175,6 +191,8 @@ pub const OpenGLBackend = struct {
             .cursor_instance_vbo = cursor_instance_vbo,
             .atlas_texture = atlas_texture,
             .atlas_size = 0,
+            .color_atlas_texture = color_atlas_texture,
+            .color_atlas_size = 512,
             .projection = identityMatrix(),
             .viewport_width = 0,
             .viewport_height = 0,
@@ -191,6 +209,11 @@ pub const OpenGLBackend = struct {
         if (self.atlas_texture != 0) {
             gl.DeleteTextures(1, @ptrCast(&self.atlas_texture));
             self.atlas_texture = 0;
+        }
+
+        if (self.color_atlas_texture != 0) {
+            gl.DeleteTextures(1, @ptrCast(&self.color_atlas_texture));
+            self.color_atlas_texture = 0;
         }
 
         var vbos = [_]gl.uint{ self.quad_vbo, self.bg_instance_vbo, self.text_instance_vbo, self.cursor_instance_vbo };
@@ -254,6 +277,39 @@ pub const OpenGLBackend = struct {
         gl.BindTexture(gl.TEXTURE_2D, 0);
     }
 
+    /// Upload color (RGBA) atlas pixel data to the color atlas texture (unit 1).
+    pub fn uploadColorAtlas(self: *OpenGLBackend, pixels: []const u8, size: u32) void {
+        gl.ActiveTexture(gl.TEXTURE1);
+        gl.BindTexture(gl.TEXTURE_2D, self.color_atlas_texture);
+        if (self.color_atlas_size == size) {
+            gl.TexSubImage2D(
+                gl.TEXTURE_2D,
+                0,
+                0,
+                0,
+                @intCast(size),
+                @intCast(size),
+                gl.RGBA,
+                gl.UNSIGNED_BYTE,
+                pixels.ptr,
+            );
+        } else {
+            gl.TexImage2D(
+                gl.TEXTURE_2D,
+                0,
+                gl.RGBA8,
+                @intCast(size),
+                @intCast(size),
+                0,
+                gl.RGBA,
+                gl.UNSIGNED_BYTE,
+                pixels.ptr,
+            );
+            self.color_atlas_size = size;
+        }
+        gl.ActiveTexture(gl.TEXTURE0);
+    }
+
     /// Draw a complete frame from a RenderState snapshot.
     /// Three-pass pipeline: backgrounds, text, cursor (D-04).
     pub fn drawFrame(self: *OpenGLBackend, state: *const types.RenderState) void {
@@ -303,15 +359,25 @@ pub const OpenGLBackend = struct {
                 @floatFromInt(self.atlas_size),
                 @floatFromInt(self.atlas_size),
             );
+            self.text_program.setUniformVec2(
+                "uColorAtlasSize",
+                @floatFromInt(self.color_atlas_size),
+                @floatFromInt(self.color_atlas_size),
+            );
 
             // Alpha blending for text (Pitfall 6: explicit state per pass)
             gl.Enable(gl.BLEND);
             gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-            // Bind atlas texture to unit 0
+            // Bind grayscale atlas texture to unit 0
             gl.ActiveTexture(gl.TEXTURE0);
             gl.BindTexture(gl.TEXTURE_2D, self.atlas_texture);
             self.text_program.setUniformInt("uAtlasTexture", 0);
+
+            // Bind color (RGBA) atlas texture to unit 1
+            gl.ActiveTexture(gl.TEXTURE1);
+            gl.BindTexture(gl.TEXTURE_2D, self.color_atlas_texture);
+            self.text_program.setUniformInt("uColorAtlasTexture", 1);
 
             const text_count = state.cells.len;
             if (text_count > 0) {

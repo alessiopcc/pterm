@@ -29,6 +29,9 @@ pub fn build(b: *std.Build) void {
     // Run step
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_cmd.addArgs(args);
+    }
     const run_step = b.step("run", "Run the application");
     run_step.dependOn(&run_cmd.step);
 
@@ -335,13 +338,23 @@ pub fn build(b: *std.Build) void {
         fontgrid_mod.linkLibrary(dep.artifact("freetype"));
     }
 
-    // Shaper module (minimal HarfBuzz stub for Phase 2)
+    // Shaper module (HarfBuzz text shaping, Phase 3)
     const shaper_mod = b.createModule(.{
         .root_source_file = b.path("src/font/Shaper.zig"),
         .target = target,
         .optimize = optimize,
     });
-    _ = shaper_mod;
+    shaper_mod.addImport("font_types", font_types_mod);
+    if (freetype_dep) |dep| {
+        shaper_mod.linkLibrary(dep.artifact("freetype"));
+    }
+    if (harfbuzz_dep) |dep| {
+        shaper_mod.addImport("harfbuzz", dep.module("harfbuzz"));
+        shaper_mod.linkLibrary(dep.artifact("harfbuzz"));
+    }
+
+    // Wire shaper into fontgrid (post-declaration)
+    fontgrid_mod.addImport("shaper", shaper_mod);
 
     // -------------------------------------------------------
     // Phase 2 Plan 04: Integration modules (Window, Input, Surface, App)
@@ -379,11 +392,15 @@ pub fn build(b: *std.Build) void {
     render_state_mod.addImport("terminal", terminal_mod);
     render_state_mod.addImport("cell", cell_mod);
     render_state_mod.addImport("fontgrid", fontgrid_mod);
+    render_state_mod.addImport("shaper", shaper_mod);
     if (ghostty_vt_mod) |m| {
         render_state_mod.addImport("ghostty-vt", m);
     }
     if (freetype_dep) |dep| {
         render_state_mod.linkLibrary(dep.artifact("freetype"));
+    }
+    if (harfbuzz_dep) |dep| {
+        render_state_mod.linkLibrary(dep.artifact("harfbuzz"));
     }
 
     // App config module (hardcoded defaults for Phase 2)
@@ -585,4 +602,36 @@ pub fn build(b: *std.Build) void {
     });
     const run_input_encoder_tests = b.addRunArtifact(input_encoder_tests);
     test_step.dependOn(&run_input_encoder_tests.step);
+
+    // Shaper tests (Phase 3 Wave 0 stubs + HarfBuzz buffer tests)
+    const shaper_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/shaper_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    shaper_test_mod.addImport("shaper", shaper_mod);
+    shaper_test_mod.addImport("font_types", font_types_mod);
+    if (freetype_dep) |dep| {
+        shaper_test_mod.linkLibrary(dep.artifact("freetype"));
+    }
+    if (harfbuzz_dep) |dep| {
+        shaper_test_mod.addImport("harfbuzz", dep.module("harfbuzz"));
+        shaper_test_mod.linkLibrary(dep.artifact("harfbuzz"));
+    }
+    const shaper_tests = b.addTest(.{ .root_module = shaper_test_mod });
+    const run_shaper_tests = b.addRunArtifact(shaper_tests);
+    test_step.dependOn(&run_shaper_tests.step);
+
+    // RenderState tests (Phase 3: shaping-aware rendering)
+    const render_state_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/render_state_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    render_state_test_mod.addImport("renderer_types", renderer_types_mod);
+    render_state_test_mod.addImport("font_types", font_types_mod);
+    render_state_test_mod.addImport("cell", cell_mod);
+    const render_state_tests = b.addTest(.{ .root_module = render_state_test_mod });
+    const run_render_state_tests = b.addRunArtifact(render_state_tests);
+    test_step.dependOn(&run_render_state_tests.step);
 }

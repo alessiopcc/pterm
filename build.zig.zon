@@ -24,6 +24,10 @@
             .url = "git+https://github.com/allyourcodebase/harfbuzz#ad51d895b69c262d3a497e1c3b54116dd8090f04",
             .hash = "harfbuzz-12.2.0-Ip1VAuGZAACtg3OS6D_eeeoVX5-8Er8x-JzZejxOI8Zp",
         },
+        .zg = .{
+            .url = "git+https://codeberg.org/atman/zg#6ee2b0719052040c979ecde02a74a0cee6253364",
+            .hash = "zg-0.15.3-oGqU3LdJtALmUrI8v7BWf3UcCmebVYZcF0L9aDHnlu7D",
+        },
     },
     .paths = .{
         "build.zig",

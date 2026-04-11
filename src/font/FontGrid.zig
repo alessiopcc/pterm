@@ -9,6 +9,7 @@ const GlyphAtlas = @import("glyph_atlas").GlyphAtlas;
 const CachedGlyph = @import("glyph_atlas").CachedGlyph;
 const Rasterizer = @import("rasterizer").Rasterizer;
 const discovery = @import("discovery");
+const Shaper = @import("shaper").Shaper;
 
 const GlyphKey = font_types.GlyphKey;
 const AtlasRegion = font_types.AtlasRegion;
@@ -35,6 +36,8 @@ pub const FontGrid = struct {
     atlas: GlyphAtlas,
     config: FontConfig,
     metrics: FontMetrics,
+    shaper: Shaper,
+    emoji_font_index: ?u8,
 
     /// Initialize the font grid with the given configuration.
     /// Discovers and loads fonts, creating the fallback chain.
@@ -72,6 +75,25 @@ pub const FontGrid = struct {
             return error.NoMonospaceFont;
         }
 
+        // Create HarfBuzz shaper from the primary font face (fail-fast: a terminal
+        // without text shaping cannot render correctly).
+        // Use @ptrCast to bridge FT_Face types from different cimport modules
+        // (rasterizer and shaper each have their own @cImport of freetype).
+        const raw_face = fonts.items[0].rasterizer.getFace();
+        var shaper = Shaper.init(allocator, @ptrCast(raw_face));
+        errdefer shaper.deinit();
+
+        // Discover and append emoji font to fallback chain.
+        var emoji_font_index: ?u8 = null;
+        if (discovery.discoverEmojiFont(allocator)) |result| {
+            if (loadFont(allocator, result, config.size_pt, dpi)) |entry| {
+                emoji_font_index = @intCast(fonts.items.len);
+                try fonts.append(allocator, entry);
+            }
+        } else {
+            std.log.warn("emoji font not found, emoji will render as missing glyph rectangles", .{});
+        }
+
         var atlas = try GlyphAtlas.init(allocator, 1024);
         errdefer atlas.deinit();
 
@@ -83,11 +105,14 @@ pub const FontGrid = struct {
             .atlas = atlas,
             .config = config,
             .metrics = metrics,
+            .shaper = shaper,
+            .emoji_font_index = emoji_font_index,
         };
     }
 
     /// Release all resources.
     pub fn deinit(self: *FontGrid) void {
+        self.shaper.deinit();
         for (self.fonts.items) |*entry| {
             entry.rasterizer.deinit();
             if (entry.path) |p| self.allocator.free(p);
@@ -163,11 +188,79 @@ pub const FontGrid = struct {
             try entry.rasterizer.setSize(clamped, dpi);
         }
 
+        // Notify shaper that the underlying FreeType face size changed.
+        self.shaper.fontChanged();
+
         // Clear and rebuild atlas (full invalidation per UI-SPEC).
         self.atlas.clear();
 
         // Recompute metrics from primary font.
         self.metrics = self.fonts.items[0].rasterizer.getMetrics();
+    }
+
+    /// Resolve a glyph by its font-internal glyph ID (post-shaping).
+    /// When `color` is true, stores in the color (RGBA) atlas for emoji.
+    pub fn getGlyphByID(self: *FontGrid, font_index: u8, glyph_id: u32, color: bool) !GlyphResult {
+        const key = GlyphKey{
+            .font_index = font_index,
+            .glyph_id = glyph_id,
+            .size_px = @intFromFloat(@round(self.config.size_pt * self.config.dpi_scale)),
+        };
+
+        if (color) {
+            if (self.atlas.lookupColor(key)) |cached| {
+                return GlyphResult{
+                    .region = cached.region,
+                    .bearing_x = cached.bearing_x,
+                    .bearing_y = cached.bearing_y,
+                };
+            }
+
+            if (font_index >= self.fonts.items.len) return error.GlyphNotFound;
+            const bitmap = try self.fonts.items[font_index].rasterizer.rasterizeGlyphByID(self.allocator, glyph_id, true);
+            defer if (bitmap.data.len > 0) self.allocator.free(bitmap.data);
+
+            const cached = try self.atlas.insertColor(key, bitmap);
+            return GlyphResult{
+                .region = cached.region,
+                .bearing_x = cached.bearing_x,
+                .bearing_y = cached.bearing_y,
+            };
+        } else {
+            if (self.atlas.lookup(key)) |cached| {
+                return GlyphResult{
+                    .region = cached.region,
+                    .bearing_x = cached.bearing_x,
+                    .bearing_y = cached.bearing_y,
+                };
+            }
+
+            if (font_index >= self.fonts.items.len) return error.GlyphNotFound;
+            const bitmap = try self.fonts.items[font_index].rasterizer.rasterizeGlyphByID(self.allocator, glyph_id, false);
+            defer if (bitmap.data.len > 0) self.allocator.free(bitmap.data);
+
+            const cached = try self.atlas.insert(key, bitmap);
+            return GlyphResult{
+                .region = cached.region,
+                .bearing_x = cached.bearing_x,
+                .bearing_y = cached.bearing_y,
+            };
+        }
+    }
+
+    /// Return atlas reference (holds both grayscale and color data).
+    pub fn getColorAtlas(self: *const FontGrid) *const GlyphAtlas {
+        return &self.atlas;
+    }
+
+    /// Return a mutable pointer to the HarfBuzz shaper (non-optional, fail-fast on init).
+    pub fn getShaper(self: *FontGrid) *Shaper {
+        return &self.shaper;
+    }
+
+    /// Return the emoji font index in the fallback chain, or null if no emoji font loaded.
+    pub fn getEmojiFontIndex(self: *const FontGrid) ?u8 {
+        return self.emoji_font_index;
     }
 
     /// Number of fonts in the fallback chain.

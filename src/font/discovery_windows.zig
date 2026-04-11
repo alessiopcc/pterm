@@ -97,6 +97,11 @@ fn checkUserFontFile(allocator: std.mem.Allocator, filename: []const u8) ?Discov
     };
 }
 
+/// Discover the Segoe UI Emoji font (Windows default color emoji font).
+pub fn discoverEmojiFont(allocator: std.mem.Allocator) ?DiscoverResult {
+    return checkFontFile(allocator, "seguiemj.ttf");
+}
+
 fn eqlIgnoreCase(a: []const u8, b: []const u8) bool {
     if (a.len != b.len) return false;
     for (a, b) |ca, cb| {
