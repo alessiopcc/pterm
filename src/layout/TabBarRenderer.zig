@@ -24,8 +24,6 @@ pub const TabBarConfig = struct {
     cell_height: f32,
 
     tab_pad_h: u32 = 8,
-    tab_pad_v: u32 = 4,
-
     /// Text scale factor for tab labels (0.75 = 75% of normal font size)
     text_scale: f32 = 0.75,
 
@@ -39,11 +37,11 @@ pub const TabBarConfig = struct {
     /// null means no bell badge info available (skip rendering).
     tab_bell_badges: ?[]const bool = null,
 
-    /// Phase 7: Per-tab agent waiting flags (any pane in tab has show_badge).
+    /// Per-tab agent waiting flags (any pane in tab has show_badge).
     /// null means no agent badge info available (skip rendering).
     tab_agent_badges: ?[]const bool = null,
 
-    /// Phase 7: Per-tab agent tab flags (any pane in tab has is_agent_tab).
+    /// Per-tab agent tab flags (any pane in tab has is_agent_tab).
     /// null means no agent tab info available (skip rendering).
     tab_is_agent: ?[]const bool = null,
 };
@@ -53,6 +51,22 @@ const color_close: ColorU32 = 0xFF5F57FF; // red
 const color_maximize: ColorU32 = 0x28C840FF; // green
 const color_minimize: ColorU32 = 0xFEBC2EFF; // yellow
 
+/// Draw a filled diamond (rotated square) centered at (cx, cy) with the given radius.
+fn drawDiamond(
+    cx: i32,
+    cy: i32,
+    radius: i32,
+    color: ColorU32,
+    draw_rect_fn: *const fn (rect: Rect, color: ColorU32, ctx: *anyopaque) void,
+    draw_ctx: *anyopaque,
+) void {
+    var i: i32 = -radius;
+    while (i <= radius) : (i += 1) {
+        const span = radius - @as(i32, if (i < 0) -i else i);
+        draw_rect_fn(.{ .x = cx - span, .y = cy + i, .w = @intCast(@as(u32, @intCast(span * 2 + 1))), .h = 1 }, color, draw_ctx);
+    }
+}
+
 pub const TabBarRenderer = struct {
 
     // ── Dimensions ───────────────────────────────────────
@@ -61,13 +75,12 @@ pub const TabBarRenderer = struct {
         return @as(u32, @intFromFloat(cell_height)) + 8;
     }
 
-    pub fn tabBarHeight(cell_height: f32, tab_pad_v: u32) u32 {
-        _ = tab_pad_v;
-        return titleBarHeight(cell_height); // Same as title bar
+    pub fn tabBarHeight(cell_height: f32) u32 {
+        return titleBarHeight(cell_height);
     }
 
-    pub fn computeHeight(cell_height: f32, tab_pad_v: u32) u32 {
-        return titleBarHeight(cell_height) + tabBarHeight(cell_height, tab_pad_v);
+    pub fn computeHeight(cell_height: f32) u32 {
+        return titleBarHeight(cell_height) + tabBarHeight(cell_height);
     }
 
     /// Width of each control button (square, matching title bar height).
@@ -86,15 +99,13 @@ pub const TabBarRenderer = struct {
         tab_manager: *const TabManager,
         config: TabBarConfig,
         window_width: u32,
-        _total_height: u32,
         draw_rect_fn: *const fn (rect: Rect, color: ColorU32, ctx: *anyopaque) void,
         draw_text_fn: *const fn (text: []const u8, x: i32, y: i32, color: ColorU32, ctx: *anyopaque) void,
         draw_icon_fn: ?*const fn (x: i32, y: i32, size: u32, ctx: *anyopaque) void,
         draw_ctx: *anyopaque,
     ) void {
-        _ = _total_height;
         const title_h = titleBarHeight(config.cell_height);
-        const tab_h = tabBarHeight(config.cell_height, config.tab_pad_v);
+        const tab_h = tabBarHeight(config.cell_height);
         const ww: i32 = @intCast(window_width);
         const title_h_i: i32 = @intCast(title_h);
 
@@ -119,17 +130,14 @@ pub const TabBarRenderer = struct {
         const cy: i32 = @divFloor(title_h_i, 2);
         const half: i32 = @intCast(icon_sz / 2);
 
-        // Lighten just the hovered control's background slightly
-        const hover_bg: ColorU32 = (config.tab_bar_bg & 0xFFFFFF00) | 0xFF;
-        // Compute a slightly brighter version of the title bar bg
+        // Compute a slightly brighter version of the title bar bg for hover
         const bg_r = @as(u8, @truncate((config.tab_bar_bg >> 24) & 0xFF));
         const bg_g = @as(u8, @truncate((config.tab_bar_bg >> 16) & 0xFF));
         const bg_b = @as(u8, @truncate((config.tab_bar_bg >> 8) & 0xFF));
-        const bump: u8 = 15; // small brightness bump
+        const bump: u8 = 15;
         const hover_color: ColorU32 = (@as(u32, @min(255, @as(u16, bg_r) + bump)) << 24) |
             (@as(u32, @min(255, @as(u16, bg_g) + bump)) << 16) |
             (@as(u32, @min(255, @as(u16, bg_b) + bump)) << 8) | 0xFF;
-        _ = hover_bg;
 
         // Close (rightmost) — red X
         {
@@ -221,7 +229,7 @@ pub const TabBarRenderer = struct {
             // Always reserve space for activity indicator so title doesn't shift
             var text_x: i32 = tab_x + @as(i32, @intCast(config.tab_pad_h));
 
-            // Phase 7 D-11: Agent tab icon prefix (*) for agent-designated tabs
+            // Agent tab icon prefix (*) for agent-designated tabs
             if (config.tab_is_agent) |agent_flags| {
                 if (idx < agent_flags.len and agent_flags[idx]) {
                     draw_text_fn("*", text_x, text_y, config.agent_alert, draw_ctx);
@@ -237,11 +245,7 @@ pub const TabBarRenderer = struct {
                 const star_cx = indicator_x + @divFloor(cell_w_int, 2);
                 const star_cy = tab_y + @divFloor(@as(i32, @intCast(tab_h)), 2);
                 const star_r: i32 = @intFromFloat(config.cell_height * 0.12);
-                var si: i32 = -star_r;
-                while (si <= star_r) : (si += 1) {
-                    const span = star_r - @as(i32, if (si < 0) -si else si);
-                    draw_rect_fn(.{ .x = star_cx - span, .y = star_cy + si, .w = @intCast(@as(u32, @intCast(span * 2 + 1))), .h = 1 }, color_minimize, draw_ctx);
-                }
+                drawDiamond(star_cx, star_cy, star_r, color_minimize, draw_rect_fn, draw_ctx);
             }
 
             // Tab label: "N: title" or just "N" if no title
@@ -271,37 +275,18 @@ pub const TabBarRenderer = struct {
                     const badge_r: i32 = @intFromFloat(config.cell_height * 0.12);
                     const badge_x = tab_x + @as(i32, @intCast(tab_w)) - cell_w_int * 3;
                     const badge_cy = tab_y + @divFloor(@as(i32, @intCast(tab_h)), 2);
-                    // Draw filled circle as horizontal slices (diamond approximation)
-                    var bi: i32 = -badge_r;
-                    while (bi <= badge_r) : (bi += 1) {
-                        const span = badge_r - @as(i32, if (bi < 0) -bi else bi);
-                        draw_rect_fn(.{
-                            .x = badge_x - span,
-                            .y = badge_cy + bi,
-                            .w = @intCast(@as(u32, @intCast(span * 2 + 1))),
-                            .h = 1,
-                        }, config.bell_badge_color, draw_ctx);
-                    }
+                    drawDiamond(badge_x, badge_cy, badge_r, config.bell_badge_color, draw_rect_fn, draw_ctx);
                 }
             }
 
-            // Phase 7 D-15: Agent waiting badge — agent_alert colored dot (4px gap after bell badge)
+            // Agent waiting badge — agent_alert colored dot (4px gap after bell badge)
             if (config.tab_agent_badges) |agent_badges| {
                 if (idx < agent_badges.len and agent_badges[idx] and !is_active) {
                     const agent_badge_r: i32 = @intFromFloat(config.cell_height * 0.12);
                     // Position: right of bell badge area, with 4px gap
                     const agent_badge_x = tab_x + @as(i32, @intCast(tab_w)) - cell_w_int * 4;
                     const agent_badge_cy = tab_y + @divFloor(@as(i32, @intCast(tab_h)), 2);
-                    var abi: i32 = -agent_badge_r;
-                    while (abi <= agent_badge_r) : (abi += 1) {
-                        const aspan = agent_badge_r - @as(i32, if (abi < 0) -abi else abi);
-                        draw_rect_fn(.{
-                            .x = agent_badge_x - aspan,
-                            .y = agent_badge_cy + abi,
-                            .w = @intCast(@as(u32, @intCast(aspan * 2 + 1))),
-                            .h = 1,
-                        }, config.agent_alert, draw_ctx);
-                    }
+                    drawDiamond(agent_badge_x, agent_badge_cy, agent_badge_r, config.agent_alert, draw_rect_fn, draw_ctx);
                 }
             }
 
@@ -357,7 +342,7 @@ pub const TabBarRenderer = struct {
         window_width: u32,
     ) HitResult {
         const title_h: i32 = @intCast(titleBarHeight(cell_height));
-        const total_h: i32 = @intCast(computeHeight(cell_height, 4));
+        const total_h: i32 = @intCast(computeHeight(cell_height));
         const ww: i32 = @intCast(window_width);
         const btn_w: i32 = @intCast(controlBtnWidth(cell_height));
 
@@ -410,7 +395,7 @@ pub const TabBarRenderer = struct {
 // ── Tests ────────────────────────────────────────────────
 
 test "TabBarRenderer.computeHeight" {
-    const height = TabBarRenderer.computeHeight(17.0, 4);
+    const height = TabBarRenderer.computeHeight(17.0);
     try std.testing.expectEqual(@as(u32, 50), height); // 25 + 25
 }
 

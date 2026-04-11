@@ -25,7 +25,7 @@ pub const Action = enum {
     split_vertical,
     focus_next_pane,
     focus_prev_pane,
-    // Phase 5: pane management actions
+    // Pane management actions
     close_pane,
     focus_pane_up,
     focus_pane_down,
@@ -61,9 +61,9 @@ pub const Action = enum {
     scroll_to_top,
     scroll_to_bottom,
     search,
-    // Phase 7: agent monitoring actions
+    // Agent monitoring actions
     toggle_agent_tab,
-    // Phase 11: shell switching
+    // Shell switching
     change_shell,
     none,
 };
@@ -376,7 +376,7 @@ pub fn defaultBindings() []const DefaultBinding {
         .{ .action = .scroll_to_top, .combo_str = "ctrl+shift+home" },
         .{ .action = .scroll_to_bottom, .combo_str = "ctrl+shift+end" },
         .{ .action = .search, .combo_str = "ctrl+shift+f" },
-        // Phase 5: pane/tab management bindings
+        // Pane/tab management bindings
         .{ .action = .close_pane, .combo_str = "ctrl+shift+x" },
         .{ .action = .focus_pane_up, .combo_str = "ctrl+shift+up" },
         .{ .action = .focus_pane_down, .combo_str = "ctrl+shift+down" },
@@ -407,9 +407,9 @@ pub fn defaultBindings() []const DefaultBinding {
         .{ .action = .goto_tab_9, .combo_str = "alt+9" },
         .{ .action = .goto_tab_last, .combo_str = "alt+0" },
         .{ .action = .open_layout_picker, .combo_str = "ctrl+shift+l" },
-        // Phase 7: agent monitoring bindings
+        // Agent monitoring bindings
         .{ .action = .toggle_agent_tab, .combo_str = "ctrl+shift+a" },
-        // Phase 11: shell switching
+        // Shell switching
         .{ .action = .change_shell, .combo_str = "ctrl+shift+s" },
     };
 }

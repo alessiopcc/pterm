@@ -1,4 +1,4 @@
-/// Keybinding system tests (Phase 04 Plan 02).
+/// Keybinding system tests.
 ///
 /// Tests parseKeyCombo, isReservedClipboardKey, buildMap (with D-18 multi-combo),
 /// conflict detection (D-25), unbind via none (D-23), and formatKeyCombo.

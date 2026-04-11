@@ -43,7 +43,7 @@ pub const Config = struct {
     // [layout.*] — named layout presets parsed from TOML
     layouts: []LayoutPreset.LayoutPreset = &.{},
 
-    /// Phase 7: Agent monitoring config (D-26/D-29).
+    /// Agent monitoring config.
     /// Controls pattern-based detection and optional idle detection.
     pub const Agent = struct {
         /// Whether agent monitoring is active. D-29: enabled by default.
@@ -59,7 +59,7 @@ pub const Config = struct {
         /// Custom regex/literal patterns appended to preset patterns. D-26.
         custom_patterns: ?[]const []const u8 = null,
 
-        // Phase 8: Notification fields (D-19)
+        // Notification fields
         /// Whether OS desktop notifications are enabled. D-19: enabled by default.
         notifications: bool = true,
         /// Whether to include sound in notification. D-19: enabled by default.
@@ -70,22 +70,22 @@ pub const Config = struct {
         suppress_when_focused: bool = true,
     };
 
-    /// Phase 7: Status bar config (D-27).
+    /// Status bar config.
     /// Controls the persistent status bar at the bottom of the window.
     pub const StatusBar = struct {
         /// Whether the status bar is visible. D-27: visible by default.
         visible: bool = true,
     };
 
-    /// Phase 6: Search config (D-03/D-13: empty stub for v1, no regex, no history).
+    /// Search config (empty stub for v1, no regex, no history).
     pub const Search = struct {};
 
-    /// Phase 6: URL detection config (D-34: enabled by default).
+    /// URL detection config (enabled by default).
     pub const Url = struct {
         enabled: bool = true,
     };
 
-    /// Phase 6: Bell notification config (D-24/D-25: visual mode default).
+    /// Bell notification config (visual mode default).
     pub const Bell = struct {
         mode: BellMode = .visual,
 
@@ -100,6 +100,7 @@ pub const Config = struct {
     pub const Font = struct {
         family: ?[]const u8 = null, // null = platform default
         size: f32 = 12.0,
+        fallback: ?[]const []const u8 = null, // D-04: Additional fallback fonts
     };
 
     pub const Window = struct {
@@ -139,7 +140,6 @@ pub const Config = struct {
 
     /// Per D-28: UI chrome colors for tab bar, panes, status bar, agent alerts.
     /// Fields are schema stubs with sensible Catppuccin Mocha defaults.
-    /// Not wired to UI rendering until Phase 5 (tabs/panes) and Phase 7 (agent alerts).
     /// MUST be present in schema now so config files and themes can define them.
     pub const UiColors = struct {
         tab_bar_bg: ?[]const u8 = null,
@@ -149,7 +149,7 @@ pub const Config = struct {
         pane_border_active: ?[]const u8 = null,
         status_bar_bg: ?[]const u8 = null,
         agent_alert: ?[]const u8 = null,
-        // Phase 6: search, URL, bell UI colors
+        // Search, URL, bell UI colors
         search_bar_bg: ?[]const u8 = null,
         search_match: ?[]const u8 = null,
         search_current_match: ?[]const u8 = null,
@@ -217,6 +217,7 @@ pub const Config = struct {
         // Font
         if (file.font.family) |v| result.font.family = v;
         if (file.font.size != default_font_size) result.font.size = file.font.size;
+        if (file.font.fallback) |v| result.font.fallback = v;
 
         // Window
         if (!std.mem.eql(u8, file.window.title, "PTerm")) result.window.title = file.window.title;
@@ -274,7 +275,7 @@ pub const Config = struct {
         if (file.agent.scan_lines != 3) result.agent.scan_lines = file.agent.scan_lines;
         if (file.agent.custom_patterns) |v| result.agent.custom_patterns = v;
 
-        // Agent notification fields (Phase 8)
+        // Agent notification fields
         if (!file.agent.notifications) result.agent.notifications = file.agent.notifications;
         if (!file.agent.notification_sound) result.agent.notification_sound = file.agent.notification_sound;
         if (file.agent.notification_cooldown != 30) result.agent.notification_cooldown = file.agent.notification_cooldown;
@@ -362,6 +363,11 @@ pub const Config = struct {
         return self.font.family;
     }
 
+    /// Returns font fallback list (nullable).
+    pub fn font_fallback(self: Config) ?[]const []const u8 {
+        return self.font.fallback;
+    }
+
     /// Returns font size in points.
     pub fn font_size_pt(self: Config) f32 {
         return self.font.size;
@@ -393,12 +399,3 @@ pub const Config = struct {
         return self.window.title;
     }
 };
-
-/// Parse a hex color string like "#FF5555" or "#ff5555" into [3]u8 RGB.
-pub fn parseHexColor(hex: []const u8) ![3]u8 {
-    if (hex.len < 7 or hex[0] != '#') return error.InvalidColorFormat;
-    const r = std.fmt.parseInt(u8, hex[1..3], 16) catch return error.InvalidColorFormat;
-    const g = std.fmt.parseInt(u8, hex[3..5], 16) catch return error.InvalidColorFormat;
-    const b = std.fmt.parseInt(u8, hex[5..7], 16) catch return error.InvalidColorFormat;
-    return .{ r, g, b };
-}

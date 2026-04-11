@@ -37,7 +37,7 @@ pub const PresetPane = struct {
 /// A tab in a preset, containing one or more panes.
 pub const PresetTab = struct {
     panes: []const PresetPane,
-    /// Phase 7 D-12: Whether this tab is an agent tab (pulsing alerts when waiting).
+    /// Whether this tab is an agent tab (pulsing alerts when waiting).
     agent: bool = false,
 };
 

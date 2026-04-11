@@ -56,4 +56,5 @@ pub const FontConfig = struct {
     min_size_pt: f32 = 6.0,
     max_size_pt: f32 = 72.0,
     dpi_scale: f32 = 1.0,
+    fallback: ?[]const []const u8 = null, // D-04: User-specified fallback fonts
 };

@@ -16,7 +16,19 @@ const std = @import("std");
 
 pub const AgentState = struct {
     /// Three-state machine: idle, working, waiting.
-    pub const State = enum(u8) { idle, working, waiting };
+    pub const State = enum(u8) {
+        idle,
+        working,
+        waiting,
+
+        pub fn str(self: State) []const u8 {
+            return switch (self) {
+                .idle => "idle",
+                .working => "working",
+                .waiting => "waiting",
+            };
+        }
+    };
 
     /// Flash duration: 150ms per D-16 UI-SPEC.
     pub const FLASH_DURATION_NS: i128 = 150_000_000;

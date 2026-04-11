@@ -1,7 +1,7 @@
 /// Layout module root: re-exports all layout types for multi-pane tab management.
 ///
-/// Phase 5 Plan 01: Binary tree pane model, Tab, TabManager, Rect, tree operations.
-/// Phase 5 Plan 02: Compositor, TabBarRenderer, PaneState, PaneRegistry.
+/// Binary tree pane model, Tab, TabManager, Rect, tree operations.
+/// Compositor, TabBarRenderer, PaneState, PaneRegistry.
 pub const PaneTree = @import("PaneTree.zig");
 pub const Tab = @import("Tab.zig");
 pub const TabManager = @import("TabManager.zig");

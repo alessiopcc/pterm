@@ -95,6 +95,32 @@ pub fn discoverCJKFont(allocator: std.mem.Allocator) ?DiscoverResult {
     return null;
 }
 
+/// Discover a Nerd Font symbols-only font (D-01).
+/// Queries fontconfig for known Nerd Font family names.
+pub fn discoverNerdFont(allocator: std.mem.Allocator) ?DiscoverResult {
+    const nerd_families = [_][]const u8{
+        "Symbols Nerd Font Mono",
+        "Symbols Nerd Font",
+    };
+    for (nerd_families) |family| {
+        if (discoverNonMono(allocator, family)) |result| return result;
+    }
+    return null;
+}
+
+/// Discover a general Unicode symbol font (Dingbats, geometric shapes, etc.).
+pub fn discoverSymbolFont(allocator: std.mem.Allocator) ?DiscoverResult {
+    const symbol_families = [_][]const u8{
+        "Noto Sans Symbols",
+        "Noto Sans Symbols2",
+        "DejaVu Sans",
+    };
+    for (symbol_families) |family| {
+        if (discoverNonMono(allocator, family)) |result| return result;
+    }
+    return null;
+}
+
 /// Discover a font without the monospace spacing constraint (for emoji fonts).
 fn discoverNonMono(allocator: std.mem.Allocator, family: []const u8) ?DiscoverResult {
     const config = c.FcInitLoadConfigAndFonts();

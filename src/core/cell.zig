@@ -68,8 +68,10 @@ pub fn isEmojiCodepoint(cp: u21) bool {
     // Miscellaneous symbols
     if (cp >= 0x2600 and cp <= 0x26FF) return true;
 
-    // Dingbats
-    if (cp >= 0x2700 and cp <= 0x27BF) return true;
+    // Dingbats — only include codepoints with default emoji presentation.
+    // Most Dingbats (U+2700-U+27BF) are text symbols (❯, ✓, ✗) that
+    // render better from symbol fonts, not the emoji font.
+    if (cp == 0x2712 or cp == 0x2714 or cp == 0x2716 or cp == 0x271D or cp == 0x2721) return true;
 
     // Watch, hourglass, media controls
     if (cp >= 0x231A and cp <= 0x231B) return true;

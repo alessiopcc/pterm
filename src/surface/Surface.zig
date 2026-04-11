@@ -87,10 +87,13 @@ pub const Surface = struct {
     // Frame counter for periodic diagnostics logging (D-17)
     frame_count: u64,
 
-    // Text selection state (Phase 8 Plan 02: clipboard integration)
+    // Text selection state (clipboard integration)
     selection: selection_mod.Selection,
 
-    // Keybinding map for action dispatch (Phase 4 Plan 02)
+    // Scroll offset for selection coordinate mapping (synced from PaneData)
+    scroll_offset: u32,
+
+    // Keybinding map for action dispatch
     keybinding_map: keybindings.KeybindingMap,
     last_mods: keybindings.Modifiers,
 
@@ -104,6 +107,7 @@ pub const Surface = struct {
             .family = config.font_family(),
             .size_pt = config.font_size_pt(),
             .dpi_scale = dpi_scale,
+            .fallback = config.font_fallback(),
         };
 
         const font_grid = try allocator.create(FontGrid);
@@ -111,7 +115,7 @@ pub const Surface = struct {
         font_grid.* = try FontGrid.init(allocator, font_config);
         errdefer font_grid.deinit();
 
-        // Build keybinding map from defaults (user overrides via config in Phase 4 Plan 01)
+        // Build keybinding map from defaults (user overrides via config)
         // Convert config keybinding entries to UserBinding slice for buildMap
         const user_bindings: ?[]const keybindings.UserBinding = if (config.keybindings.len > 0)
             @ptrCast(config.keybindings)
@@ -148,6 +152,7 @@ pub const Surface = struct {
             .renderer_palette = theme_mod.buildRendererPaletteFromConfig(config.colors),
             .frame_count = 0,
             .selection = selection_mod.Selection.init(),
+            .scroll_offset = 0,
             .keybinding_map = kb_map,
             .last_mods = .{},
             .perf_logging = options.perf_logging,
@@ -289,7 +294,7 @@ pub const Surface = struct {
                     self.termio.resize(cols, rows) catch {};
                 }
 
-                // Phase 1: snapshot cell data under mutex (fast copy, no glyph lookups)
+                // Pass 1: snapshot cell data under mutex (fast copy, no glyph lookups)
                 const snapshot = self.termio.lockTerminal();
                 const snap = render_state.snapshotCells(
                     self.frame_arena.allocator(),
@@ -303,7 +308,7 @@ pub const Surface = struct {
                 };
                 self.termio.unlockTerminal();
 
-                // Phase 2: build CellInstances with glyph lookups (no mutex held)
+                // Pass 2: build CellInstances with glyph lookups (no mutex held)
                 const metrics = self.font_grid.getMetrics();
                 const fb = self.window.getFramebufferSize();
                 var rs = render_state.buildFromSnapshot(
@@ -402,7 +407,7 @@ pub const Surface = struct {
     }
 
     /// Handle key input from GLFW callback (main thread).
-    /// New flow (Phase 4 Plan 02): check keybinding map for special keys before VT encoding.
+    /// Check keybinding map for special keys before VT encoding.
     pub fn handleKeyInput(self: *Surface, key: glfw.Key, action: glfw.Action, mods: glfw.Mods) void {
         // Only handle press and repeat events
         if (action != .press and action != .repeat) return;
@@ -511,17 +516,16 @@ pub const Surface = struct {
         }
     }
 
-    /// Dispatch a keybinding action (Phase 4 Plan 02).
+    /// Dispatch a keybinding action.
     fn dispatchAction(self: *Surface, action: keybindings.Action) void {
         switch (action) {
-            .copy => self.copySelection(),
+            .copy => self.copySelection(self.scroll_offset),
             .paste => self.pasteFromClipboard(),
             .increase_font_size => self.changeFontSize(1.0),
             .decrease_font_size => self.changeFontSize(-1.0),
             .reset_font_size => self.resetFontSize(),
             .scroll_page_up => self.scrollPageUp(),
             .scroll_page_down => self.scrollPageDown(),
-            // Pane/tab actions: no-op stubs for Phase 5
             .new_tab, .close_tab, .next_tab, .prev_tab => {},
             .split_horizontal, .split_vertical => {},
             .focus_next_pane, .focus_prev_pane => {},
@@ -538,9 +542,9 @@ pub const Surface = struct {
             .goto_tab_6, .goto_tab_7, .goto_tab_8, .goto_tab_9, .goto_tab_last => {},
             .open_layout_picker => {},
             .scroll_to_top, .scroll_to_bottom => {},
-            .search => {}, // Phase 6
-            .toggle_agent_tab => {}, // Phase 7: handled in App.dispatchAction
-            .change_shell => {}, // Phase 11: handled in App.dispatchAction
+            .search => {},
+            .toggle_agent_tab => {}, // handled in App.dispatchAction
+            .change_shell => {}, // handled in App.dispatchAction
             .none => {},
         }
     }
@@ -555,7 +559,7 @@ pub const Surface = struct {
         if (is_c) {
             // D-17: Smart Ctrl+C -- copy if selection active, send SIGINT if not
             if (self.selection.range != null) {
-                self.copySelection();
+                self.copySelection(self.scroll_offset);
                 // selection.clear() already called inside copySelection
             } else {
                 // Send Ctrl+C (0x03 ETX) to terminal as SIGINT
@@ -569,7 +573,7 @@ pub const Surface = struct {
     /// Copy current selection to clipboard (D-15: clipboard integration).
     /// Extracts text from terminal screen buffer via Selection.getSelectedText
     /// and sets the GLFW system clipboard. Clears selection after copy.
-    pub fn copySelection(self: *Surface) void {
+    pub fn copySelection(self: *Surface, scroll_offset: u32) void {
         const range = self.selection.range orelse return;
 
         // Lock terminal to access screen data
@@ -579,6 +583,13 @@ pub const Surface = struct {
         const screen = screens.active;
         const cols: u16 = @intCast(screen.pages.cols);
         const rows: u16 = @intCast(screen.pages.rows);
+
+        // Compute screen-coordinate base row for scrollback viewport
+        const total_rows = screen.pages.total_rows;
+        const active_rows = screen.pages.rows;
+        const history_rows: u32 = if (total_rows > active_rows) @intCast(total_rows - active_rows) else 0;
+        const clamped_offset = @min(scroll_offset, history_rows);
+        const viewport_base: u32 = history_rows - clamped_offset;
 
         // Build UTF-8 screen lines from terminal cells
         const alloc = std.heap.page_allocator;
@@ -602,16 +613,24 @@ pub const Surface = struct {
             var byte_len: usize = 0;
             var col: u16 = 0;
             while (col < cols) : (col += 1) {
-                const pin = screen.pages.pin(.{ .active = .{
-                    .x = @intCast(col),
-                    .y = @intCast(row),
-                } }) orelse {
+                // When scrolled back, use screen coordinates; otherwise use active
+                const pin = if (clamped_offset > 0)
+                    screen.pages.pin(.{ .screen = .{
+                        .x = @intCast(col),
+                        .y = @intCast(viewport_base + row),
+                    } })
+                else
+                    screen.pages.pin(.{ .active = .{
+                        .x = @intCast(col),
+                        .y = @intCast(row),
+                    } });
+                const pin_val = pin orelse {
                     // No cell at this position, emit space
                     flat_buf[row_offset + byte_len] = ' ';
                     byte_len += 1;
                     continue;
                 };
-                const rac = pin.rowAndCell();
+                const rac = pin_val.rowAndCell();
                 const cp: u21 = rac.cell.codepoint();
                 if (cp == 0) {
                     flat_buf[row_offset + byte_len] = ' ';
@@ -812,7 +831,7 @@ pub const Surface = struct {
         }
     }
 
-    // -- Keybinding helpers (Phase 4 Plan 02) --
+    // -- Keybinding helpers --
 
     /// Convert GLFW modifier flags to keybinding Modifiers.
     fn glfwModsToModifiers(mods: glfw.Mods) keybindings.Modifiers {

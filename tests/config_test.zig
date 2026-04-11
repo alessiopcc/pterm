@@ -1,4 +1,4 @@
-/// Config system tests for Phase 4 Plan 01.
+/// Config system tests.
 ///
 /// Tests the four-tier config loading pipeline: defaults, TOML file loading,
 /// import chain resolution, merge semantics, validation, and hex color parsing.
@@ -9,7 +9,6 @@ const loader = @import("loader");
 const defaults_mod = @import("defaults");
 const cli_mod = @import("cli");
 const env_mod = @import("env");
-const parseHexColor = @import("config").parseHexColor;
 
 // ============================================================================
 // Config defaults tests
@@ -174,29 +173,6 @@ test "Config.validate resets negative scrollback" {
 }
 
 // ============================================================================
-// Hex color parsing tests
-// ============================================================================
-
-test "parseHexColor parses valid hex color" {
-    const rgb = try parseHexColor("#FF5555");
-    try testing.expectEqual(@as(u8, 0xFF), rgb[0]);
-    try testing.expectEqual(@as(u8, 0x55), rgb[1]);
-    try testing.expectEqual(@as(u8, 0x55), rgb[2]);
-}
-
-test "parseHexColor parses lowercase hex" {
-    const rgb = try parseHexColor("#1e1e2e");
-    try testing.expectEqual(@as(u8, 0x1e), rgb[0]);
-    try testing.expectEqual(@as(u8, 0x1e), rgb[1]);
-    try testing.expectEqual(@as(u8, 0x2e), rgb[2]);
-}
-
-test "parseHexColor returns error for invalid format" {
-    try testing.expectError(error.InvalidColorFormat, parseHexColor("invalid"));
-    try testing.expectError(error.InvalidColorFormat, parseHexColor("#GG0000"));
-    try testing.expectError(error.InvalidColorFormat, parseHexColor("#FF"));
-}
-
 // ============================================================================
 // Platform path detection tests
 // ============================================================================

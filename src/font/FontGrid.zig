@@ -10,6 +10,11 @@ const CachedGlyph = @import("glyph_atlas").CachedGlyph;
 const Rasterizer = @import("rasterizer").Rasterizer;
 const discovery = @import("discovery");
 const Shaper = @import("shaper").Shaper;
+const tofu = @import("tofu");
+
+/// Bundled Symbols Nerd Font Mono (OFL-licensed) for fallback when no
+/// system Nerd Font is installed. Embedded at compile time into the binary.
+const bundled_nerd_font = @import("bundled_nerd_font").data;
 
 const GlyphKey = font_types.GlyphKey;
 const AtlasRegion = font_types.AtlasRegion;
@@ -77,6 +82,38 @@ pub const FontGrid = struct {
             return error.NoMonospaceFont;
         }
 
+        // -- User-specified fallback fonts (D-05: before auto-discovered) --
+        if (config.fallback) |fallbacks| {
+            for (fallbacks) |family| {
+                if (discovery.discoverFont(allocator, family)) |result| {
+                    if (loadFont(allocator, result, config.size_pt, dpi)) |entry| {
+                        try fonts.append(allocator, entry);
+                    }
+                }
+            }
+        }
+
+        // -- Auto-discover Nerd Font symbols (D-01, D-02: skip if primary covers PUA) --
+        if (!hasPUACoverage(&fonts.items[0].rasterizer)) {
+            if (discovery.discoverNerdFont(allocator)) |result| {
+                if (loadFont(allocator, result, config.size_pt, dpi)) |entry| {
+                    try fonts.append(allocator, entry);
+                }
+            } else {
+                // No system Nerd Font found — use bundled Symbols Nerd Font Mono.
+                if (loadFontFromMemory(allocator, bundled_nerd_font, config.size_pt, dpi)) |entry| {
+                    try fonts.append(allocator, entry);
+                }
+            }
+        }
+
+        // -- General Unicode symbol font (Dingbats, geometric shapes, etc.) --
+        if (discovery.discoverSymbolFont(allocator)) |result| {
+            if (loadFont(allocator, result, config.size_pt, dpi)) |entry| {
+                try fonts.append(allocator, entry);
+            }
+        }
+
         // Create HarfBuzz shaper from the primary font face (fail-fast: a terminal
         // without text shaping cannot render correctly).
         // Use @ptrCast to bridge FT_Face types from different cimport modules
@@ -139,11 +176,21 @@ pub const FontGrid = struct {
         self.* = undefined;
     }
 
+    /// Resolve a codepoint through fallback fonts only (skipping the primary font).
+    /// Used for non-ASCII characters where symbol/fallback fonts have better coverage.
+    pub fn getGlyphFromFallbacks(self: *FontGrid, codepoint: u21) !GlyphResult {
+        return self.getGlyphStartingAt(codepoint, 1);
+    }
+
     /// Resolve a codepoint to an atlas region through the fallback chain.
     /// Tries each font in order; first one that has the glyph wins (D-09).
     pub fn getGlyph(self: *FontGrid, codepoint: u21) !GlyphResult {
+        return self.getGlyphStartingAt(codepoint, 0);
+    }
+
+    fn getGlyphStartingAt(self: *FontGrid, codepoint: u21, start_idx: usize) !GlyphResult {
         // Try each font in the fallback chain.
-        for (self.fonts.items, 0..) |*entry, font_idx| {
+        for (self.fonts.items[start_idx..], start_idx..) |*entry, font_idx| {
             const is_emoji_font = self.emoji_font_index != null and font_idx == self.emoji_font_index.?;
             const key = GlyphKey{
                 .font_index = @intCast(font_idx),
@@ -154,6 +201,7 @@ pub const FontGrid = struct {
             // Check atlas cache (color atlas for emoji font, grayscale for others).
             if (is_emoji_font) {
                 if (self.atlas.lookupColor(key)) |cached| {
+
                     return GlyphResult{
                         .region = cached.region,
                         .bearing_x = cached.bearing_x,
@@ -163,6 +211,7 @@ pub const FontGrid = struct {
                 }
             } else {
                 if (self.atlas.lookup(key)) |cached| {
+
                     return GlyphResult{
                         .region = cached.region,
                         .bearing_x = cached.bearing_x,
@@ -184,6 +233,12 @@ pub const FontGrid = struct {
                 };
             defer if (bitmap.data.len > 0) self.allocator.free(bitmap.data);
 
+            // Skip zero-size bitmaps for non-whitespace (font has cmap entry
+            // but empty glyph). Whitespace chars like space/NBSP legitimately
+            // have zero-size bitmaps and should not fall through.
+            if ((bitmap.width == 0 or bitmap.height == 0) and
+                codepoint != ' ' and codepoint != 0x00A0 and codepoint != '\t') continue;
+
             // Insert into appropriate atlas based on format.
             if (bitmap.format == .rgba) {
                 const cached = try self.atlas.insertColor(key, bitmap);
@@ -203,7 +258,25 @@ pub const FontGrid = struct {
             }
         }
 
-        return error.GlyphNotFound;
+        // No font in the chain has this glyph -- render tofu box (D-06).
+        const tofu_bitmap = tofu.renderTofuBox(self.allocator, codepoint, self.metrics) catch {
+            return error.GlyphNotFound;
+        };
+        defer if (tofu_bitmap.data.len > 0) self.allocator.free(tofu_bitmap.data);
+
+        // Use font_index=255 as sentinel for tofu glyphs to avoid key collisions.
+        const tofu_key = GlyphKey{
+            .font_index = 255,
+            .glyph_id = @as(u32, codepoint),
+            .size_px = @intFromFloat(@round(self.config.size_pt * self.config.dpi_scale)),
+        };
+
+        const cached = try self.atlas.insert(tofu_key, tofu_bitmap);
+        return GlyphResult{
+            .region = cached.region,
+            .bearing_x = cached.bearing_x,
+            .bearing_y = cached.bearing_y,
+        };
     }
 
     /// Return metrics from the primary font (index 0).
@@ -334,6 +407,18 @@ pub const FontGrid = struct {
 
     // -- internal helpers --
 
+    /// Check if a rasterizer's font covers key Nerd Font PUA codepoints (D-02).
+    /// Samples representative codepoints from major Nerd Font glyph sets.
+    /// Returns true if the font covers 2+ samples (likely NF-patched).
+    fn hasPUACoverage(rasterizer: *Rasterizer) bool {
+        const samples = [_]u21{ 0xE0B0, 0xE700, 0xE5FA };
+        var found: u8 = 0;
+        for (samples) |cp| {
+            if (rasterizer.hasGlyph(cp)) found += 1;
+        }
+        return found >= 2;
+    }
+
     fn loadFont(allocator: std.mem.Allocator, result: discovery.DiscoverResult, size_pt: f32, dpi: u32) ?FontEntry {
         // Create a null-terminated path for FreeType.
         const path_z = allocator.dupeZ(u8, result.path) catch {
@@ -350,6 +435,14 @@ pub const FontGrid = struct {
         return FontEntry{
             .rasterizer = rast,
             .path = result.path,
+        };
+    }
+
+    fn loadFontFromMemory(allocator: std.mem.Allocator, data: []const u8, size_pt: f32, dpi: u32) ?FontEntry {
+        const rast = Rasterizer.initFromMemory(allocator, data, size_pt, dpi) catch return null;
+        return FontEntry{
+            .rasterizer = rast,
+            .path = null,
         };
     }
 };

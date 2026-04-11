@@ -121,6 +121,33 @@ pub fn discoverCJKFont(allocator: std.mem.Allocator) ?DiscoverResult {
     return null;
 }
 
+/// Discover a Nerd Font symbols-only font (D-01).
+/// Scans system and user font directories for known Nerd Font filenames.
+pub fn discoverNerdFont(allocator: std.mem.Allocator) ?DiscoverResult {
+    const nerd_fonts = [_][]const u8{
+        // Standalone Nerd Font symbol packages (prefer system-installed over bundled)
+        "SymbolsNerdFontMono-Regular.ttf",
+        "SymbolsNerdFont-Regular.ttf",
+    };
+    for (nerd_fonts) |filename| {
+        if (checkFontFile(allocator, filename)) |result| return result;
+    }
+    return null;
+}
+
+/// Discover a general Unicode symbol font (Dingbats, geometric shapes, etc.).
+/// Covers characters like U+276F (❯) that coding fonts often lack.
+pub fn discoverSymbolFont(allocator: std.mem.Allocator) ?DiscoverResult {
+    const symbol_fonts = [_][]const u8{
+        "seguisym.ttf", // Segoe UI Symbol (Windows 7+)
+        "symbol.ttf", // Symbol
+    };
+    for (symbol_fonts) |filename| {
+        if (checkFontFile(allocator, filename)) |result| return result;
+    }
+    return null;
+}
+
 fn eqlIgnoreCase(a: []const u8, b: []const u8) bool {
     if (a.len != b.len) return false;
     for (a, b) |ca, cb| {

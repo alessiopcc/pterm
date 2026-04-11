@@ -22,7 +22,6 @@ pub fn colorFromU8Array(rgb: [3]u8) Color {
 }
 
 /// UI chrome colors (D-28: tab bar, pane borders, status bar, agent alert).
-/// Phase 6 adds: search, URL, bell colors.
 pub const UiColors = struct {
     tab_bar_bg: [3]u8,
     tab_active: [3]u8,
@@ -31,7 +30,6 @@ pub const UiColors = struct {
     pane_border_active: [3]u8,
     status_bar_bg: [3]u8,
     agent_alert: [3]u8,
-    // Phase 6
     search_bar_bg: [3]u8 = .{ 0x18, 0x18, 0x25 },
     search_match: [3]u8 = .{ 0x58, 0x4A, 0x1E },
     search_current_match: [3]u8 = .{ 0x6B, 0x2E, 0x3A },
@@ -78,7 +76,7 @@ pub const RendererPalette = struct {
     ui_pane_border_active: Color,
     ui_status_bar_bg: Color,
     ui_agent_alert: Color,
-    // Phase 6 UI colors
+    // UI colors
     ui_search_bar_bg: Color,
     ui_search_match: Color,
     ui_search_current_match: Color,
@@ -144,7 +142,7 @@ pub fn buildRendererPalette(palette: ColorPalette) !RendererPalette {
 }
 
 /// Build a default RendererPalette matching the compile-time Catppuccin Mocha palette.
-/// Used when no config file exists for identical behavior to pre-Phase 4.
+/// Used when no config file exists.
 pub fn defaultRendererPalette() RendererPalette {
     const builtin_themes = @import("builtin_themes");
     const default_palette = builtin_themes.get("default").?;
@@ -168,7 +166,7 @@ pub fn buildRendererPaletteFromConfig(colors: anytype) RendererPalette {
         .selection_fg = colors.selection_fg orelse defaults.selection_fg,
         .normal = defaults.normal, // ANSI colors not yet in Config.Colors; use defaults
         .bright = defaults.bright,
-        .ui = defaults.ui, // UI colors not wired until Phase 5/7
+        .ui = defaults.ui,
     };
 
     return buildRendererPalette(merged) catch {

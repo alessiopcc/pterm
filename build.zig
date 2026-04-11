@@ -152,7 +152,7 @@ pub fn build(b: *std.Build) void {
     termio_mod.addImport("pty", platform_pty_mod);
 
     // -------------------------------------------------------
-    // Phase 2: GPU Rendering & Windowing dependencies
+    // GPU Rendering & Windowing dependencies
     // -------------------------------------------------------
 
     // zigglgen: Generate OpenGL 3.3 core profile bindings at build time
@@ -261,7 +261,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // -------------------------------------------------------
-    // Phase 2 Plan 02: Font pipeline modules
+    // Font pipeline modules
     // -------------------------------------------------------
 
     // FreeType rasterizer backend (Linux/Windows)
@@ -337,6 +337,14 @@ pub fn build(b: *std.Build) void {
     discovery_fontconfig_mod.addImport("discovery.zig", discovery_mod);
     discovery_coretext_mod.addImport("discovery.zig", discovery_mod);
 
+    // Tofu box renderer module (D-06: missing glyph visualization)
+    const tofu_mod = b.createModule(.{
+        .root_source_file = b.path("src/font/tofu.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    tofu_mod.addImport("font_types", font_types_mod);
+
     // FontGrid module (font collection with fallback chain)
     const fontgrid_mod = b.createModule(.{
         .root_source_file = b.path("src/font/FontGrid.zig"),
@@ -347,11 +355,19 @@ pub fn build(b: *std.Build) void {
     fontgrid_mod.addImport("glyph_atlas", atlas_mod);
     fontgrid_mod.addImport("rasterizer", rasterizer_mod);
     fontgrid_mod.addImport("discovery", discovery_mod);
+    fontgrid_mod.addImport("tofu", tofu_mod);
+    // Bundled Symbols Nerd Font Mono (OFL-licensed) embedded for fallback
+    const bundled_nerd_font_mod = b.createModule(.{
+        .root_source_file = b.path("assets/fonts/bundled_nerd_font.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    fontgrid_mod.addImport("bundled_nerd_font", bundled_nerd_font_mod);
     if (freetype_dep) |dep| {
         fontgrid_mod.linkLibrary(dep.artifact("freetype"));
     }
 
-    // Shaper module (HarfBuzz text shaping, Phase 3)
+    // Shaper module (HarfBuzz text shaping)
     const shaper_mod = b.createModule(.{
         .root_source_file = b.path("src/font/Shaper.zig"),
         .target = target,
@@ -389,7 +405,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // -------------------------------------------------------
-    // Phase 2 Plan 04: Integration modules (Window, Input, Surface, App)
+    // Integration modules (Window, Input, Surface, App)
     // -------------------------------------------------------
 
     // GLFW window wrapper (D-14 resize snap, D-15 context detach)
@@ -440,7 +456,7 @@ pub fn build(b: *std.Build) void {
     if (ghostty_vt_mod) |m| {
         render_state_mod.addImport("ghostty-vt", m);
     }
-    // Phase 4: theme import for RendererPalette parameter (added later, forward-declared here)
+    // Theme import for RendererPalette parameter (forward-declared here)
     if (freetype_dep) |dep| {
         render_state_mod.linkLibrary(dep.artifact("freetype"));
     }
@@ -485,7 +501,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // App config module (Phase 4: full TOML-based config system)
+    // App config module (full TOML-based config system)
     const config_mod = b.createModule(.{
         .root_source_file = b.path("src/config/Config.zig"),
         .target = target,
@@ -577,7 +593,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // -------------------------------------------------------
-    // Phase 5 Plan 01: Layout module (binary tree pane model, tabs)
+    // Layout module (binary tree pane model, tabs)
     // -------------------------------------------------------
 
     const layout_mod = b.createModule(.{
@@ -593,7 +609,7 @@ pub fn build(b: *std.Build) void {
     config_loader_mod.addImport("layout", layout_mod);
 
     // -------------------------------------------------------
-    // Phase 4 Plan 02: Keybinding system modules (defined early for exe + surface + test reuse)
+    // Keybinding system modules (defined early for exe + surface + test reuse)
     // -------------------------------------------------------
 
     // Keybinding types, parser, map builder, reserved keys
@@ -712,6 +728,7 @@ pub fn build(b: *std.Build) void {
     font_test_mod.addImport("glyph_atlas", atlas_mod);
     font_test_mod.addImport("rasterizer", rasterizer_mod);
     font_test_mod.addImport("fontgrid", fontgrid_mod);
+    font_test_mod.addImport("tofu", tofu_mod);
 
     const font_tests = b.addTest(.{
         .root_module = font_test_mod,
@@ -754,7 +771,7 @@ pub fn build(b: *std.Build) void {
     const run_input_encoder_tests = b.addRunArtifact(input_encoder_tests);
     test_step.dependOn(&run_input_encoder_tests.step);
 
-    // Shaper tests (Phase 3 Wave 0 stubs + HarfBuzz buffer tests)
+    // Shaper tests (HarfBuzz buffer tests)
     const shaper_test_mod = b.createModule(.{
         .root_source_file = b.path("tests/shaper_test.zig"),
         .target = target,
@@ -773,7 +790,7 @@ pub fn build(b: *std.Build) void {
     const run_shaper_tests = b.addRunArtifact(shaper_tests);
     test_step.dependOn(&run_shaper_tests.step);
 
-    // Config system tests (Phase 4)
+    // Config system tests
     const config_test_mod = b.createModule(.{
         .root_source_file = b.path("tests/config_test.zig"),
         .target = target,
@@ -794,7 +811,7 @@ pub fn build(b: *std.Build) void {
     const run_config_tests = b.addRunArtifact(config_tests);
     test_step.dependOn(&run_config_tests.step);
 
-    // RenderState tests (Phase 3: shaping-aware rendering)
+    // RenderState tests (shaping-aware rendering)
     const render_state_test_mod = b.createModule(.{
         .root_source_file = b.path("tests/render_state_test.zig"),
         .target = target,
@@ -808,7 +825,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_render_state_tests.step);
 
     // -------------------------------------------------------
-    // Phase 4 Plan 02: Keybinding tests
+    // Keybinding tests
     // -------------------------------------------------------
 
     // Keybinding inline tests (keybindings.zig)
@@ -845,7 +862,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_keybinding_tests.step);
 
     // -------------------------------------------------------
-    // Phase 5 Plan 01: Layout tests (binary tree pane model, tabs)
+    // Layout tests (binary tree pane model, tabs)
     // -------------------------------------------------------
 
     const layout_test_mod = b.createModule(.{
@@ -858,7 +875,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_layout_tests.step);
 
     // -------------------------------------------------------
-    // Phase 4 Plan 03: Theme and color palette modules
+    // Theme and color palette modules
     // -------------------------------------------------------
 
     // Theme module (hex parsing, RendererPalette, palette conversion)
@@ -914,7 +931,7 @@ pub fn build(b: *std.Build) void {
     app_mod.addImport("icon", icon_mod);
 
     // -------------------------------------------------------
-    // Phase 6 Plan 01: Search modules (scrollback search)
+    // Search modules (scrollback search)
     // -------------------------------------------------------
 
     const search_state_mod = b.createModule(.{
@@ -965,7 +982,7 @@ pub fn build(b: *std.Build) void {
     const run_search_overlay_tests = b.addRunArtifact(search_overlay_tests);
     test_step.dependOn(&run_search_overlay_tests.step);
 
-    // Phase 6 Plan 02: URL detection modules (clickable URLs)
+    // URL detection modules (clickable URLs)
     // -------------------------------------------------------
 
     const url_detector_mod = b.createModule(.{
@@ -1016,7 +1033,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_open_url_tests.step);
 
     // -------------------------------------------------------
-    // Phase 6 Plan 03: Bell notification modules
+    // Bell notification modules
     // -------------------------------------------------------
 
     const bell_state_mod = b.createModule(.{
@@ -1046,7 +1063,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_system_beep_tests.step);
 
     // -------------------------------------------------------
-    // Phase 7 Plan 01: Agent monitoring modules
+    // Agent monitoring modules
     // -------------------------------------------------------
 
     const presets_mod = b.createModule(.{
@@ -1098,7 +1115,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_agent_detector_tests.step);
 
     // -------------------------------------------------------
-    // Phase 8 Plan 01: Notification modules
+    // Notification modules
     // -------------------------------------------------------
 
     const notification_mod = b.createModule(.{
@@ -1129,7 +1146,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_notification_manager_tests.step);
 
     // -------------------------------------------------------
-    // Phase 7 Plan 02: Status bar renderer module
+    // Status bar renderer module
     // -------------------------------------------------------
 
     const status_bar_renderer_mod = b.createModule(.{
@@ -1137,6 +1154,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    status_bar_renderer_mod.addImport("agent_state", agent_state_mod);
 
     // Wire into app
     app_mod.addImport("status_bar_renderer", status_bar_renderer_mod);
@@ -1147,7 +1165,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_status_bar_tests.step);
 
     // -------------------------------------------------------
-    // Phase 9 Plan 02: E2E test step (headless PTY-based platform tests)
+    // E2E test step (headless PTY-based platform tests)
     // -------------------------------------------------------
     const e2e_test_step = b.step("test-e2e", "Run E2E platform tests (spawns real shells)");
 

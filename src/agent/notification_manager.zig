@@ -5,7 +5,7 @@
 ///   - Window focus suppression (D-05: skip when PTerm is focused)
 ///   - Per-pane cooldown (D-02: default 30s between notifications per pane)
 ///
-/// Uses AutoHashMapUnmanaged with allocator-per-call pattern (Phase 02 decision).
+/// Uses AutoHashMapUnmanaged with allocator-per-call pattern.
 const std = @import("std");
 const notification = @import("notification");
 
@@ -70,8 +70,7 @@ pub const NotificationManager = struct {
     }
 
     /// Remove a pane's cooldown entry (pane closed).
-    pub fn removePane(self: *NotificationManager, allocator: std.mem.Allocator, pane_id: u32) void {
-        _ = allocator;
+    pub fn removePane(self: *NotificationManager, pane_id: u32) void {
         _ = self.last_notify.fetchRemove(pane_id);
     }
 
@@ -160,7 +159,7 @@ test "removePane cleans up cooldown entry" {
     try std.testing.expect(!mgr.shouldNotify(1, false, t1 + 1_000_000_000));
 
     // Remove pane
-    mgr.removePane(allocator, 1);
+    mgr.removePane(1);
 
     // After removal -- should be true (no cooldown entry)
     try std.testing.expect(mgr.shouldNotify(1, false, t1 + 1_000_000_000));

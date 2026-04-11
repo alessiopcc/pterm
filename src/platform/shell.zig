@@ -213,7 +213,7 @@ pub fn getAvailableShells() []const ShellConfig {
     return &known_shells;
 }
 
-/// Lightweight display-oriented shell info for the ShellPicker overlay (Phase 11).
+/// Lightweight display-oriented shell info for the ShellPicker overlay.
 pub const ShellInfo = struct {
     name: []const u8, // e.g. "bash"
     path: []const u8, // e.g. "/usr/bin/bash"
@@ -274,7 +274,7 @@ pub fn filterAvailableShells(
 }
 
 // -------------------------------------------------------
-// Tests (Phase 11)
+// Tests
 // -------------------------------------------------------
 
 test "findExecutable is callable (pub visibility)" {

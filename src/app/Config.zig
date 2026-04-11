@@ -1,4 +1,4 @@
-/// Minimal hardcoded config for Phase 2 (TOML config deferred to Phase 4).
+/// Minimal hardcoded config (TOML config in Config.zig).
 ///
 /// Provides default terminal configuration values. All fields have sensible
 /// defaults that match the UI-SPEC contract.

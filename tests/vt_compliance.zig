@@ -269,7 +269,7 @@ test "default config values" {
     try testing.expect(cfg.utf8_only);
 }
 
-// --- Observer onSequence (D-06, Phase 7 integration point) ---
+// --- Observer onSequence ---
 
 test "observer onSequence field exists and notify handles sequence event" {
     const obs = observer_mod.Observer{};

@@ -17,6 +17,12 @@ pub const PTermTerminal = struct {
     allocator: std.mem.Allocator,
     observer: Observer,
     config: Config,
+    /// Persistent VT stream — reused across feedBytes calls to preserve
+    /// parser state for escape sequences split across read boundaries.
+    /// Lazily initialized on first feedBytes call (not in init) because
+    /// the stream captures a pointer to `terminal` — if created during
+    /// init the struct may move when returned by value, invalidating it.
+    vt_stream: ?ghostty_vt.TerminalStream,
 
     pub fn init(alloc: std.mem.Allocator, config: Config) !PTermTerminal {
         const t: ghostty_vt.Terminal = try .init(alloc, .{
@@ -28,10 +34,12 @@ pub const PTermTerminal = struct {
             .allocator = alloc,
             .observer = .{},
             .config = config,
+            .vt_stream = null,
         };
     }
 
     pub fn deinit(self: *PTermTerminal) void {
+        if (self.vt_stream) |*s| s.deinit();
         self.terminal.deinit(self.allocator);
     }
 
@@ -44,9 +52,13 @@ pub const PTermTerminal = struct {
         // Notify observer before parsing (D-06)
         self.observer.notify(.{ .output = bytes });
 
-        // Feed raw bytes through the VT stream parser
-        var stream = self.terminal.vtStream();
-        stream.nextSlice(bytes);
+        // Lazily create the persistent stream on first call.
+        // At this point `self` is at its final heap address, so
+        // the stream's internal pointer to `terminal` stays valid.
+        if (self.vt_stream == null) {
+            self.vt_stream = self.terminal.vtStream();
+        }
+        self.vt_stream.?.nextSlice(bytes);
 
         // Notify screen change after parsing
         self.observer.notify(.screen_change);

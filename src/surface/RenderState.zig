@@ -1,10 +1,10 @@
 /// Build a RenderState snapshot from the terminal for GPU rendering.
 ///
 /// Two-phase approach to minimize mutex hold time:
-///   Phase 1 (under mutex): copy cell data from terminal into flat arrays
-///   Phase 2 (no mutex): shape text via HarfBuzz, resolve glyphs, build CellInstances
+///   Pass 1 (under mutex): copy cell data from terminal into flat arrays
+///   Pass 2 (no mutex): shape text via HarfBuzz, resolve glyphs, build CellInstances
 ///
-/// Phase 2 uses dirty-row caching with a persistent allocator (page_allocator).
+/// Pass 2 uses dirty-row caching with a persistent allocator (page_allocator).
 /// The frame arena resets every frame, so only per-frame output buffers use it.
 /// Row cache survives across frames to avoid reshaping unchanged rows.
 const std = @import("std");
@@ -72,7 +72,7 @@ pub const RowCache = struct {
     }
 };
 
-/// Phase 1: Copy cell data from terminal. Call while holding the mutex.
+/// Pass 1: Copy cell data from terminal. Call while holding the mutex.
 /// Accepts an optional RendererPalette for config-driven default colors.
 /// If pal is null, falls back to the compile-time palette.
 pub fn snapshotCells(
@@ -202,7 +202,7 @@ pub fn snapshotCells(
     };
 }
 
-/// Phase 2: Build CellInstance arrays from snapshot. Call WITHOUT the mutex.
+/// Pass 2: Build CellInstance arrays from snapshot. Call WITHOUT the mutex.
 /// Shapes text through HarfBuzz for ligature support, with dirty-row caching.
 /// Accepts an optional RendererPalette for config-driven cursor and background colors.
 pub fn buildFromSnapshot(
@@ -617,7 +617,15 @@ fn shapeRowInto(
                     if (c.wide) per_cp_flags |= CellFlags.WIDE_CHAR;
                     if (cell_mod.isEmojiCodepoint(cp)) per_cp_flags |= CellFlags.COLOR_GLYPH;
 
-                    const gr = font_grid.getGlyph(cp) catch continue;
+                    // For non-ASCII, try fallback fonts first (symbol fonts have
+                    // better coverage for Dingbats, arrows, etc. than coding fonts).
+                    // Exception: box-drawing and block elements must use the primary
+                    // font for correct cell grid alignment.
+                    const gr = if (cp > 0x7F and !preferPrimaryFont(cp))
+                        (font_grid.getGlyphFromFallbacks(cp) catch
+                            (font_grid.getGlyph(cp) catch continue))
+                    else
+                        font_grid.getGlyph(cp) catch continue;
                     const sby: i32 = @as(i32, @intFromFloat(metrics.ascender)) - gr.bearing_y;
                     text_buf[text_count.*] = CellInstance{
                         .grid_col = @intCast(ci), .grid_row = row,
@@ -650,24 +658,30 @@ fn shapeRowInto(
                     var flags: u16 = 0;
                     if (glyph.num_chars > 1) flags |= CellFlags.LIGATURE_HEAD;
 
-                    // Use glyph ID for primary font (shaping was done with it).
-                    const glyph_result = font_grid.getGlyphByID(0, glyph.glyph_id, false) catch {
-                        // Fallback: codepoint-based lookup through font chain.
-                        const cp = if (glyph.cluster < cp_len) run_cps[glyph.cluster] else first_cp;
-                        const fallback = font_grid.getGlyph(cp) catch continue;
-                        const sby: i32 = @as(i32, @intFromFloat(metrics.ascender)) - fallback.bearing_y;
-                        text_buf[text_count.*] = CellInstance{
-                            .grid_col = glyph_col, .grid_row = row,
-                            .atlas_x = fallback.region.x, .atlas_y = fallback.region.y,
-                            .atlas_w = fallback.region.w, .atlas_h = fallback.region.h,
-                            .bearing_x = @intCast(std.math.clamp(fallback.bearing_x, -32768, 32767)),
-                            .bearing_y = @intCast(std.math.clamp(sby, -32768, 32767)),
-                            .fg_color = fg.toU32(), .bg_color = bg.toU32(),
-                            .flags = flags,
+                    // For non-ASCII codepoints, try the full fallback chain first.
+                    // Symbol/fallback fonts often have better glyphs for special
+                    // characters (Dingbats, Nerd Font icons, etc.) than the primary
+                    // coding font whose cmap entry may be a placeholder.
+                    const cp = if (glyph.cluster < cp_len) run_cps[glyph.cluster] else first_cp;
+                    const glyph_result = if (cp > 0x7F and !preferPrimaryFont(cp))
+                        (font_grid.getGlyphFromFallbacks(cp) catch
+                            (font_grid.getGlyphByID(0, glyph.glyph_id, false) catch continue))
+                    else
+                        font_grid.getGlyphByID(0, glyph.glyph_id, false) catch {
+                            const fallback = font_grid.getGlyph(cp) catch continue;
+                            const sby: i32 = @as(i32, @intFromFloat(metrics.ascender)) - fallback.bearing_y;
+                            text_buf[text_count.*] = CellInstance{
+                                .grid_col = glyph_col, .grid_row = row,
+                                .atlas_x = fallback.region.x, .atlas_y = fallback.region.y,
+                                .atlas_w = fallback.region.w, .atlas_h = fallback.region.h,
+                                .bearing_x = @intCast(std.math.clamp(fallback.bearing_x, -32768, 32767)),
+                                .bearing_y = @intCast(std.math.clamp(sby, -32768, 32767)),
+                                .fg_color = fg.toU32(), .bg_color = bg.toU32(),
+                                .flags = flags,
+                            };
+                            text_count.* += 1;
+                            continue;
                         };
-                        text_count.* += 1;
-                        continue;
-                    };
 
                     const sby: i32 = @as(i32, @intFromFloat(metrics.ascender)) - glyph_result.bearing_y;
                     text_buf[text_count.*] = CellInstance{
@@ -767,7 +781,7 @@ fn computeRowHash(row_cells: []const CellSnapshot) u64 {
     return hasher.final();
 }
 
-/// Phase 6: Highlight search matches in cell instances by overriding background colors.
+/// Highlight search matches in cell instances by overriding background colors.
 /// Iterates bg_cells and overrides backgrounds for cells within match ranges.
 /// Keeps search highlighting decoupled from the snapshot pipeline.
 pub fn highlightSearchMatches(
@@ -820,4 +834,19 @@ fn resolveColor(vt_color: anytype, default: Color, pal: ?*const RendererPalette)
         .rgb => |rgb| Color{ .r = rgb.r, .g = rgb.g, .b = rgb.b },
         .palette => |idx| if (pal) |p| p.resolve256(idx) else palette.resolve256(idx),
     };
+}
+
+/// Returns true for codepoints that should use the primary (monospace) font
+/// rather than fallback symbol fonts. Box-drawing and block elements must
+/// come from the primary font for correct cell grid alignment.
+fn preferPrimaryFont(cp: u21) bool {
+    // Box Drawing (U+2500-U+257F)
+    if (cp >= 0x2500 and cp <= 0x257F) return true;
+    // Block Elements (U+2580-U+259F)
+    if (cp >= 0x2580 and cp <= 0x259F) return true;
+    // Braille Patterns (U+2800-U+28FF)
+    if (cp >= 0x2800 and cp <= 0x28FF) return true;
+    // Powerline symbols (U+E0A0-U+E0D4) — should match primary font metrics
+    if (cp >= 0xE0A0 and cp <= 0xE0D4) return true;
+    return false;
 }

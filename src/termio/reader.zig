@@ -64,8 +64,17 @@ pub const PtyReader = struct {
             };
 
             if (n > 0) {
-                // Push to mailbox (non-blocking, drops bytes if full)
-                _ = self.mailbox.push(read_buf[0..n]);
+                // Push to mailbox, retrying until all bytes are delivered.
+                // Dropping bytes mid-stream corrupts escape sequences.
+                var sent: usize = 0;
+                while (sent < n and self.running.load(.acquire)) {
+                    const wrote = self.mailbox.push(read_buf[sent..n]);
+                    sent += wrote;
+                    if (sent < n) {
+                        // Mailbox full — yield briefly and retry
+                        std.Thread.yield() catch {};
+                    }
+                }
             } else {
                 // No data available, yield to avoid busy-waiting
                 std.Thread.sleep(1 * std.time.ns_per_ms);

@@ -34,6 +34,7 @@ const max_import_depth: u8 = 10;
 const FileFont = struct {
     family: ?[]const u8 = null,
     size: f64 = 13.0,
+    fallback: ?[]const []const u8 = null,
 };
 
 const FileWindow = struct {
@@ -67,7 +68,7 @@ const FileUiColors = struct {
     pane_border_active: ?[]const u8 = null,
     status_bar_bg: ?[]const u8 = null,
     agent_alert: ?[]const u8 = null,
-    // Phase 6: search, URL, bell UI colors
+    // Search, URL, bell UI colors
     search_bar_bg: ?[]const u8 = null,
     search_match: ?[]const u8 = null,
     search_current_match: ?[]const u8 = null,
@@ -220,6 +221,7 @@ fn mergeConfigs(base: Config, over: Config) Config {
     // Font
     if (over.font.family) |v| result.font.family = v;
     if (over.font.size != Config.default_font_size) result.font.size = over.font.size;
+    if (over.font.fallback) |v| result.font.fallback = v;
 
     // Window
     if (!std.mem.eql(u8, over.window.title, "PTerm")) result.window.title = over.window.title;
@@ -263,7 +265,7 @@ fn mergeConfigs(base: Config, over: Config) Config {
     if (over.colors.ui.bell_flash) |v| result.colors.ui.bell_flash = v;
     if (over.colors.ui.bell_badge) |v| result.colors.ui.bell_badge = v;
 
-    // Agent notification fields (Phase 8)
+    // Agent notification fields
     if (!over.agent.notifications) result.agent.notifications = over.agent.notifications;
     if (!over.agent.notification_sound) result.agent.notification_sound = over.agent.notification_sound;
     if (over.agent.notification_cooldown != 30) result.agent.notification_cooldown = over.agent.notification_cooldown;
@@ -286,6 +288,13 @@ fn applyFileConfig(allocator: std.mem.Allocator, base: Config, file: FileConfig)
     if (file.font) |f| {
         if (f.family) |v| result.font.family = try allocator.dupe(u8, v);
         if (f.size != 13.0) result.font.size = @floatCast(f.size);
+        if (f.fallback) |v| {
+            const duped = try allocator.alloc([]const u8, v.len);
+            for (v, 0..) |arg, i| {
+                duped[i] = try allocator.dupe(u8, arg);
+            }
+            result.font.fallback = duped;
+        }
     }
 
     if (file.window) |w| {
