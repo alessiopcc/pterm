@@ -1,4 +1,4 @@
-/// Minimal hardcoded config (TOML config in Config.zig).
+/// Minimal hardcoded config for Phase 2 (TOML config deferred to Phase 4).
 ///
 /// Provides default terminal configuration values. All fields have sensible
 /// defaults that match the UI-SPEC contract.
@@ -10,5 +10,5 @@ pub const Config = struct {
     rows: u16 = 48,
     grid_padding: f32 = 4.0,
     scrollback_lines: u32 = 10_000,
-    window_title: [:0]const u8 = "PTerm",
+    window_title: [:0]const u8 = "TermP",
 };

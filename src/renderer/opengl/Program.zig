@@ -101,14 +101,6 @@ pub const Program = struct {
         }
     }
 
-    /// Set a float uniform by name.
-    pub fn setUniformFloat(self: *const Program, name: [*:0]const u8, value: gl.float) void {
-        const loc = gl.GetUniformLocation(self.id, name);
-        if (loc >= 0) {
-            gl.Uniform1f(loc, value);
-        }
-    }
-
     // -- Private helpers ------------------------------------------------
 
     fn logShaderError(shader: gl.uint) void {

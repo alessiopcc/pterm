@@ -1,8 +1,5 @@
 /// Shared types for the font subsystem.
 
-/// Glyph bitmap pixel format.
-pub const GlyphFormat = enum { grayscale, rgba };
-
 /// Result of rasterizing a single glyph via FreeType.
 pub const GlyphBitmap = struct {
     data: []const u8,
@@ -11,21 +8,13 @@ pub const GlyphBitmap = struct {
     bearing_x: i32,
     bearing_y: i32,
     advance: u32,
-    format: GlyphFormat = .grayscale,
 };
 
 /// Cache key for glyph atlas lookup.
-/// The `is_glyph_index` field disambiguates between codepoint-based lookups
-/// (getGlyph, where glyph_id is a Unicode codepoint) and glyph-index-based
-/// lookups (getGlyphByID, where glyph_id is a font-internal glyph index
-/// from HarfBuzz shaping). Without this, the two namespaces collide: e.g.
-/// HarfBuzz glyph index 101 for 'L' would hit the cached bitmap for 'e'
-/// (Unicode codepoint 101), causing wrong characters to render.
 pub const GlyphKey = struct {
     font_index: u8,
     glyph_id: u32,
     size_px: u16,
-    is_glyph_index: bool = false,
 };
 
 /// Region within the glyph atlas texture.
@@ -56,5 +45,4 @@ pub const FontConfig = struct {
     min_size_pt: f32 = 6.0,
     max_size_pt: f32 = 72.0,
     dpi_scale: f32 = 1.0,
-    fallback: ?[]const []const u8 = null, // D-04: User-specified fallback fonts
 };

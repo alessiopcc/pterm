@@ -86,15 +86,6 @@ pub const palette = struct {
     }
 };
 
-/// Bit flags for CellInstance.flags field.
-pub const CellFlags = struct {
-    pub const WIDE_CHAR: u16 = 0x0001;
-    pub const WIDE_CONTINUATION: u16 = 0x0002;
-    pub const LIGATURE_HEAD: u16 = 0x0004;
-    pub const LIGATURE_CONTINUATION: u16 = 0x0008;
-    pub const COLOR_GLYPH: u16 = 0x0010;
-};
-
 /// Per-cell instance data for GPU instanced rendering (D-03).
 /// 32 bytes, aligned for GPU buffer upload.
 pub const CellInstance = extern struct {
@@ -136,7 +127,7 @@ pub const CursorState = struct {
     color: u32,
 };
 
-pub const CursorStyle = enum { block, hollow, ibeam, underline };
+pub const CursorStyle = enum { block, ibeam, underline };
 
 /// Adaptive frame scheduler (D-16).
 pub const FrameScheduler = struct {

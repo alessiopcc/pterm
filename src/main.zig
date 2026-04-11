@@ -1,24 +1,25 @@
 const std = @import("std");
-const ghostty_vt = @import("ghostty-vt");
+const App = @import("app").App;
 
 pub fn main() !void {
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
-    const alloc = gpa.allocator();
+    const allocator = gpa.allocator();
 
-    // Create a terminal with 80x24 dimensions
-    var t: ghostty_vt.Terminal = try .init(alloc, .{
-        .cols = 80,
-        .rows = 24,
-    });
-    defer t.deinit(alloc);
+    // Parse CLI args
+    var perf_logging = false;
+    var debug_keys = false;
+    var args = try std.process.argsWithAllocator(allocator);
+    defer args.deinit();
+    _ = args.next(); // skip exe name
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--perf")) perf_logging = true;
+        if (std.mem.eql(u8, arg, "--debug-keys")) debug_keys = true;
+    }
 
-    // Feed a test string to the terminal
-    try t.printString("Hello from TermP!");
+    var app = try App.init(allocator, .{ .perf_logging = perf_logging, .debug_keys = debug_keys });
+    defer app.deinit();
 
-    // Read back the screen text
-    const str = try t.plainString(alloc);
-    defer alloc.free(str);
-
-    std.debug.print("Screen output: {s}\n", .{str});
+    try app.start();
+    try app.run();
 }

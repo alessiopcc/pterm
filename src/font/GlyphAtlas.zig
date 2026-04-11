@@ -36,25 +36,11 @@ pub const GlyphAtlas = struct {
     cache: std.AutoHashMapUnmanaged(GlyphKey, CachedGlyph),
     dirty: bool,
 
-    // Color (RGBA) atlas for emoji and color glyphs.
-    color_pixels: []u8,
-    color_size: u32,
-    color_max_size: u32,
-    color_shelves: std.ArrayListUnmanaged(Shelf),
-    color_cache: std.AutoHashMapUnmanaged(GlyphKey, CachedGlyph),
-    color_dirty: bool,
-
     /// Create a new atlas with the given initial dimensions (square).
     pub fn init(allocator: std.mem.Allocator, initial_size: u32) !GlyphAtlas {
         const pixel_count = @as(usize, initial_size) * @as(usize, initial_size);
         const pixels = try allocator.alloc(u8, pixel_count);
         @memset(pixels, 0);
-
-        // Color atlas starts smaller (512x512, 4 bytes per pixel).
-        const color_initial: u32 = 512;
-        const color_pixel_count = @as(usize, color_initial) * @as(usize, color_initial) * 4;
-        const color_pixels = try allocator.alloc(u8, color_pixel_count);
-        @memset(color_pixels, 0);
 
         return GlyphAtlas{
             .allocator = allocator,
@@ -64,12 +50,6 @@ pub const GlyphAtlas = struct {
             .shelves = .empty,
             .cache = .empty,
             .dirty = false,
-            .color_pixels = color_pixels,
-            .color_size = color_initial,
-            .color_max_size = 2048,
-            .color_shelves = .empty,
-            .color_cache = .empty,
-            .color_dirty = false,
         };
     }
 
@@ -78,9 +58,6 @@ pub const GlyphAtlas = struct {
         self.allocator.free(self.pixels);
         self.shelves.deinit(self.allocator);
         self.cache.deinit(self.allocator);
-        self.allocator.free(self.color_pixels);
-        self.color_shelves.deinit(self.allocator);
-        self.color_cache.deinit(self.allocator);
         self.* = undefined;
     }
 
@@ -150,76 +127,12 @@ pub const GlyphAtlas = struct {
         self.dirty = false;
     }
 
-    /// Insert a color (RGBA) glyph bitmap into the color atlas.
-    pub fn insertColor(self: *GlyphAtlas, key: GlyphKey, bitmap: GlyphBitmap) !CachedGlyph {
-        if (self.color_cache.get(key)) |cached| {
-            return cached;
-        }
-
-        const w: u16 = @intCast(bitmap.width);
-        const h: u16 = @intCast(bitmap.height);
-
-        if (w == 0 or h == 0) {
-            const entry = CachedGlyph{
-                .region = AtlasRegion{ .x = 0, .y = 0, .w = 0, .h = 0 },
-                .bearing_x = bitmap.bearing_x,
-                .bearing_y = bitmap.bearing_y,
-                .advance = bitmap.advance,
-            };
-            try self.color_cache.put(self.allocator, key, entry);
-            return entry;
-        }
-
-        const region = try self.findOrCreateColorRegion(w, h);
-        self.copyColorPixels(region, bitmap);
-        self.color_dirty = true;
-
-        const entry = CachedGlyph{
-            .region = region,
-            .bearing_x = bitmap.bearing_x,
-            .bearing_y = bitmap.bearing_y,
-            .advance = bitmap.advance,
-        };
-        try self.color_cache.put(self.allocator, key, entry);
-        return entry;
-    }
-
-    /// Look up a previously cached color glyph.
-    pub fn lookupColor(self: *const GlyphAtlas, key: GlyphKey) ?CachedGlyph {
-        return self.color_cache.get(key);
-    }
-
-    /// Return the raw color pixel buffer for GPU texture upload.
-    pub fn getColorPixels(self: *const GlyphAtlas) []const u8 {
-        return self.color_pixels;
-    }
-
-    /// Current color atlas texture dimension (square: size x size).
-    pub fn getColorSize(self: *const GlyphAtlas) u32 {
-        return self.color_size;
-    }
-
-    /// True if color pixels changed since last GPU upload.
-    pub fn isColorDirty(self: *const GlyphAtlas) bool {
-        return self.color_dirty;
-    }
-
-    /// Mark the color atlas as uploaded (clear dirty flag).
-    pub fn clearColorDirty(self: *GlyphAtlas) void {
-        self.color_dirty = false;
-    }
-
     /// Clear all cached glyphs and shelves (used on font size change).
     pub fn clear(self: *GlyphAtlas) void {
         @memset(self.pixels, 0);
         self.shelves.clearRetainingCapacity();
         self.cache.clearRetainingCapacity();
         self.dirty = true;
-
-        @memset(self.color_pixels, 0);
-        self.color_shelves.clearRetainingCapacity();
-        self.color_cache.clearRetainingCapacity();
-        self.color_dirty = true;
     }
 
     // -- internal helpers --
@@ -303,88 +216,6 @@ pub const GlyphAtlas = struct {
             @memcpy(
                 self.pixels[dst_offset .. dst_offset + glyph_w],
                 bitmap.data[src_offset .. src_offset + glyph_w],
-            );
-        }
-    }
-
-    // -- color atlas internal helpers --
-
-    fn findOrCreateColorRegion(self: *GlyphAtlas, w: u16, h: u16) !AtlasRegion {
-        for (self.color_shelves.items) |*shelf| {
-            if (shelf.height >= h and shelf.next_x + w <= @as(u16, @intCast(self.color_size))) {
-                const region = AtlasRegion{
-                    .x = shelf.next_x,
-                    .y = shelf.y,
-                    .w = w,
-                    .h = h,
-                };
-                shelf.next_x += w;
-                return region;
-            }
-        }
-
-        const shelf_y: u16 = if (self.color_shelves.items.len > 0) blk: {
-            const last = self.color_shelves.items[self.color_shelves.items.len - 1];
-            break :blk last.y + last.height;
-        } else 0;
-
-        if (@as(u32, shelf_y) + @as(u32, h) > self.color_size) {
-            try self.growColor();
-            return self.findOrCreateColorRegion(w, h);
-        }
-
-        try self.color_shelves.append(self.allocator, Shelf{
-            .y = shelf_y,
-            .height = h,
-            .next_x = w,
-        });
-
-        return AtlasRegion{
-            .x = 0,
-            .y = shelf_y,
-            .w = w,
-            .h = h,
-        };
-    }
-
-    fn growColor(self: *GlyphAtlas) !void {
-        const new_size = self.color_size * 2;
-        if (new_size > self.color_max_size) {
-            return error.AtlasFull;
-        }
-
-        const new_pixel_count = @as(usize, new_size) * @as(usize, new_size) * 4;
-        const new_pixels = try self.allocator.alloc(u8, new_pixel_count);
-        @memset(new_pixels, 0);
-
-        const old_stride = @as(usize, self.color_size) * 4;
-        const new_stride = @as(usize, new_size) * 4;
-        for (0..@as(usize, self.color_size)) |row| {
-            const old_offset = row * old_stride;
-            const new_offset = row * new_stride;
-            @memcpy(new_pixels[new_offset .. new_offset + old_stride], self.color_pixels[old_offset .. old_offset + old_stride]);
-        }
-
-        self.allocator.free(self.color_pixels);
-        self.color_pixels = new_pixels;
-        self.color_size = new_size;
-        self.color_dirty = true;
-    }
-
-    fn copyColorPixels(self: *GlyphAtlas, region: AtlasRegion, bitmap: GlyphBitmap) void {
-        const atlas_stride = @as(usize, self.color_size) * 4;
-        const glyph_w = @as(usize, region.w);
-        const glyph_h = @as(usize, region.h);
-        const base_x = @as(usize, region.x);
-        const base_y = @as(usize, region.y);
-        const row_bytes = glyph_w * 4;
-
-        for (0..glyph_h) |row| {
-            const src_offset = row * row_bytes;
-            const dst_offset = (base_y + row) * atlas_stride + base_x * 4;
-            @memcpy(
-                self.color_pixels[dst_offset .. dst_offset + row_bytes],
-                bitmap.data[src_offset .. src_offset + row_bytes],
             );
         }
     }

@@ -86,33 +86,27 @@ pub const text_vertex_src =
     \\layout (location = 6) in uint  aFlags;       // bit flags
     \\
     \\uniform mat4 uProjection;
-    \\uniform vec2 uCellSize;       // pixels per cell
-    \\uniform vec2 uAtlasSize;      // grayscale atlas texture dimensions
-    \\uniform vec2 uColorAtlasSize; // color atlas texture dimensions
-    \\uniform vec2 uGridOffset;     // top-left padding
-    \\uniform float uTextScale;     // glyph scale factor (1.0 = normal)
+    \\uniform vec2 uCellSize;    // pixels per cell
+    \\uniform vec2 uAtlasSize;   // atlas texture dimensions
+    \\uniform vec2 uGridOffset;  // top-left padding
     \\
     \\out vec2 vTexCoord;
     \\flat out vec4 vFgColor;
-    \\flat out uint vFlags;
     \\
     \\
 ++ unpack_color_fn ++
     \\void main() {
-    \\    vec2 cellOrigin = uGridOffset + vec2(aGridPos) * uCellSize * uTextScale;
-    \\    vec2 glyphOffset = vec2(aBearing) * uTextScale;
-    \\    vec2 glyphSize = vec2(aAtlasRect.zw) * uTextScale;
+    \\    vec2 cellOrigin = uGridOffset + vec2(aGridPos) * uCellSize;
+    \\    vec2 glyphOffset = vec2(aBearing);
+    \\    vec2 glyphSize = vec2(aAtlasRect.zw);
     \\
     \\    vec2 pos = cellOrigin + glyphOffset + aQuadPos * glyphSize;
     \\    gl_Position = uProjection * vec4(pos, 0.0, 1.0);
     \\
-    \\    // Select atlas size based on whether this is a color glyph
-    \\    uint COLOR_GLYPH = 0x0010u;
-    \\    vec2 atlasSize = ((aFlags & COLOR_GLYPH) != 0u) ? uColorAtlasSize : uAtlasSize;
-    \\    vTexCoord = (vec2(aAtlasRect.xy) + aQuadPos * vec2(aAtlasRect.zw)) / atlasSize;
+    \\    // Atlas UV coordinates
+    \\    vTexCoord = (vec2(aAtlasRect.xy) + aQuadPos * vec2(aAtlasRect.zw)) / uAtlasSize;
     \\
     \\    vFgColor = unpackColor(aFgColor);
-    \\    vFlags = aFlags;
     \\}
     \\
 ;
@@ -122,26 +116,15 @@ pub const text_fragment_src =
     \\
     \\in vec2 vTexCoord;
     \\flat in vec4 vFgColor;
-    \\flat in uint vFlags;
     \\
-    \\uniform sampler2D uAtlasTexture;       // texture unit 0: grayscale
-    \\uniform sampler2D uColorAtlasTexture;  // texture unit 1: RGBA color
+    \\uniform sampler2D uAtlasTexture;
     \\
     \\out vec4 FragColor;
     \\
     \\void main() {
-    \\    uint COLOR_GLYPH = 0x0010u;
-    \\    if ((vFlags & COLOR_GLYPH) != 0u) {
-    \\        // Color emoji: sample RGBA directly from color atlas
-    \\        vec4 texel = texture(uColorAtlasTexture, vTexCoord);
-    \\        if (texel.a < 0.01) discard;
-    \\        FragColor = texel;
-    \\    } else {
-    \\        // Grayscale text: use red channel as alpha, tint with fg color
-    \\        float alpha = texture(uAtlasTexture, vTexCoord).r;
-    \\        if (alpha < 0.01) discard;
-    \\        FragColor = vec4(vFgColor.rgb, vFgColor.a * alpha);
-    \\    }
+    \\    float alpha = texture(uAtlasTexture, vTexCoord).r;
+    \\    if (alpha < 0.01) discard;
+    \\    FragColor = vec4(vFgColor.rgb, vFgColor.a * alpha);
     \\}
     \\
 ;
@@ -170,7 +153,6 @@ pub const cursor_vertex_src =
     \\
     \\flat out vec4 vCursorColor;
     \\flat out uint vFlags;
-    \\out vec2 vQuadUV;
     \\
     \\
 ++ unpack_color_fn ++
@@ -180,7 +162,6 @@ pub const cursor_vertex_src =
     \\    gl_Position = uProjection * vec4(pos, 0.0, 1.0);
     \\    vCursorColor = unpackColor(aFgColor);
     \\    vFlags = aFlags;
-    \\    vQuadUV = aQuadPos;
     \\}
     \\
 ;
@@ -190,37 +171,12 @@ pub const cursor_fragment_src =
     \\
     \\flat in vec4 vCursorColor;
     \\flat in uint vFlags;
-    \\in vec2 vQuadUV;
-    \\
-    \\uniform vec2 uCellSize;
     \\
     \\out vec4 FragColor;
     \\
     \\void main() {
-    \\    uint style = vFlags & 0xFFu;
-    \\    float alpha = 0.7;
-    \\
-    \\    if (style == 1u) {
-    \\        // ibeam: 2px wide left edge
-    \\        float px = vQuadUV.x * uCellSize.x;
-    \\        if (px > 2.0) discard;
-    \\    } else if (style == 2u) {
-    \\        // underline: 2px tall bottom edge
-    \\        float py = (1.0 - vQuadUV.y) * uCellSize.y;
-    \\        if (py > 2.0) discard;
-    \\    } else if (style == 3u) {
-    \\        // hollow: 1px outline rectangle
-    \\        float px = vQuadUV.x * uCellSize.x;
-    \\        float py = vQuadUV.y * uCellSize.y;
-    \\        float maxX = uCellSize.x;
-    \\        float maxY = uCellSize.y;
-    \\        bool onEdge = (px < 1.5 || px > maxX - 1.5 || py < 1.5 || py > maxY - 1.5);
-    \\        if (!onEdge) discard;
-    \\        alpha = 0.9;
-    \\    }
-    \\    // style == 0: block (full fill)
-    \\
-    \\    FragColor = vec4(vCursorColor.rgb, vCursorColor.a * alpha);
+    \\    // Cursor style: 0 = block (fill), 1 = ibeam (left edge), 2 = underline (bottom edge)
+    \\    FragColor = vec4(vCursorColor.rgb, vCursorColor.a * 0.7);
     \\}
     \\
 ;

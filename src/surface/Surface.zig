@@ -18,9 +18,6 @@ const input_encoder = @import("input_encoder");
 const render_state = @import("render_state");
 const opengl_backend_mod = @import("opengl_backend");
 const config_mod = @import("config");
-const keybindings = @import("keybindings");
-const theme_mod = @import("theme");
-const selection_mod = @import("selection");
 
 const TermIO = termio_mod.TermIO;
 const Renderer = renderer_mod.Renderer;
@@ -33,7 +30,6 @@ const FontConfig = font_types.FontConfig;
 const Window = window_mod.Window;
 const OpenGLBackend = opengl_backend_mod.OpenGLBackend;
 const Config = config_mod.Config;
-const RendererPalette = theme_mod.RendererPalette;
 
 pub const SurfaceOptions = struct {
     perf_logging: bool = false,
@@ -49,7 +45,8 @@ pub const Surface = struct {
     config: Config,
     perf_logging: bool,
     debug_keys: bool,
-    debug_key_file: ?std.fs.File,
+    debug_key_log: [64 * 1024]u8,
+    debug_key_log_len: usize,
 
     // Cursor blink state
     cursor_blink_timer: i128,
@@ -81,21 +78,9 @@ pub const Surface = struct {
     pending_font_change: std.atomic.Value(bool),
     new_font_size: std.atomic.Value(u32), // stored as size_pt * 100 (fixed point)
 
-    // D-30: Runtime color palette from config (bridges config hex -> renderer Color)
-    renderer_palette: RendererPalette,
-
     // Frame counter for periodic diagnostics logging (D-17)
     frame_count: u64,
 
-    // Text selection state (clipboard integration)
-    selection: selection_mod.Selection,
-
-    // Scroll offset for selection coordinate mapping (synced from PaneData)
-    scroll_offset: u32,
-
-    // Keybinding map for action dispatch
-    keybinding_map: keybindings.KeybindingMap,
-    last_mods: keybindings.Modifiers,
 
     // GL procedure table (initialized on render thread, stored here for lifetime)
     gl_procs: gl.ProcTable,
@@ -104,25 +89,15 @@ pub const Surface = struct {
         // Create FontGrid from config
         const dpi_scale = window.getContentScale();
         const font_config = FontConfig{
-            .family = config.font_family(),
-            .size_pt = config.font_size_pt(),
+            .family = config.font_family,
+            .size_pt = config.font_size_pt,
             .dpi_scale = dpi_scale,
-            .fallback = config.font_fallback(),
         };
 
         const font_grid = try allocator.create(FontGrid);
         errdefer allocator.destroy(font_grid);
         font_grid.* = try FontGrid.init(allocator, font_config);
         errdefer font_grid.deinit();
-
-        // Build keybinding map from defaults (user overrides via config)
-        // Convert config keybinding entries to UserBinding slice for buildMap
-        const user_bindings: ?[]const keybindings.UserBinding = if (config.keybindings.len > 0)
-            @ptrCast(config.keybindings)
-        else
-            null;
-        var kb_map = try keybindings.buildMap(allocator, user_bindings);
-        errdefer kb_map.deinit();
 
         return Surface{
             .termio = termio,
@@ -148,26 +123,23 @@ pub const Surface = struct {
             .osc_title = [_]u8{0} ** 256,
             .osc_title_len = std.atomic.Value(u32).init(0),
             .pending_font_change = std.atomic.Value(bool).init(false),
-            .new_font_size = std.atomic.Value(u32).init(@intFromFloat(config.font_size_pt() * 100.0)),
-            .renderer_palette = theme_mod.buildRendererPaletteFromConfig(config.colors),
+            .new_font_size = std.atomic.Value(u32).init(@intFromFloat(config.font_size_pt * 100.0)),
             .frame_count = 0,
-            .selection = selection_mod.Selection.init(),
-            .scroll_offset = 0,
-            .keybinding_map = kb_map,
-            .last_mods = .{},
             .perf_logging = options.perf_logging,
             .debug_keys = options.debug_keys,
-            .debug_key_file = if (options.debug_keys)
-                std.fs.cwd().createFile("pterm_debug.log", .{}) catch null
-            else
-                null,
+            .debug_key_log = undefined,
+            .debug_key_log_len = 0,
             .gl_procs = undefined,
         };
     }
 
     pub fn deinit(self: *Surface) void {
-        if (self.debug_key_file) |f| f.close();
-        self.keybinding_map.deinit();
+        if (self.debug_keys and self.debug_key_log_len > 0) {
+            if (std.fs.cwd().createFile("termp_debug.log", .{})) |f| {
+                defer f.close();
+                _ = f.write(self.debug_key_log[0..self.debug_key_log_len]) catch 0;
+            } else |_| {}
+        }
         self.frame_arena.deinit();
         self.font_grid.deinit();
         self.allocator.destroy(self.font_grid);
@@ -213,7 +185,7 @@ pub const Surface = struct {
             backend.resize(fb.width, fb.height);
 
             const metrics = self.font_grid.getMetrics();
-            const padding = self.config.grid_padding();
+            const padding = self.config.grid_padding;
             const uw: f32 = @as(f32, @floatFromInt(fb.width)) - 2.0 * padding;
             const uh: f32 = @as(f32, @floatFromInt(fb.height)) - 2.0 * padding;
             const cols: u16 = @intFromFloat(@min(500.0, @max(1.0, uw / metrics.cell_width)));
@@ -221,38 +193,22 @@ pub const Surface = struct {
             self.termio.resize(cols, rows) catch {};
         }
 
-        // 5. Upload initial atlas textures (grayscale + color)
+        // 5. Upload initial atlas texture
         {
             const atlas = self.font_grid.getAtlas();
             backend.uploadAtlas(atlas.getPixels(), atlas.getSize());
             self.font_grid.getAtlasMut().clearDirty();
-            // Upload initial color atlas (empty but properly sized)
-            backend.uploadColorAtlas(atlas.getColorPixels(), atlas.getColorSize());
-            self.font_grid.getAtlasMut().clearColorDirty();
         }
 
         // 6. Open perf log file if --perf flag (D-17: observable latency measurement)
         const perf_log = if (self.perf_logging)
-            std.fs.cwd().createFile("pterm_perf.log", .{}) catch null
+            std.fs.cwd().createFile("termp_perf.log", .{}) catch null
         else
             null;
 
-        // 7. Render loop with frame rate limiting (~60fps = 16.6ms minimum between frames)
-        const min_frame_ns: i128 = 16_000_000; // 16ms
-        var last_frame_ns: i128 = 0;
-
+        // 7. Render loop
         while (!self.should_quit.load(.acquire)) {
             if (self.frame_requested.swap(false, .acq_rel)) {
-                // Throttle: skip if less than 16ms since last frame
-                const now = std.time.nanoTimestamp();
-                if (now - last_frame_ns < min_frame_ns) {
-                    // Re-request so we render on the next cycle
-                    self.frame_requested.store(true, .release);
-                    std.Thread.sleep(1_000_000); // 1ms
-                    continue;
-                }
-                last_frame_ns = now;
-
                 self.scheduler.markActive();
 
                 // Handle pending font size change
@@ -269,7 +225,7 @@ pub const Surface = struct {
                     // Recompute grid dimensions with new cell size and resize terminal
                     const new_metrics = self.font_grid.getMetrics();
                     const fb2 = self.window.getFramebufferSize();
-                    const padding = self.config.grid_padding();
+                    const padding = self.config.grid_padding;
                     const uw: f32 = @as(f32, @floatFromInt(fb2.width)) - 2.0 * padding;
                     const uh: f32 = @as(f32, @floatFromInt(fb2.height)) - 2.0 * padding;
                     const new_cols: u16 = @intFromFloat(@min(500.0, @max(1.0, uw / new_metrics.cell_width)));
@@ -294,35 +250,22 @@ pub const Surface = struct {
                     self.termio.resize(cols, rows) catch {};
                 }
 
-                // Pass 1: snapshot cell data under mutex (fast copy, no glyph lookups)
+                // Lock terminal, build render state, unlock
                 const snapshot = self.termio.lockTerminal();
-                const snap = render_state.snapshotCells(
+                const metrics = self.font_grid.getMetrics();
+                const fb = self.window.getFramebufferSize();
+                var rs = render_state.buildRenderState(
                     self.frame_arena.allocator(),
                     snapshot,
-                    &self.renderer_palette,
-                    0, // Surface render path has no scrollback viewport
+                    self.font_grid,
+                    fb.width,
+                    fb.height,
                 ) catch {
                     self.termio.unlockTerminal();
                     _ = self.frame_arena.reset(.retain_capacity);
                     continue;
                 };
                 self.termio.unlockTerminal();
-
-                // Pass 2: build CellInstances with glyph lookups (no mutex held)
-                const metrics = self.font_grid.getMetrics();
-                const fb = self.window.getFramebufferSize();
-                var rs = render_state.buildFromSnapshot(
-                    self.frame_arena.allocator(),
-                    snap,
-                    self.font_grid,
-                    fb.width,
-                    fb.height,
-                    &self.renderer_palette,
-                    null, // no per-pane cache in single-surface mode
-                ) catch {
-                    _ = self.frame_arena.reset(.retain_capacity);
-                    continue;
-                };
 
                 // Update cursor blink state
                 self.updateCursorBlink();
@@ -346,17 +289,10 @@ pub const Surface = struct {
                     self.font_grid.getAtlasMut().clearDirty();
                 }
 
-                // Upload color atlas if dirty (new emoji/color glyphs rasterized)
-                if (self.font_grid.getAtlas().isColorDirty()) {
-                    const atlas = self.font_grid.getAtlas();
-                    backend.uploadColorAtlas(atlas.getColorPixels(), atlas.getColorSize());
-                    self.font_grid.getAtlasMut().clearColorDirty();
-                }
+                // Draw frame
+                backend.drawFrame(&rs);
 
-                // Draw frame with config-driven background color
-                backend.drawFrame(&rs, self.renderer_palette.default_bg);
-
-                // Periodic diagnostics: log frame timing to pterm_perf.log (D-17)
+                // Periodic diagnostics: log frame timing to termp_perf.log (D-17)
                 self.frame_count += 1;
                 if (perf_log) |f| {
                     if (self.frame_count == 1 or self.frame_count % 60 == 0) {
@@ -407,59 +343,51 @@ pub const Surface = struct {
     }
 
     /// Handle key input from GLFW callback (main thread).
-    /// Check keybinding map for special keys before VT encoding.
     pub fn handleKeyInput(self: *Surface, key: glfw.Key, action: glfw.Action, mods: glfw.Mods) void {
         // Only handle press and repeat events
         if (action != .press and action != .repeat) return;
 
-        // Store modifier state for charCallback (D-21: logical key detection)
-        self.last_mods = glfwModsToModifiers(mods);
-
-        // --debug-keys: write each keystroke to pterm_debug.log (file opened once at init)
-        if (self.debug_key_file) |f| {
+        // --debug-keys: buffer key events in memory, flush to termp_debug.log on exit
+        if (self.debug_keys) {
             var tmp: [128]u8 = undefined;
             const line = std.fmt.bufPrint(&tmp, "[key] code={d} action={d} ctrl={} shift={} alt={}\n", .{
                 @intFromEnum(key), @intFromEnum(action), mods.control, mods.shift, mods.alt,
             }) catch "";
-            if (line.len > 0) _ = f.write(line) catch 0;
-        }
-
-        // Step A: Check for special (non-printable) keys via keybinding map
-        if (mapGlfwKeyToSpecial(key)) |special| {
-            const combo = keybindings.KeyCombo{
-                .key = .{ .special = special },
-                .mods = glfwModsToModifiers(mods),
-            };
-
-            // Step B: Reserved clipboard check (special keys won't match, but uniform)
-            if (keybindings.isReservedClipboardKey(combo)) {
-                self.handleClipboardAction(combo);
-                return;
-            }
-
-            // Step C: Keybinding map lookup
-            if (self.keybinding_map.get(combo)) |bound_action| {
-                self.dispatchAction(bound_action);
-                return;
+            if (line.len > 0 and self.debug_key_log_len + line.len <= self.debug_key_log.len) {
+                @memcpy(self.debug_key_log[self.debug_key_log_len..][0..line.len], line);
+                self.debug_key_log_len += line.len;
             }
         }
 
-        // Font zoom via GLFW key codes (charCallback doesn't fire with Ctrl held).
-        // These are the physical key fallbacks — keybinding map handles logical combos.
-        if (mods.control and !mods.alt and !mods.super) {
-            const zoom_action: ?keybindings.Action = switch (key) {
-                .equal, .right_bracket, .kp_add => .increase_font_size,
-                .minus, .slash, .kp_subtract => .decrease_font_size,
-                .zero, .kp_0 => .reset_font_size,
-                else => null,
-            };
-            if (zoom_action) |za| {
-                self.dispatchAction(za);
-                return;
+        // Font zoom: handle directly before encoder to catch all key combos.
+        // On Windows, Ctrl++ is Ctrl+Shift+= (key=.equal, shift=true, ctrl=true).
+        // Also handle numpad +/- and standalone Ctrl+= and Ctrl+-.
+        if (mods.control) {
+            var zoom_delta: ?f32 = null;
+            var zoom_reset = false;
+
+            switch (key) {
+                .equal, .right_bracket, .kp_add => zoom_delta = 1.0, // Ctrl++ (layout-dependent)
+                .minus, .slash, .kp_subtract => zoom_delta = -1.0, // Ctrl+- (layout-dependent)
+                .zero, .kp_0 => zoom_reset = true, // Ctrl+0
+                else => {},
+            }
+
+            if (zoom_delta != null or zoom_reset) {
+                const current_size_fp = self.new_font_size.load(.acquire);
+                const current_size: f32 = @as(f32, @floatFromInt(current_size_fp)) / 100.0;
+                var new_size = if (zoom_reset) self.config.font_size_pt else current_size + zoom_delta.?;
+                new_size = @max(6.0, @min(72.0, new_size));
+
+                if (@as(u32, @intFromFloat(new_size * 100.0)) != current_size_fp) {
+                    self.new_font_size.store(@intFromFloat(new_size * 100.0), .release);
+                    self.pending_font_change.store(true, .release);
+                    self.requestFrame();
+                }
+                return; // Don't pass to encoder
             }
         }
 
-        // Step D: Fall through to VT encoding for terminal input
         var buf: [16]u8 = undefined;
         const result = input_encoder.encodeKey(key, mods, &buf);
 
@@ -473,7 +401,12 @@ pub const Surface = struct {
                 self.cursor_visible = true;
             },
             .paste_clipboard => {
-                self.pasteFromClipboard();
+                // Read clipboard and paste to PTY
+                if (glfw.getClipboardString(self.window.handle)) |clip| {
+                    self.termio.writeInput(clip) catch {};
+                    self.scheduler.markActive();
+                    self.requestFrame();
+                }
             },
             .handled_internally => {},
             .none => {},
@@ -481,30 +414,9 @@ pub const Surface = struct {
     }
 
     /// Handle character input from GLFW callback (main thread).
-    /// Combines charCallback codepoint with stored modifier state for logical key lookup (D-21).
     pub fn handleCharInput(self: *Surface, codepoint: u32) void {
-        const cp: u21 = if (codepoint <= 0x10FFFF) @intCast(codepoint) else return;
-
-        // Build KeyCombo from logical character + stored modifier state (D-21)
-        const combo = keybindings.KeyCombo{
-            .key = .{ .char = if (cp >= 'A' and cp <= 'Z') cp + 32 else cp },
-            .mods = self.last_mods,
-        };
-
-        // Check reserved clipboard keys first (D-19)
-        if (keybindings.isReservedClipboardKey(combo)) {
-            self.handleClipboardAction(combo);
-            return;
-        }
-
-        // Check keybinding map
-        if (self.keybinding_map.get(combo)) |bound_action| {
-            self.dispatchAction(bound_action);
-            return;
-        }
-
-        // Fall through: write character to terminal
         var buf: [4]u8 = undefined;
+        const cp: u21 = if (codepoint <= 0x10FFFF) @intCast(codepoint) else return;
         const bytes = input_encoder.encodeChar(cp, &buf);
         if (bytes.len > 0) {
             self.termio.writeInput(bytes) catch {};
@@ -516,219 +428,13 @@ pub const Surface = struct {
         }
     }
 
-    /// Dispatch a keybinding action.
-    fn dispatchAction(self: *Surface, action: keybindings.Action) void {
-        switch (action) {
-            .copy => self.copySelection(self.scroll_offset),
-            .paste => self.pasteFromClipboard(),
-            .increase_font_size => self.changeFontSize(1.0),
-            .decrease_font_size => self.changeFontSize(-1.0),
-            .reset_font_size => self.resetFontSize(),
-            .scroll_page_up => self.scrollPageUp(),
-            .scroll_page_down => self.scrollPageDown(),
-            .new_tab, .close_tab, .next_tab, .prev_tab => {},
-            .split_horizontal, .split_vertical => {},
-            .focus_next_pane, .focus_prev_pane => {},
-            .close_pane => {},
-            .focus_pane_up, .focus_pane_down, .focus_pane_left, .focus_pane_right => {},
-            .resize_pane_up, .resize_pane_down, .resize_pane_left, .resize_pane_right => {},
-            .zoom_pane => {},
-            .equalize_panes => {},
-            .swap_pane_up, .swap_pane_down, .swap_pane_left, .swap_pane_right => {},
-            .rotate_split => {},
-            .break_out_pane => {},
-            .move_tab_left, .move_tab_right => {},
-            .goto_tab_1, .goto_tab_2, .goto_tab_3, .goto_tab_4, .goto_tab_5 => {},
-            .goto_tab_6, .goto_tab_7, .goto_tab_8, .goto_tab_9, .goto_tab_last => {},
-            .open_layout_picker => {},
-            .scroll_to_top, .scroll_to_bottom => {},
-            .search => {},
-            .toggle_agent_tab => {}, // handled in App.dispatchAction
-            .change_shell => {}, // handled in App.dispatchAction
-            .none => {},
-        }
-    }
-
-    /// Handle clipboard action for reserved keys (D-19).
-    /// D-17: Smart Ctrl+C -- copies selection when active, sends SIGINT (0x03) when not.
-    pub fn handleClipboardAction(self: *Surface, combo: keybindings.KeyCombo) void {
-        const is_c = switch (combo.key) {
-            .char => |c| c == 'c',
-            .special => false,
-        };
-        if (is_c) {
-            // D-17: Smart Ctrl+C -- copy if selection active, send SIGINT if not
-            if (self.selection.range != null) {
-                self.copySelection(self.scroll_offset);
-                // selection.clear() already called inside copySelection
-            } else {
-                // Send Ctrl+C (0x03 ETX) to terminal as SIGINT
-                self.termio.writeInput("\x03") catch {};
-            }
-        } else {
-            self.pasteFromClipboard();
-        }
-    }
-
-    /// Copy current selection to clipboard (D-15: clipboard integration).
-    /// Extracts text from terminal screen buffer via Selection.getSelectedText
-    /// and sets the GLFW system clipboard. Clears selection after copy.
-    pub fn copySelection(self: *Surface, scroll_offset: u32) void {
-        const range = self.selection.range orelse return;
-
-        // Lock terminal to access screen data
-        const snapshot = self.termio.lockTerminal();
-
-        const screens = @constCast(snapshot).getScreens();
-        const screen = screens.active;
-        const cols: u16 = @intCast(screen.pages.cols);
-        const rows: u16 = @intCast(screen.pages.rows);
-
-        // Compute screen-coordinate base row for scrollback viewport
-        const total_rows = screen.pages.total_rows;
-        const active_rows = screen.pages.rows;
-        const history_rows: u32 = if (total_rows > active_rows) @intCast(total_rows - active_rows) else 0;
-        const clamped_offset = @min(scroll_offset, history_rows);
-        const viewport_base: u32 = history_rows - clamped_offset;
-
-        // Build UTF-8 screen lines from terminal cells
-        const alloc = std.heap.page_allocator;
-        const screen_rows: usize = @min(@as(usize, rows), 500);
-        const line_ptrs = alloc.alloc([]const u8, screen_rows) catch {
-            self.termio.unlockTerminal();
-            return;
-        };
-
-        // Flat buffer for UTF-8 bytes: each cell can produce up to 4 UTF-8 bytes
-        const bytes_per_row: usize = @as(usize, cols) * 4;
-        const flat_buf = alloc.alloc(u8, screen_rows * bytes_per_row) catch {
-            alloc.free(line_ptrs);
-            self.termio.unlockTerminal();
-            return;
-        };
-
-        var row: u16 = 0;
-        while (row < screen_rows) : (row += 1) {
-            const row_offset = @as(usize, row) * bytes_per_row;
-            var byte_len: usize = 0;
-            var col: u16 = 0;
-            while (col < cols) : (col += 1) {
-                // When scrolled back, use screen coordinates; otherwise use active
-                const pin = if (clamped_offset > 0)
-                    screen.pages.pin(.{ .screen = .{
-                        .x = @intCast(col),
-                        .y = @intCast(viewport_base + row),
-                    } })
-                else
-                    screen.pages.pin(.{ .active = .{
-                        .x = @intCast(col),
-                        .y = @intCast(row),
-                    } });
-                const pin_val = pin orelse {
-                    // No cell at this position, emit space
-                    flat_buf[row_offset + byte_len] = ' ';
-                    byte_len += 1;
-                    continue;
-                };
-                const rac = pin_val.rowAndCell();
-                const cp: u21 = rac.cell.codepoint();
-                if (cp == 0) {
-                    flat_buf[row_offset + byte_len] = ' ';
-                    byte_len += 1;
-                } else {
-                    // Encode codepoint as UTF-8
-                    const dest = flat_buf[row_offset + byte_len .. row_offset + bytes_per_row];
-                    const enc_len = std.unicode.utf8Encode(cp, dest) catch 0;
-                    if (enc_len > 0) {
-                        byte_len += enc_len;
-                    } else {
-                        flat_buf[row_offset + byte_len] = ' ';
-                        byte_len += 1;
-                    }
-                }
-            }
-            line_ptrs[row] = flat_buf[row_offset .. row_offset + byte_len];
-        }
-
-        self.termio.unlockTerminal();
-
-        // Extract selected text using Selection API
-        const selected_text = selection_mod.Selection.getSelectedText(
-            range,
-            line_ptrs,
-            alloc,
-        ) catch return;
-        defer alloc.free(selected_text);
-
-        // Set GLFW clipboard (needs null-terminated string)
-        if (selected_text.len > 0) {
-            const clipboard_str = alloc.alloc(u8, selected_text.len + 1) catch return;
-            defer alloc.free(clipboard_str);
-            @memcpy(clipboard_str[0..selected_text.len], selected_text);
-            clipboard_str[selected_text.len] = 0;
-            const sentinel_str: [:0]const u8 = clipboard_str[0..selected_text.len :0];
-            glfw.setClipboardString(self.window.handle, sentinel_str);
-        }
-
-        // Clean up screen line buffers
-        alloc.free(flat_buf);
-        alloc.free(line_ptrs);
-
-        // Clear selection after successful copy
-        self.selection.clear();
-    }
-
-    /// Paste clipboard contents to terminal PTY.
-    pub fn pasteFromClipboard(self: *Surface) void {
-        if (glfw.getClipboardString(self.window.handle)) |clip| {
-            self.termio.writeInput(clip) catch {};
-            self.scheduler.markActive();
-            self.requestFrame();
-        }
-    }
-
-    /// Change font size by delta points.
-    fn changeFontSize(self: *Surface, delta: f32) void {
-        const current_size_fp = self.new_font_size.load(.acquire);
-        const current_size: f32 = @as(f32, @floatFromInt(current_size_fp)) / 100.0;
-        var new_size = current_size + delta;
-        new_size = @max(6.0, @min(72.0, new_size));
-
-        if (@as(u32, @intFromFloat(new_size * 100.0)) != current_size_fp) {
-            self.new_font_size.store(@intFromFloat(new_size * 100.0), .release);
-            self.pending_font_change.store(true, .release);
-            self.requestFrame();
-        }
-    }
-
-    /// Reset font size to config default.
-    fn resetFontSize(self: *Surface) void {
-        const default_fp: u32 = @intFromFloat(self.config.font_size_pt() * 100.0);
-        if (self.new_font_size.load(.acquire) == default_fp) return; // already at default
-        self.new_font_size.store(default_fp, .release);
-        self.pending_font_change.store(true, .release);
-        self.requestFrame();
-    }
-
-    /// Scroll up one page.
-    pub fn scrollPageUp(self: *Surface) void {
-        // TODO: Implement terminal viewport scrolling when scrollback is wired
-        self.requestFrame();
-    }
-
-    /// Scroll down one page.
-    pub fn scrollPageDown(self: *Surface) void {
-        // TODO: Implement terminal viewport scrolling when scrollback is wired
-        self.requestFrame();
-    }
-
     /// Handle framebuffer resize from GLFW callback (main thread, D-14).
     pub fn handleResize(self: *Surface, fb_width: u32, fb_height: u32) void {
         const metrics = self.font_grid.getMetrics();
         if (metrics.cell_width <= 0 or metrics.cell_height <= 0) return;
 
         // Compute new grid dimensions (D-14: snap to cell grid)
-        const padding = self.config.grid_padding();
+        const padding = self.config.grid_padding;
         const usable_w: f32 = @as(f32, @floatFromInt(fb_width)) - 2.0 * padding;
         const usable_h: f32 = @as(f32, @floatFromInt(fb_height)) - 2.0 * padding;
         const raw_cols = @max(1.0, usable_w / metrics.cell_width);
@@ -767,51 +473,6 @@ pub const Surface = struct {
         self.requestFrame();
     }
 
-    /// Apply a new config after hot-reload (D-35).
-    /// Guards restart-required fields per D-16.
-    /// Currently guarded: font family (atlas rebuild).
-    /// Structural guards for: keybindings (mid-session conflict avoidance),
-    /// PTY/shell settings (requires process restart).
-    /// Keybinding overrides are not yet stored on Config (built at init from
-    /// TOML [keybindings] section); guard activates when Config gains that field.
-    pub fn applyConfig(self: *Surface, new_config: Config) void {
-        const old = self.config;
-
-        // D-16: Font family changes require restart (atlas rebuild)
-        const old_family = old.font_family() orelse "";
-        const new_family = new_config.font_family() orelse "";
-        if (!std.mem.eql(u8, old_family, new_family)) {
-            std.log.warn("Font family change requires restart to apply (atlas rebuild). Skipping.", .{});
-        }
-
-        // D-16: Keybinding changes require restart.
-        // keybinding_map is built once at init and never rebuilt on hot-reload.
-        // When Config gains a keybindings field, compare here and warn on change.
-        // For now, keybinding config changes on disk have no effect until restart,
-        // which is the correct D-16 behavior — this comment documents the intent.
-
-        // D-16: Shell/PTY settings require restart
-        // (Config currently uses hardcoded shell; guard is for future TOML shell config)
-
-        // Apply config but preserve restart-required fields from old config
-        var effective = new_config;
-        effective.font.family = old.font.family; // keep old font family
-
-        self.config = effective;
-
-        // Live-reloadable per D-15: colors — rebuild renderer palette from new config
-        self.renderer_palette = theme_mod.buildRendererPaletteFromConfig(effective.colors);
-
-        // Font size (live-reloadable, unlike font family)
-        if (old.font_size_pt() != new_config.font_size_pt()) {
-            const new_size_fp: u32 = @intFromFloat(new_config.font_size_pt() * 100.0);
-            self.new_font_size.store(new_size_fp, .release);
-            self.pending_font_change.store(true, .release);
-        }
-
-        self.requestFrame();
-    }
-
     /// Update cursor blink state (called on render thread, ~530ms interval per UI-SPEC).
     fn updateCursorBlink(self: *Surface) void {
         if (!self.focused) {
@@ -829,51 +490,6 @@ pub const Surface = struct {
             // Request another frame for next blink toggle
             self.requestFrame();
         }
-    }
-
-    // -- Keybinding helpers --
-
-    /// Convert GLFW modifier flags to keybinding Modifiers.
-    fn glfwModsToModifiers(mods: glfw.Mods) keybindings.Modifiers {
-        return .{
-            .ctrl = mods.control,
-            .shift = mods.shift,
-            .alt = mods.alt,
-            .super = mods.super,
-        };
-    }
-
-    /// Map a GLFW key to a SpecialKey, or null if the key is printable.
-    pub fn mapGlfwKeyToSpecial(key: glfw.Key) ?keybindings.SpecialKey {
-        return switch (key) {
-            .insert => .insert,
-            .delete => .delete,
-            .home => .home,
-            .end => .end,
-            .page_up => .page_up,
-            .page_down => .page_down,
-            .up => .up,
-            .down => .down,
-            .left => .left,
-            .right => .right,
-            .tab => .tab,
-            .enter => .enter,
-            .escape => .escape,
-            .backspace => .backspace,
-            .F1 => .f1,
-            .F2 => .f2,
-            .F3 => .f3,
-            .F4 => .f4,
-            .F5 => .f5,
-            .F6 => .f6,
-            .F7 => .f7,
-            .F8 => .f8,
-            .F9 => .f9,
-            .F10 => .f10,
-            .F11 => .f11,
-            .F12 => .f12,
-            else => null,
-        };
     }
 
     // -- Static GLFW callbacks that route to Surface via user pointer --
