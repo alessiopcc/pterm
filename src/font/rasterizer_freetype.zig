@@ -78,10 +78,24 @@ pub const FreeTypeRasterizer = struct {
     /// Rasterize a single glyph for the given codepoint.
     /// Returns error.GlyphNotFound if the font does not contain this codepoint.
     pub fn rasterizeGlyph(self: *FreeTypeRasterizer, allocator: std.mem.Allocator, codepoint: u21) !GlyphBitmap {
+        return self.rasterizeGlyphForCodepoint(allocator, codepoint, false);
+    }
+
+    /// Rasterize a glyph with color support (for emoji fonts).
+    pub fn rasterizeGlyphColor(self: *FreeTypeRasterizer, allocator: std.mem.Allocator, codepoint: u21) !GlyphBitmap {
+        return self.rasterizeGlyphForCodepoint(allocator, codepoint, true);
+    }
+
+    fn rasterizeGlyphForCodepoint(self: *FreeTypeRasterizer, allocator: std.mem.Allocator, codepoint: u21, color: bool) !GlyphBitmap {
         const glyph_index = c.FT_Get_Char_Index(self.face, @as(c.FT_ULong, codepoint));
         if (glyph_index == 0) return error.GlyphNotFound;
 
-        if (c.FT_Load_Glyph(self.face, glyph_index, c.FT_LOAD_RENDER | c.FT_LOAD_TARGET_LIGHT) != 0) {
+        const load_flags: c_int = if (color)
+            c.FT_LOAD_RENDER | c.FT_LOAD_COLOR | c.FT_LOAD_TARGET_LIGHT
+        else
+            c.FT_LOAD_RENDER | c.FT_LOAD_TARGET_LIGHT;
+
+        if (c.FT_Load_Glyph(self.face, glyph_index, load_flags) != 0) {
             return error.GlyphRenderFailed;
         }
 
@@ -90,21 +104,34 @@ pub const FreeTypeRasterizer = struct {
 
         const width: u32 = bitmap.width;
         const height: u32 = bitmap.rows;
+        const pixel_mode = bitmap.pixel_mode;
+        const is_bgra = pixel_mode == c.FT_PIXEL_MODE_BGRA;
+        const bytes_per_pixel: usize = if (is_bgra) 4 else 1;
+        const format: GlyphFormat = if (is_bgra) .rgba else .grayscale;
 
         // Copy bitmap buffer to owned memory (FreeType buffer is transient).
-        const pixel_count = @as(usize, width) * @as(usize, height);
+        const pixel_count = @as(usize, width) * @as(usize, height) * bytes_per_pixel;
         const data = if (pixel_count > 0) blk: {
             const buf = try allocator.alloc(u8, pixel_count);
             if (bitmap.buffer != null) {
-                // Handle pitch != width (bitmap rows may have padding).
                 const pitch: usize = @intCast(@as(u32, @bitCast(bitmap.pitch)));
-                if (pitch == width) {
+                const row_bytes = @as(usize, width) * bytes_per_pixel;
+                if (pitch == row_bytes) {
                     @memcpy(buf, bitmap.buffer[0..pixel_count]);
                 } else {
                     for (0..height) |row| {
                         const src_offset = row * pitch;
-                        const dst_offset = row * @as(usize, width);
-                        @memcpy(buf[dst_offset .. dst_offset + width], bitmap.buffer[src_offset .. src_offset + width]);
+                        const dst_offset = row * row_bytes;
+                        @memcpy(buf[dst_offset .. dst_offset + row_bytes], bitmap.buffer[src_offset .. src_offset + row_bytes]);
+                    }
+                }
+                // BGRA → RGBA swizzle for color emoji
+                if (is_bgra) {
+                    var px: usize = 0;
+                    while (px + 3 < pixel_count) : (px += 4) {
+                        const tmp = buf[px]; // B
+                        buf[px] = buf[px + 2]; // R
+                        buf[px + 2] = tmp; // B
                     }
                 }
             } else {
@@ -120,6 +147,7 @@ pub const FreeTypeRasterizer = struct {
             .width = width,
             .height = height,
             .bearing_x = @intCast(@as(i32, @intCast(slot.*.bitmap_left))),
+            .format = format,
             .bearing_y = @intCast(@as(i32, @intCast(slot.*.bitmap_top))),
             .advance = @intCast(@as(u32, @intCast(slot.*.advance.x >> 6))),
         };

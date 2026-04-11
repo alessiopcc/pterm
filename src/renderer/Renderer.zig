@@ -4,15 +4,16 @@ const types = @import("types");
 const OpenGLBackend = @import("opengl_backend").OpenGLBackend;
 const RenderState = types.RenderState;
 const Diagnostics = types.Diagnostics;
+const Color = types.Color;
 
 /// Renderer abstraction layer (D-06).
 /// OpenGL implements this. Metal plugs in later.
 pub const Renderer = union(enum) {
     opengl: *OpenGLBackend,
 
-    pub fn drawFrame(self: Renderer, state: *const RenderState) void {
+    pub fn drawFrame(self: Renderer, state: *const RenderState, bg_color: ?Color) void {
         switch (self) {
-            .opengl => |backend| backend.drawFrame(state),
+            .opengl => |backend| backend.drawFrame(state, bg_color),
         }
     }
 

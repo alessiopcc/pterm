@@ -33,3 +33,11 @@ pub const discoverEmojiFont = switch (builtin.os.tag) {
     .windows => @import("discovery_windows.zig").discoverEmojiFont,
     else => @compileError("unsupported platform for font discovery"),
 };
+
+/// Discover a CJK-capable font for the current platform.
+pub const discoverCJKFont = switch (builtin.os.tag) {
+    .linux => @import("discovery_fontconfig.zig").discoverCJKFont,
+    .macos => @import("discovery_coretext.zig").discoverCJKFont,
+    .windows => @import("discovery_windows.zig").discoverCJKFont,
+    else => @compileError("unsupported platform for font discovery"),
+};

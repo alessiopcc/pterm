@@ -28,6 +28,10 @@
             .url = "git+https://codeberg.org/atman/zg#6ee2b0719052040c979ecde02a74a0cee6253364",
             .hash = "zg-0.15.3-oGqU3LdJtALmUrI8v7BWf3UcCmebVYZcF0L9aDHnlu7D",
         },
+        .tomlz = .{
+            .url = "git+https://github.com/sam701/zig-toml#a73c9423d88ed413204b39638fab7e9bccdb83fd",
+            .hash = "toml-0.3.0-bV14Be6EAQDr0fkyURz4jYFyTAMPcwlNN0FEPVjDnXTR",
+        },
     },
     .paths = .{
         "build.zig",

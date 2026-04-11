@@ -10,8 +10,6 @@
 const std = @import("std");
 const toml = @import("toml");
 const Config = @import("Config.zig").Config;
-const layout_mod = @import("layout");
-const LayoutPreset = layout_mod.LayoutPreset;
 
 pub const LoadError = error{
     ImportCycleDetected,
@@ -34,7 +32,6 @@ const max_import_depth: u8 = 10;
 const FileFont = struct {
     family: ?[]const u8 = null,
     size: f64 = 13.0,
-    fallback: ?[]const []const u8 = null,
 };
 
 const FileWindow = struct {
@@ -57,7 +54,6 @@ const FileScrollback = struct {
 const FileShell = struct {
     program: ?[]const u8 = null,
     working_dir: ?[]const u8 = null,
-    args: ?[]const []const u8 = null,
 };
 
 const FileUiColors = struct {
@@ -65,16 +61,8 @@ const FileUiColors = struct {
     tab_active: ?[]const u8 = null,
     tab_inactive: ?[]const u8 = null,
     pane_border: ?[]const u8 = null,
-    pane_border_active: ?[]const u8 = null,
     status_bar_bg: ?[]const u8 = null,
     agent_alert: ?[]const u8 = null,
-    // Search, URL, bell UI colors
-    search_bar_bg: ?[]const u8 = null,
-    search_match: ?[]const u8 = null,
-    search_current_match: ?[]const u8 = null,
-    url_hover: ?[]const u8 = null,
-    bell_flash: ?[]const u8 = null,
-    bell_badge: ?[]const u8 = null,
 };
 
 const FileColors = struct {
@@ -87,16 +75,6 @@ const FileColors = struct {
     ui: ?FileUiColors = null,
 };
 
-const FileSearch = struct {};
-
-const FileUrl = struct {
-    enabled: bool = true,
-};
-
-const FileBell = struct {
-    mode: ?[]const u8 = null,
-};
-
 const FileConfig = struct {
     import: ?[]const []const u8 = null,
     font: ?FileFont = null,
@@ -105,9 +83,6 @@ const FileConfig = struct {
     scrollback: ?FileScrollback = null,
     shell: ?FileShell = null,
     colors: ?FileColors = null,
-    search: ?FileSearch = null,
-    url: ?FileUrl = null,
-    bell: ?FileBell = null,
 };
 
 /// Load a config file and resolve its import chain, returning a merged Config.
@@ -205,12 +180,6 @@ pub fn loadFile(
     // Parse [keybindings] section manually (dynamic keys, not in FileConfig)
     config.keybindings = parseKeybindingsSection(allocator, content) catch &.{};
 
-    // Parse [layout.*] sections manually (dynamic preset names, not in FileConfig)
-    config.layouts = LayoutPreset.parsePresets(allocator, content) catch |err| blk: {
-        std.log.warn("Failed to parse layout presets: {}", .{err});
-        break :blk &.{};
-    };
-
     return config;
 }
 
@@ -221,10 +190,9 @@ fn mergeConfigs(base: Config, over: Config) Config {
     // Font
     if (over.font.family) |v| result.font.family = v;
     if (over.font.size != Config.default_font_size) result.font.size = over.font.size;
-    if (over.font.fallback) |v| result.font.fallback = v;
 
     // Window
-    if (!std.mem.eql(u8, over.window.title, "PTerm")) result.window.title = over.window.title;
+    if (!std.mem.eql(u8, over.window.title, "TermP")) result.window.title = over.window.title;
     if (over.window.cols != Config.default_cols) result.window.cols = over.window.cols;
     if (over.window.rows != Config.default_rows) result.window.rows = over.window.rows;
     if (over.window.padding != Config.default_padding) result.window.padding = over.window.padding;
@@ -240,7 +208,6 @@ fn mergeConfigs(base: Config, over: Config) Config {
     // Shell
     if (over.shell.program) |v| result.shell.program = v;
     if (over.shell.working_dir) |v| result.shell.working_dir = v;
-    if (over.shell.args) |v| result.shell.args = v;
 
     // Colors
     if (over.colors.foreground) |v| result.colors.foreground = v;
@@ -255,27 +222,8 @@ fn mergeConfigs(base: Config, over: Config) Config {
     if (over.colors.ui.tab_active) |v| result.colors.ui.tab_active = v;
     if (over.colors.ui.tab_inactive) |v| result.colors.ui.tab_inactive = v;
     if (over.colors.ui.pane_border) |v| result.colors.ui.pane_border = v;
-    if (over.colors.ui.pane_border_active) |v| result.colors.ui.pane_border_active = v;
     if (over.colors.ui.status_bar_bg) |v| result.colors.ui.status_bar_bg = v;
     if (over.colors.ui.agent_alert) |v| result.colors.ui.agent_alert = v;
-    if (over.colors.ui.search_bar_bg) |v| result.colors.ui.search_bar_bg = v;
-    if (over.colors.ui.search_match) |v| result.colors.ui.search_match = v;
-    if (over.colors.ui.search_current_match) |v| result.colors.ui.search_current_match = v;
-    if (over.colors.ui.url_hover) |v| result.colors.ui.url_hover = v;
-    if (over.colors.ui.bell_flash) |v| result.colors.ui.bell_flash = v;
-    if (over.colors.ui.bell_badge) |v| result.colors.ui.bell_badge = v;
-
-    // Agent notification fields
-    if (!over.agent.notifications) result.agent.notifications = over.agent.notifications;
-    if (!over.agent.notification_sound) result.agent.notification_sound = over.agent.notification_sound;
-    if (over.agent.notification_cooldown != 30) result.agent.notification_cooldown = over.agent.notification_cooldown;
-    if (!over.agent.suppress_when_focused) result.agent.suppress_when_focused = over.agent.suppress_when_focused;
-
-    // Bell
-    if (over.bell.mode != .visual) result.bell.mode = over.bell.mode;
-
-    // URL
-    if (!over.url.enabled) result.url.enabled = over.url.enabled;
 
     return result;
 }
@@ -288,13 +236,6 @@ fn applyFileConfig(allocator: std.mem.Allocator, base: Config, file: FileConfig)
     if (file.font) |f| {
         if (f.family) |v| result.font.family = try allocator.dupe(u8, v);
         if (f.size != 13.0) result.font.size = @floatCast(f.size);
-        if (f.fallback) |v| {
-            const duped = try allocator.alloc([]const u8, v.len);
-            for (v, 0..) |arg, i| {
-                duped[i] = try allocator.dupe(u8, arg);
-            }
-            result.font.fallback = duped;
-        }
     }
 
     if (file.window) |w| {
@@ -327,13 +268,6 @@ fn applyFileConfig(allocator: std.mem.Allocator, base: Config, file: FileConfig)
     if (file.shell) |s| {
         if (s.program) |v| result.shell.program = try allocator.dupe(u8, v);
         if (s.working_dir) |v| result.shell.working_dir = try allocator.dupe(u8, v);
-        if (s.args) |v| {
-            const duped = try allocator.alloc([]const u8, v.len);
-            for (v, 0..) |arg, i| {
-                duped[i] = try allocator.dupe(u8, arg);
-            }
-            result.shell.args = duped;
-        }
     }
 
     if (file.colors) |c| {
@@ -349,38 +283,9 @@ fn applyFileConfig(allocator: std.mem.Allocator, base: Config, file: FileConfig)
             if (ui.tab_active) |v| result.colors.ui.tab_active = try allocator.dupe(u8, v);
             if (ui.tab_inactive) |v| result.colors.ui.tab_inactive = try allocator.dupe(u8, v);
             if (ui.pane_border) |v| result.colors.ui.pane_border = try allocator.dupe(u8, v);
-            if (ui.pane_border_active) |v| result.colors.ui.pane_border_active = try allocator.dupe(u8, v);
             if (ui.status_bar_bg) |v| result.colors.ui.status_bar_bg = try allocator.dupe(u8, v);
             if (ui.agent_alert) |v| result.colors.ui.agent_alert = try allocator.dupe(u8, v);
-            if (ui.search_bar_bg) |v| result.colors.ui.search_bar_bg = try allocator.dupe(u8, v);
-            if (ui.search_match) |v| result.colors.ui.search_match = try allocator.dupe(u8, v);
-            if (ui.search_current_match) |v| result.colors.ui.search_current_match = try allocator.dupe(u8, v);
-            if (ui.url_hover) |v| result.colors.ui.url_hover = try allocator.dupe(u8, v);
-            if (ui.bell_flash) |v| result.colors.ui.bell_flash = try allocator.dupe(u8, v);
-            if (ui.bell_badge) |v| result.colors.ui.bell_badge = try allocator.dupe(u8, v);
         }
-    }
-
-    // Bell
-    if (file.bell) |b| {
-        if (b.mode) |mode_str| {
-            if (std.mem.eql(u8, mode_str, "visual")) {
-                result.bell.mode = .visual;
-            } else if (std.mem.eql(u8, mode_str, "sound")) {
-                result.bell.mode = .sound;
-            } else if (std.mem.eql(u8, mode_str, "both")) {
-                result.bell.mode = .both;
-            } else if (std.mem.eql(u8, mode_str, "none")) {
-                result.bell.mode = .none;
-            } else {
-                std.log.warn("Unknown bell mode: {s}, using default", .{mode_str});
-            }
-        }
-    }
-
-    // URL
-    if (file.url) |u| {
-        if (!u.enabled) result.url.enabled = false;
     }
 
     return result;

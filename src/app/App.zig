@@ -14,6 +14,9 @@ const fontgrid_mod = @import("fontgrid");
 const font_types = @import("font_types");
 const observer_mod = @import("observer");
 const renderer_types = @import("renderer_types");
+const watcher_mod = @import("watcher");
+const FileWatcher = watcher_mod.FileWatcher;
+const cli_mod = @import("cli");
 
 const TermIO = termio_mod.TermIO;
 const TermIOConfig = termio_mod.TermIOConfig;
@@ -25,29 +28,33 @@ pub const AppOptions = struct {
     debug_keys: bool = false,
 };
 
+// Static state for config reload callback (FileWatcher callback has no context pointer).
+// Safe because there is exactly one App instance per process.
+var g_reload_app: ?*App = null;
+
 pub const App = struct {
     window: Window,
     surface: Surface,
     termio: TermIO,
     pty: Pty,
     allocator: std.mem.Allocator,
+    config: Config,
+    config_path: ?[]const u8,
+    config_watcher: ?FileWatcher,
 
-    pub fn init(allocator: std.mem.Allocator, options: AppOptions) !App {
-        // 1. Load config (hardcoded defaults for Phase 2)
-        const config = Config{};
-
+    pub fn init(allocator: std.mem.Allocator, config: Config, options: AppOptions) !App {
         // 2. Create TermIO
         var termio = try TermIO.init(allocator, TermIOConfig{
-            .cols = config.cols,
-            .rows = config.rows,
-            .scrollback_lines = config.scrollback_lines,
+            .cols = config.cols(),
+            .rows = config.rows(),
+            .scrollback_lines = config.scrollback_lines(),
         });
         errdefer termio.deinit();
 
         // 3. Create PTY
         var pty = try Pty.init(allocator, .{
-            .cols = config.cols,
-            .rows = config.rows,
+            .cols = config.cols(),
+            .rows = config.rows(),
         });
         errdefer pty.deinit();
 
@@ -62,8 +69,8 @@ pub const App = struct {
         // Need font metrics for cell size computation -- create a temporary FontGrid
         const dpi_scale: f32 = 1.0; // Will be updated after window creation
         const temp_font_config = font_types.FontConfig{
-            .family = config.font_family,
-            .size_pt = config.font_size_pt,
+            .family = config.font_family(),
+            .size_pt = config.font_size_pt(),
             .dpi_scale = dpi_scale,
         };
         var temp_font = try fontgrid_mod.FontGrid.init(allocator, temp_font_config);
@@ -71,12 +78,12 @@ pub const App = struct {
         temp_font.deinit();
 
         var window = try Window.init(window_mod.WindowConfig{
-            .cols = config.cols,
-            .rows = config.rows,
+            .cols = config.cols(),
+            .rows = config.rows(),
             .cell_width = metrics.cell_width,
             .cell_height = metrics.cell_height,
-            .grid_padding = config.grid_padding,
-            .title = config.window_title,
+            .grid_padding = config.grid_padding(),
+            .title = "TermP", // TODO: support dynamic title from config
         });
         errdefer window.deinit();
 
@@ -97,6 +104,9 @@ pub const App = struct {
             .termio = termio,
             .pty = pty,
             .allocator = allocator,
+            .config = config,
+            .config_path = null, // Set by caller before start()
+            .config_watcher = null, // Initialized in start() if config_path is set
         };
     }
 
@@ -132,16 +142,44 @@ pub const App = struct {
 
         // 6. Set Observer.onScreenChange to request frame renders
         self.termio.terminal.observer.onScreenChange = makeScreenChangeCallback(&self.surface);
+
+        // 7. D-14: Initialize config file watcher for hot-reload
+        if (self.config_path) |path| {
+            g_reload_app = self;
+            self.config_watcher = FileWatcher.init(
+                self.allocator,
+                &.{path},
+                configReloadCallback,
+            ) catch null;
+        }
+    }
+
+    /// Config reload callback — re-reads config and applies to surface.
+    fn configReloadCallback() void {
+        const self = g_reload_app orelse return;
+        const cli_args = cli_mod.CliArgs{ .config_path = self.config_path };
+        const new_config = Config.load(self.allocator, cli_args) catch |err| {
+            std.log.warn("Config reload failed: {}", .{err});
+            return;
+        };
+        self.surface.applyConfig(new_config);
+        std.log.info("Config hot-reloaded", .{});
     }
 
     pub fn deinit(self: *App) void {
-        // 1. Stop render thread
+        // 1. Stop config watcher
+        if (self.config_watcher) |*w| {
+            w.deinit();
+            self.config_watcher = null;
+        }
+
+        // 2. Stop render thread
         self.surface.stopRenderThread();
 
-        // 2. Stop TermIO (reader + parser)
+        // 3. Stop TermIO (reader + parser)
         self.termio.stop();
 
-        // 3. Cleanup (reverse order of init)
+        // 4. Cleanup (reverse order of init)
         self.surface.deinit();
         self.pty.deinit();
         self.termio.deinit();
@@ -153,6 +191,11 @@ pub const App = struct {
         while (!self.window.shouldClose()) {
             // D-13: Apply pending OSC title updates (GLFW requires main thread)
             self.surface.applyPendingTitle();
+
+            // D-14: Poll config file watcher for hot-reload
+            if (self.config_watcher) |*w| {
+                w.poll();
+            }
 
             // D-16: Adaptive event handling
             if (self.surface.scheduler.shouldRender()) {

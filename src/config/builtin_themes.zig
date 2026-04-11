@@ -43,7 +43,7 @@ const std = @import("std");
 // Theme definitions
 // ---------------------------------------------------------------
 
-/// PTerm default (Catppuccin Mocha — matches existing hardcoded palette).
+/// TermP default (Catppuccin Mocha — matches existing hardcoded palette).
 const default_theme = ColorPalette{
     .foreground = "#CDD6F4",
     .background = "#1E1E2E",
@@ -76,7 +76,6 @@ const default_theme = ColorPalette{
         .tab_active = .{ 0x31, 0x32, 0x44 },
         .tab_inactive = .{ 0x1E, 0x1E, 0x2E },
         .pane_border = .{ 0x45, 0x47, 0x5A },
-        .pane_border_active = .{ 0x89, 0xB4, 0xFA }, // Catppuccin Mocha blue
         .status_bar_bg = .{ 0x18, 0x18, 0x25 },
         .agent_alert = .{ 0xF9, 0xE2, 0xAF },
     },
@@ -115,7 +114,6 @@ const dracula_theme = ColorPalette{
         .tab_active = .{ 0x44, 0x47, 0x5A },
         .tab_inactive = .{ 0x28, 0x2A, 0x36 },
         .pane_border = .{ 0x44, 0x47, 0x5A },
-        .pane_border_active = .{ 0xBD, 0x93, 0xF9 }, // Dracula purple
         .status_bar_bg = .{ 0x21, 0x22, 0x2C },
         .agent_alert = .{ 0xF1, 0xFA, 0x8C },
     },
@@ -154,7 +152,6 @@ const solarized_dark_theme = ColorPalette{
         .tab_active = .{ 0x07, 0x36, 0x42 },
         .tab_inactive = .{ 0x00, 0x2B, 0x36 },
         .pane_border = .{ 0x07, 0x36, 0x42 },
-        .pane_border_active = .{ 0x26, 0x8B, 0xD2 }, // Solarized blue
         .status_bar_bg = .{ 0x00, 0x22, 0x2B },
         .agent_alert = .{ 0xB5, 0x89, 0x00 },
     },
@@ -193,7 +190,6 @@ const solarized_light_theme = ColorPalette{
         .tab_active = .{ 0xFD, 0xF6, 0xE3 },
         .tab_inactive = .{ 0xEE, 0xE8, 0xD5 },
         .pane_border = .{ 0x93, 0xA1, 0xA1 },
-        .pane_border_active = .{ 0x26, 0x8B, 0xD2 }, // Solarized blue
         .status_bar_bg = .{ 0xEE, 0xE8, 0xD5 },
         .agent_alert = .{ 0xCB, 0x4B, 0x16 },
     },
@@ -232,7 +228,6 @@ const gruvbox_dark_theme = ColorPalette{
         .tab_active = .{ 0x3C, 0x38, 0x36 },
         .tab_inactive = .{ 0x28, 0x28, 0x28 },
         .pane_border = .{ 0x50, 0x49, 0x45 },
-        .pane_border_active = .{ 0x83, 0xA5, 0x98 }, // Gruvbox aqua
         .status_bar_bg = .{ 0x1D, 0x20, 0x21 },
         .agent_alert = .{ 0xFA, 0xBD, 0x2F },
     },
@@ -271,7 +266,6 @@ const nord_theme = ColorPalette{
         .tab_active = .{ 0x3B, 0x42, 0x52 },
         .tab_inactive = .{ 0x2E, 0x34, 0x40 },
         .pane_border = .{ 0x43, 0x4C, 0x5E },
-        .pane_border_active = .{ 0x88, 0xC0, 0xD0 }, // Nord frost
         .status_bar_bg = .{ 0x29, 0x2E, 0x39 },
         .agent_alert = .{ 0xEB, 0xCB, 0x8B },
     },
@@ -313,7 +307,6 @@ const one_dark_theme = ColorPalette{
         .tab_active = .{ 0x2C, 0x31, 0x3C },
         .tab_inactive = .{ 0x28, 0x2C, 0x34 },
         .pane_border = .{ 0x3E, 0x44, 0x51 },
-        .pane_border_active = .{ 0x61, 0xAF, 0xEF }, // One Dark blue
         .status_bar_bg = .{ 0x21, 0x25, 0x2B },
         .agent_alert = .{ 0xE5, 0xC0, 0x7B },
     },

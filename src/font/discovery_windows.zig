@@ -102,6 +102,25 @@ pub fn discoverEmojiFont(allocator: std.mem.Allocator) ?DiscoverResult {
     return checkFontFile(allocator, "seguiemj.ttf");
 }
 
+/// Discover a CJK-capable font (for Chinese, Japanese, Korean characters).
+pub fn discoverCJKFont(allocator: std.mem.Allocator) ?DiscoverResult {
+    // Try common CJK fonts in order of preference.
+    const cjk_fonts = [_][]const u8{
+        "YuGothM.ttc",   // Yu Gothic Medium (Windows 10+)
+        "YuGothR.ttc",   // Yu Gothic Regular
+        "msgothic.ttc",  // MS Gothic
+        "msmincho.ttc",  // MS Mincho
+        "meiryo.ttc",    // Meiryo
+        "malgun.ttf",    // Malgun Gothic (Korean)
+        "simsun.ttc",    // SimSun (Chinese Simplified)
+        "mingliu.ttc",   // MingLiU (Chinese Traditional)
+    };
+    for (cjk_fonts) |filename| {
+        if (checkFontFile(allocator, filename)) |result| return result;
+    }
+    return null;
+}
+
 fn eqlIgnoreCase(a: []const u8, b: []const u8) bool {
     if (a.len != b.len) return false;
     for (a, b) |ca, cb| {

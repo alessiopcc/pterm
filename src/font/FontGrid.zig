@@ -90,8 +90,13 @@ pub const FontGrid = struct {
                 emoji_font_index = @intCast(fonts.items.len);
                 try fonts.append(allocator, entry);
             }
-        } else {
-            std.log.warn("emoji font not found, emoji will render as missing glyph rectangles", .{});
+        }
+
+        // Discover and append CJK fallback font.
+        if (discovery.discoverCJKFont(allocator)) |result| {
+            if (loadFont(allocator, result, config.size_pt, dpi)) |entry| {
+                try fonts.append(allocator, entry);
+            }
         }
 
         var atlas = try GlyphAtlas.init(allocator, 1024);
@@ -127,34 +132,61 @@ pub const FontGrid = struct {
     pub fn getGlyph(self: *FontGrid, codepoint: u21) !GlyphResult {
         // Try each font in the fallback chain.
         for (self.fonts.items, 0..) |*entry, font_idx| {
+            const is_emoji_font = self.emoji_font_index != null and font_idx == self.emoji_font_index.?;
             const key = GlyphKey{
                 .font_index = @intCast(font_idx),
                 .glyph_id = @as(u32, codepoint),
                 .size_px = @intFromFloat(@round(self.config.size_pt * self.config.dpi_scale)),
             };
 
-            // Check atlas cache.
-            if (self.atlas.lookup(key)) |cached| {
+            // Check atlas cache (color atlas for emoji font, grayscale for others).
+            if (is_emoji_font) {
+                if (self.atlas.lookupColor(key)) |cached| {
+                    return GlyphResult{
+                        .region = cached.region,
+                        .bearing_x = cached.bearing_x,
+                        .bearing_y = cached.bearing_y,
+                    };
+                }
+            } else {
+                if (self.atlas.lookup(key)) |cached| {
+                    return GlyphResult{
+                        .region = cached.region,
+                        .bearing_x = cached.bearing_x,
+                        .bearing_y = cached.bearing_y,
+                    };
+                }
+            }
+
+            // Try rasterizing (with color for emoji font).
+            const bitmap = if (is_emoji_font)
+                entry.rasterizer.rasterizeGlyphColor(self.allocator, codepoint) catch |err| {
+                    if (err == error.GlyphNotFound) continue;
+                    return err;
+                }
+            else
+                entry.rasterizer.rasterizeGlyph(self.allocator, codepoint) catch |err| {
+                    if (err == error.GlyphNotFound) continue;
+                    return err;
+                };
+            defer if (bitmap.data.len > 0) self.allocator.free(bitmap.data);
+
+            // Insert into appropriate atlas based on format.
+            if (bitmap.format == .rgba) {
+                const cached = try self.atlas.insertColor(key, bitmap);
+                return GlyphResult{
+                    .region = cached.region,
+                    .bearing_x = cached.bearing_x,
+                    .bearing_y = cached.bearing_y,
+                };
+            } else {
+                const cached = try self.atlas.insert(key, bitmap);
                 return GlyphResult{
                     .region = cached.region,
                     .bearing_x = cached.bearing_x,
                     .bearing_y = cached.bearing_y,
                 };
             }
-
-            // Try rasterizing.
-            const bitmap = entry.rasterizer.rasterizeGlyph(self.allocator, codepoint) catch |err| {
-                if (err == error.GlyphNotFound) continue;
-                return err;
-            };
-            defer if (bitmap.data.len > 0) self.allocator.free(bitmap.data);
-
-            const cached = try self.atlas.insert(key, bitmap);
-            return GlyphResult{
-                .region = cached.region,
-                .bearing_x = cached.bearing_x,
-                .bearing_y = cached.bearing_y,
-            };
         }
 
         return error.GlyphNotFound;

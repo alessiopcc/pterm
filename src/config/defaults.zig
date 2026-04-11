@@ -1,9 +1,9 @@
-/// Cross-platform config path detection and --dump-config formatting.
+/// Platform-specific config path detection and --dump-config formatting.
 ///
-/// Default config paths (D-11: cross-platform consistency):
-///   All platforms: ~/.config/pterm/config.toml
-///   Linux: Respects XDG_CONFIG_HOME if set
-///   Windows: Uses %USERPROFILE%/.config/pterm/config.toml
+/// Default config paths per platform (D-01):
+///   Linux:   ~/.config/termp/config.toml (XDG_CONFIG_HOME)
+///   macOS:   ~/Library/Application Support/termp/config.toml
+///   Windows: %APPDATA%\termp\config.toml
 const std = @import("std");
 const builtin = @import("builtin");
 
@@ -14,28 +14,47 @@ pub fn defaultConfigPath() ?[]const u8 {
 }
 
 fn defaultConfigPathImpl() ?[]const u8 {
-    // D-11: All platforms use ~/.config/pterm/config.toml
-    // This non-allocator version cannot construct dynamic paths,
-    // so it returns null. Callers should use defaultConfigPathAlloc().
-    return null;
+    if (builtin.os.tag == .windows) {
+        // %APPDATA%\termp\config.toml
+        const appdata = std.process.getEnvVarOwned(std.heap.page_allocator, "APPDATA") catch return null;
+        // Note: This leaks the appdata string, but it's called at most once at startup.
+        // A proper implementation would use an allocator, but for the default path
+        // detection this is acceptable.
+        _ = appdata;
+        // For now, return a well-known pattern. The actual path construction
+        // needs an allocator which we don't want to require here.
+        return null; // Caller should check APPDATA env var
+    } else if (builtin.os.tag == .macos) {
+        return null; // ~/Library/Application Support/termp/config.toml -- needs HOME
+    } else {
+        // Linux/other: XDG_CONFIG_HOME or ~/.config
+        return null; // $XDG_CONFIG_HOME/termp/config.toml or ~/.config/termp/config.toml
+    }
 }
 
 /// Return the default config path using an allocator for dynamic path construction.
-/// D-11: All platforms use ~/.config/pterm/config.toml for cross-platform consistency.
 pub fn defaultConfigPathAlloc(allocator: std.mem.Allocator) !?[]const u8 {
     if (builtin.os.tag == .windows) {
-        const home = std.process.getEnvVarOwned(allocator, "USERPROFILE") catch return null;
+        const appdata = std.process.getEnvVarOwned(allocator, "APPDATA") catch return null;
+        defer allocator.free(appdata);
+        const path = try std.fmt.allocPrint(allocator, "{s}\\termp\\config.toml", .{appdata});
+        return path;
+    } else if (builtin.os.tag == .macos) {
+        const home = std.process.getEnvVarOwned(allocator, "HOME") catch return null;
         defer allocator.free(home);
-        return try std.fmt.allocPrint(allocator, "{s}/.config/pterm/config.toml", .{home});
+        const path = try std.fmt.allocPrint(allocator, "{s}/Library/Application Support/termp/config.toml", .{home});
+        return path;
     } else {
-        // macOS + Linux: XDG_CONFIG_HOME or ~/.config
+        // Linux: XDG_CONFIG_HOME or ~/.config
         const config_home = std.process.getEnvVarOwned(allocator, "XDG_CONFIG_HOME") catch {
             const home = std.process.getEnvVarOwned(allocator, "HOME") catch return null;
             defer allocator.free(home);
-            return try std.fmt.allocPrint(allocator, "{s}/.config/pterm/config.toml", .{home});
+            const path = try std.fmt.allocPrint(allocator, "{s}/.config/termp/config.toml", .{home});
+            return path;
         };
         defer allocator.free(config_home);
-        return try std.fmt.allocPrint(allocator, "{s}/pterm/config.toml", .{config_home});
+        const path = try std.fmt.allocPrint(allocator, "{s}/termp/config.toml", .{config_home});
+        return path;
     }
 }
 
@@ -43,7 +62,7 @@ pub fn defaultConfigPathAlloc(allocator: std.mem.Allocator) !?[]const u8 {
 /// This implements --dump-config (D-04).
 pub fn dumpConfig() void {
     const output =
-        \\# PTerm Configuration
+        \\# TermP Configuration
         \\# Default values shown. Uncomment and modify to customize.
         \\
         \\# Import other config files (resolved relative to this file)
@@ -54,7 +73,7 @@ pub fn dumpConfig() void {
         \\size = 13.0
         \\
         \\[window]
-        \\title = "PTerm"
+        \\title = "TermP"
         \\cols = 160
         \\rows = 48
         \\padding = 4.0
@@ -70,7 +89,6 @@ pub fn dumpConfig() void {
         \\[shell]
         \\# program = ""       # empty = auto-detect
         \\# working_dir = ""   # empty = inherit
-        \\# args = []           # extra arguments, e.g. ["--login", "--norc"]
         \\
         \\[colors]
         \\# foreground = "#cdd6f4"
@@ -85,33 +103,11 @@ pub fn dumpConfig() void {
         \\# tab_active = "#1e1e2e"
         \\# tab_inactive = "#313244"
         \\# pane_border = "#45475a"
-        \\# pane_border_active = "#89B4FA"
         \\# status_bar_bg = "#181825"
         \\# agent_alert = "#f9e2af"
-        \\# search_bar_bg = "#181825"
-        \\# search_match = "#f9e2af"
-        \\# search_current_match = "#f38ba8"
-        \\# url_hover = "#89B4FA"
-        \\# bell_flash = "#f9e2af"
-        \\# bell_badge = "#f38ba8"
-        \\
-        \\[search]
-        \\# Empty for v1 (plain text search only)
-        \\
-        \\[url]
-        \\enabled = true
-        \\
-        \\[bell]
-        \\mode = "visual"     # visual, sound, both, none
         \\
     ;
     const stdout_file = std.fs.File.stdout();
-    stdout_file.writeAll(output) catch |err| {
-        std.debug.print("Error writing config: {}\n", .{err});
-        std.process.exit(1);
-    };
-    stdout_file.writeAll("\n") catch |err| {
-        std.debug.print("Error writing config: {}\n", .{err});
-        std.process.exit(1);
-    };
+    stdout_file.writeAll(output) catch {};
+    stdout_file.writeAll("\n") catch {};
 }

@@ -21,6 +21,8 @@ const RenderState = renderer_types.RenderState;
 const CursorState = renderer_types.CursorState;
 const Color = renderer_types.Color;
 const palette = renderer_types.palette;
+const theme_mod = @import("theme");
+const RendererPalette = theme_mod.RendererPalette;
 const FontGrid = @import("fontgrid").FontGrid;
 const FontMetrics = font_types.FontMetrics;
 const TermPTerminal = terminal_mod.TermPTerminal;
@@ -55,9 +57,12 @@ var cached_rows: u16 = 0;
 var cached_cursor_row: u16 = std.math.maxInt(u16);
 
 /// Phase 1: Copy cell data from terminal. Call while holding the mutex.
+/// Accepts an optional RendererPalette for config-driven default colors.
+/// If pal is null, falls back to the compile-time palette.
 pub fn snapshotCells(
     allocator: std.mem.Allocator,
     terminal: *const TermPTerminal,
+    pal: ?*const RendererPalette,
 ) !struct {
     cells: []CellSnapshot,
     cols: u16,
@@ -71,6 +76,10 @@ pub fn snapshotCells(
     const cols: u16 = @intCast(screen.pages.cols);
     const rows: u16 = @intCast(screen.pages.rows);
     const total: usize = @as(usize, cols) * @as(usize, rows);
+
+    // Use config-driven palette if provided, else compile-time defaults
+    const default_fg = if (pal) |p| p.default_fg else palette.default_fg;
+    const default_bg = if (pal) |p| p.default_bg else palette.default_bg;
 
     const cells = try allocator.alloc(CellSnapshot, total);
 
@@ -89,8 +98,8 @@ pub fn snapshotCells(
                     .grapheme = empty_grapheme,
                     .grapheme_len = 0,
                     .style_id = 0,
-                    .fg = palette.default_fg,
-                    .bg = palette.default_bg,
+                    .fg = default_fg,
+                    .bg = default_bg,
                     .inverse = false,
                     .wide = false,
                     .wide_spacer = false,
@@ -102,21 +111,27 @@ pub fn snapshotCells(
             const rac = pin.rowAndCell();
             const cell = rac.cell;
 
-            var fg = palette.default_fg;
-            var bg = palette.default_bg;
+            var fg = default_fg;
+            var bg = default_bg;
             var inverse = false;
 
             if (cell.style_id != 0) {
                 const style = pin.style(cell);
-                fg = resolveColor(style.fg_color, palette.default_fg);
-                bg = resolveColor(style.bg_color, palette.default_bg);
+                fg = resolveColor(style.fg_color, default_fg, pal);
+                bg = resolveColor(style.bg_color, default_bg, pal);
                 inverse = style.flags.inverse;
             }
 
-            // Collect full grapheme cluster
+            // Get base codepoint directly from ghostty-vt cell.
+            const cp = cell.codepoint();
             var grapheme_buf: [cell_mod.MAX_GRAPHEME_CODEPOINTS]u21 = empty_grapheme;
-            const extra_cps = if (cell.hasGrapheme()) pin.grapheme(cell) else null;
-            const grapheme_len = cell_mod.getGraphemeCodepoints(cell.*, extra_cps, &grapheme_buf);
+            var grapheme_len: u8 = 0;
+            if (cp > 0) {
+                grapheme_buf[0] = cp;
+                grapheme_len = 1;
+                // TODO: extract extra grapheme codepoints for multi-codepoint clusters
+                // when ghostty-vt's grapheme API is verified working.
+            }
 
             cells[i] = .{
                 .grapheme = grapheme_buf,
@@ -145,12 +160,14 @@ pub fn snapshotCells(
 
 /// Phase 2: Build CellInstance arrays from snapshot. Call WITHOUT the mutex.
 /// Shapes text through HarfBuzz for ligature support, with dirty-row caching.
+/// Accepts an optional RendererPalette for config-driven cursor and background colors.
 pub fn buildFromSnapshot(
     allocator: std.mem.Allocator,
     snap: anytype,
     font_grid: *FontGrid,
     viewport_width: u32,
     viewport_height: u32,
+    pal: ?*const RendererPalette,
 ) !RenderState {
     const cols = snap.cols;
     const rows = snap.rows;
@@ -223,7 +240,7 @@ pub fn buildFromSnapshot(
             .row = snap.cursor_row,
             .style = .block,
             .visible = true,
-            .color = palette.cursor_color.toU32(),
+            .color = if (pal) |p| p.cursor_color.toU32() else palette.cursor_color.toU32(),
         },
         .grid_cols = cols,
         .grid_rows = rows,
@@ -328,98 +345,121 @@ fn shapeRowInto(
             continue;
         }
 
-        // Detect emoji in the run.
-        const is_emoji = cell_mod.isEmojiCodepoint(cell0.grapheme[0]);
-        const emoji_idx = font_grid.getEmojiFontIndex();
+        // Detect if this run contains emoji or wide (CJK) chars.
+        // Emoji/CJK can't use HarfBuzz glyph IDs from the primary font — they need
+        // codepoint-based fallback through the full font chain.
+        const first_cp = cell0.grapheme[0];
+        const is_emoji = cell_mod.isEmojiCodepoint(first_cp);
+        const is_wide_run = cell0.wide;
 
-        // Try HarfBuzz shaping.
-        const shaped = shaper.shape(run_cps[0..cp_len]) catch null;
-        if (shaped) |glyphs| {
-            defer shaper.allocator.free(glyphs);
-
-            for (glyphs) |glyph| {
-                // Reverse-lookup: find which cell owns this cluster.
-                var glyph_col: u16 = run_start;
-                const run_len = run_end - run_start;
-                for (0..run_len) |ci| {
-                    if (cell_cp_offsets[ci] <= glyph.cluster) {
-                        glyph_col = run_start + @as(u16, @intCast(ci));
-                    }
-                }
+        if (is_emoji or is_wide_run) {
+            // Emoji and wide chars: use codepoint-based fallback (walks font chain).
+            for (run_start..run_end) |ci| {
+                const c = row_cells[ci];
+                if (c.grapheme_len == 0 or c.grapheme[0] == 0 or c.wide_spacer) continue;
+                const cp = c.grapheme[0];
+                if (cp == ' ') continue;
 
                 var flags: u16 = 0;
-                if (cell0.wide) flags |= CellFlags.WIDE_CHAR;
-                const use_color = is_emoji and emoji_idx != null;
-                if (use_color) flags |= CellFlags.COLOR_GLYPH;
-                if (glyph.num_chars > 1) flags |= CellFlags.LIGATURE_HEAD;
+                if (c.wide) flags |= CellFlags.WIDE_CHAR;
+                if (cell_mod.isEmojiCodepoint(cp)) flags |= CellFlags.COLOR_GLYPH;
 
-                const font_idx: u8 = if (use_color) emoji_idx.? else 0;
-                const glyph_result = font_grid.getGlyphByID(font_idx, glyph.glyph_id, use_color) catch {
-                    // Fallback: try codepoint-based lookup.
-                    const cp = if (glyph.cluster < cp_len) run_cps[glyph.cluster] else cell0.grapheme[0];
-                    const fallback = font_grid.getGlyph(cp) catch continue;
-                    const sby: i32 = @as(i32, @intFromFloat(metrics.ascender)) - fallback.bearing_y;
-                    text_buf[text_count.*] = CellInstance{
-                        .grid_col = glyph_col, .grid_row = row,
-                        .atlas_x = fallback.region.x, .atlas_y = fallback.region.y,
-                        .atlas_w = fallback.region.w, .atlas_h = fallback.region.h,
-                        .bearing_x = @intCast(std.math.clamp(fallback.bearing_x, -32768, 32767)),
-                        .bearing_y = @intCast(std.math.clamp(sby, -32768, 32767)),
-                        .fg_color = fg.toU32(), .bg_color = bg.toU32(),
-                        .flags = flags,
-                    };
-                    text_count.* += 1;
-                    continue;
-                };
-
-                const sby: i32 = @as(i32, @intFromFloat(metrics.ascender)) - glyph_result.bearing_y;
+                const gr = font_grid.getGlyph(cp) catch continue;
+                const sby: i32 = @as(i32, @intFromFloat(metrics.ascender)) - gr.bearing_y;
                 text_buf[text_count.*] = CellInstance{
-                    .grid_col = glyph_col, .grid_row = row,
-                    .atlas_x = glyph_result.region.x, .atlas_y = glyph_result.region.y,
-                    .atlas_w = glyph_result.region.w, .atlas_h = glyph_result.region.h,
-                    .bearing_x = @intCast(std.math.clamp(glyph_result.bearing_x, -32768, 32767)),
+                    .grid_col = @intCast(ci), .grid_row = row,
+                    .atlas_x = gr.region.x, .atlas_y = gr.region.y,
+                    .atlas_w = gr.region.w, .atlas_h = gr.region.h,
+                    .bearing_x = @intCast(std.math.clamp(gr.bearing_x, -32768, 32767)),
                     .bearing_y = @intCast(std.math.clamp(sby, -32768, 32767)),
                     .fg_color = fg.toU32(), .bg_color = bg.toU32(),
                     .flags = flags,
                 };
                 text_count.* += 1;
-
-                // Emit LIGATURE_CONTINUATION for columns covered by multi-char glyph.
-                if (glyph.num_chars > 1) {
-                    var cont: u16 = 1;
-                    while (cont < glyph.num_chars and glyph_col + cont < run_end) : (cont += 1) {
-                        text_buf[text_count.*] = CellInstance{
-                            .grid_col = glyph_col + cont, .grid_row = row,
-                            .atlas_x = 0, .atlas_y = 0, .atlas_w = 0, .atlas_h = 0,
-                            .bearing_x = 0, .bearing_y = 0,
-                            .fg_color = 0, .bg_color = 0,
-                            .flags = CellFlags.LIGATURE_CONTINUATION,
-                        };
-                        text_count.* += 1;
-                    }
-                }
             }
         } else {
-            // Shaping failed — fallback to per-codepoint rendering.
-            for (run_start..run_end) |ci| {
-                const c = row_cells[ci];
-                if (c.grapheme_len > 0 and c.grapheme[0] > 0 and c.grapheme[0] != ' ' and !c.wide_spacer) {
-                    var flags: u16 = 0;
-                    if (c.wide) flags |= CellFlags.WIDE_CHAR;
-                    if (cell_mod.isEmojiCodepoint(c.grapheme[0])) flags |= CellFlags.COLOR_GLYPH;
+            // Normal text: HarfBuzz shaping for ligatures.
+            const shaped = shaper.shape(run_cps[0..cp_len]) catch null;
+            if (shaped) |glyphs| {
+                defer shaper.allocator.free(glyphs);
 
-                    const gr = font_grid.getGlyph(c.grapheme[0]) catch continue;
-                    const sby: i32 = @as(i32, @intFromFloat(metrics.ascender)) - gr.bearing_y;
+                for (glyphs) |glyph| {
+                    // Reverse-lookup: find which cell owns this cluster.
+                    var glyph_col: u16 = run_start;
+                    const run_len = run_end - run_start;
+                    for (0..run_len) |ci| {
+                        if (cell_cp_offsets[ci] <= glyph.cluster) {
+                            glyph_col = run_start + @as(u16, @intCast(ci));
+                        }
+                    }
+
+                    var flags: u16 = 0;
+                    if (glyph.num_chars > 1) flags |= CellFlags.LIGATURE_HEAD;
+
+                    // Use glyph ID for primary font (shaping was done with it).
+                    const glyph_result = font_grid.getGlyphByID(0, glyph.glyph_id, false) catch {
+                        // Fallback: codepoint-based lookup through font chain.
+                        const cp = if (glyph.cluster < cp_len) run_cps[glyph.cluster] else first_cp;
+                        const fallback = font_grid.getGlyph(cp) catch continue;
+                        const sby: i32 = @as(i32, @intFromFloat(metrics.ascender)) - fallback.bearing_y;
+                        text_buf[text_count.*] = CellInstance{
+                            .grid_col = glyph_col, .grid_row = row,
+                            .atlas_x = fallback.region.x, .atlas_y = fallback.region.y,
+                            .atlas_w = fallback.region.w, .atlas_h = fallback.region.h,
+                            .bearing_x = @intCast(std.math.clamp(fallback.bearing_x, -32768, 32767)),
+                            .bearing_y = @intCast(std.math.clamp(sby, -32768, 32767)),
+                            .fg_color = fg.toU32(), .bg_color = bg.toU32(),
+                            .flags = flags,
+                        };
+                        text_count.* += 1;
+                        continue;
+                    };
+
+                    const sby: i32 = @as(i32, @intFromFloat(metrics.ascender)) - glyph_result.bearing_y;
                     text_buf[text_count.*] = CellInstance{
-                        .grid_col = @intCast(ci), .grid_row = row,
-                        .atlas_x = gr.region.x, .atlas_y = gr.region.y,
-                        .atlas_w = gr.region.w, .atlas_h = gr.region.h,
-                        .bearing_x = @intCast(std.math.clamp(gr.bearing_x, -32768, 32767)),
+                        .grid_col = glyph_col, .grid_row = row,
+                        .atlas_x = glyph_result.region.x, .atlas_y = glyph_result.region.y,
+                        .atlas_w = glyph_result.region.w, .atlas_h = glyph_result.region.h,
+                        .bearing_x = @intCast(std.math.clamp(glyph_result.bearing_x, -32768, 32767)),
                         .bearing_y = @intCast(std.math.clamp(sby, -32768, 32767)),
                         .fg_color = fg.toU32(), .bg_color = bg.toU32(),
                         .flags = flags,
                     };
                     text_count.* += 1;
+
+                    // Emit LIGATURE_CONTINUATION for columns covered by multi-char glyph.
+                    if (glyph.num_chars > 1) {
+                        var cont: u16 = 1;
+                        while (cont < glyph.num_chars and glyph_col + cont < run_end) : (cont += 1) {
+                            text_buf[text_count.*] = CellInstance{
+                                .grid_col = glyph_col + cont, .grid_row = row,
+                                .atlas_x = 0, .atlas_y = 0, .atlas_w = 0, .atlas_h = 0,
+                                .bearing_x = 0, .bearing_y = 0,
+                                .fg_color = 0, .bg_color = 0,
+                                .flags = CellFlags.LIGATURE_CONTINUATION,
+                            };
+                            text_count.* += 1;
+                        }
+                    }
+                }
+            } else {
+                // Shaping failed — fallback to per-codepoint rendering.
+                for (run_start..run_end) |ci| {
+                    const c = row_cells[ci];
+                    if (c.grapheme_len > 0 and c.grapheme[0] > 0 and c.grapheme[0] != ' ' and !c.wide_spacer) {
+                        const gr = font_grid.getGlyph(c.grapheme[0]) catch continue;
+                        const sby: i32 = @as(i32, @intFromFloat(metrics.ascender)) - gr.bearing_y;
+                        text_buf[text_count.*] = CellInstance{
+                            .grid_col = @intCast(ci), .grid_row = row,
+                            .atlas_x = gr.region.x, .atlas_y = gr.region.y,
+                            .atlas_w = gr.region.w, .atlas_h = gr.region.h,
+                            .bearing_x = @intCast(std.math.clamp(gr.bearing_x, -32768, 32767)),
+                            .bearing_y = @intCast(std.math.clamp(sby, -32768, 32767)),
+                            .fg_color = fg.toU32(), .bg_color = bg.toU32(),
+                            .flags = 0,
+                        };
+                        text_count.* += 1;
+                    }
                 }
             }
         }
@@ -434,7 +474,9 @@ fn emitBg(cell: CellSnapshot, col: u16, row: u16, buf: []CellInstance, count: *u
     if (cell.inverse) {
         bg = cell.fg;
     }
-    if (!bg.eql(palette.default_bg)) {
+    // Compare against the default bg that was used during snapshot
+    // (already resolved from config palette in snapshotCells)
+    if (!bg.eql(palette.default_bg) and bg.a > 0) {
         var fg = cell.fg;
         if (cell.inverse) fg = cell.bg;
         buf[count.*] = CellInstance{
@@ -484,21 +526,23 @@ fn invalidateRowCache() void {
 }
 
 /// Legacy single-call API (kept for compatibility).
+/// Accepts optional RendererPalette for config-driven colors.
 pub fn buildRenderState(
     allocator: std.mem.Allocator,
     terminal: *const TermPTerminal,
     font_grid: *FontGrid,
     viewport_width: u32,
     viewport_height: u32,
+    pal: ?*const RendererPalette,
 ) !RenderState {
-    const snap = try snapshotCells(allocator, terminal);
-    return buildFromSnapshot(allocator, snap, font_grid, viewport_width, viewport_height);
+    const snap = try snapshotCells(allocator, terminal, pal);
+    return buildFromSnapshot(allocator, snap, font_grid, viewport_width, viewport_height, pal);
 }
 
-fn resolveColor(vt_color: anytype, default: Color) Color {
+fn resolveColor(vt_color: anytype, default: Color, pal: ?*const RendererPalette) Color {
     return switch (vt_color) {
         .none => default,
         .rgb => |rgb| Color{ .r = rgb.r, .g = rgb.g, .b = rgb.b },
-        .palette => |idx| palette.resolve256(idx),
+        .palette => |idx| if (pal) |p| p.resolve256(idx) else palette.resolve256(idx),
     };
 }

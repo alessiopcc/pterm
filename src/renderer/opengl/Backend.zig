@@ -312,8 +312,19 @@ pub const OpenGLBackend = struct {
 
     /// Draw a complete frame from a RenderState snapshot.
     /// Three-pass pipeline: backgrounds, text, cursor (D-04).
-    pub fn drawFrame(self: *OpenGLBackend, state: *const types.RenderState) void {
+    /// Accepts an optional background color for clear; uses default palette if null.
+    pub fn drawFrame(self: *OpenGLBackend, state: *const types.RenderState, bg_color: ?Color) void {
         const start_ns = std.time.nanoTimestamp();
+
+        // Set clear color from config palette (if provided) or keep init-time default
+        if (bg_color) |bg| {
+            gl.ClearColor(
+                @as(gl.float, @floatFromInt(bg.r)) / 255.0,
+                @as(gl.float, @floatFromInt(bg.g)) / 255.0,
+                @as(gl.float, @floatFromInt(bg.b)) / 255.0,
+                1.0,
+            );
+        }
 
         gl.BindVertexArray(self.quad_vao);
         gl.Clear(gl.COLOR_BUFFER_BIT);

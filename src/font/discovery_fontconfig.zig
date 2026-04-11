@@ -82,6 +82,19 @@ pub fn discoverEmojiFont(allocator: std.mem.Allocator) ?DiscoverResult {
     return null;
 }
 
+pub fn discoverCJKFont(allocator: std.mem.Allocator) ?DiscoverResult {
+    const cjk_families = [_][]const u8{
+        "Noto Sans CJK",
+        "Noto Sans CJK JP",
+        "WenQuanYi Micro Hei",
+        "Droid Sans Fallback",
+    };
+    for (cjk_families) |family| {
+        if (discoverNonMono(allocator, family)) |result| return result;
+    }
+    return null;
+}
+
 /// Discover a font without the monospace spacing constraint (for emoji fonts).
 fn discoverNonMono(allocator: std.mem.Allocator, family: []const u8) ?DiscoverResult {
     const config = c.FcInitLoadConfigAndFonts();

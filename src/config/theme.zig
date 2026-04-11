@@ -27,15 +27,8 @@ pub const UiColors = struct {
     tab_active: [3]u8,
     tab_inactive: [3]u8,
     pane_border: [3]u8,
-    pane_border_active: [3]u8,
     status_bar_bg: [3]u8,
     agent_alert: [3]u8,
-    search_bar_bg: [3]u8 = .{ 0x18, 0x18, 0x25 },
-    search_match: [3]u8 = .{ 0x58, 0x4A, 0x1E },
-    search_current_match: [3]u8 = .{ 0x6B, 0x2E, 0x3A },
-    url_hover: [3]u8 = .{ 0x89, 0xB4, 0xFA },
-    bell_flash: [3]u8 = .{ 0xF9, 0xE2, 0xAF },
-    bell_badge: [3]u8 = .{ 0xF3, 0x8B, 0xA8 },
 };
 
 /// Color palette as stored in config: hex strings for ANSI + named colors,
@@ -73,16 +66,8 @@ pub const RendererPalette = struct {
     ui_tab_active: Color,
     ui_tab_inactive: Color,
     ui_pane_border: Color,
-    ui_pane_border_active: Color,
     ui_status_bar_bg: Color,
     ui_agent_alert: Color,
-    // UI colors
-    ui_search_bar_bg: Color,
-    ui_search_match: Color,
-    ui_search_current_match: Color,
-    ui_url_hover: Color,
-    ui_bell_flash: Color,
-    ui_bell_badge: Color,
 
     /// Resolve a 256-color index using this palette's ANSI colors.
     /// Indices 0-7: normal, 8-15: bright, 16-231: 6x6x6 cube, 232-255: grayscale.
@@ -129,20 +114,13 @@ pub fn buildRendererPalette(palette: ColorPalette) !RendererPalette {
         .ui_tab_active = colorFromU8Array(palette.ui.tab_active),
         .ui_tab_inactive = colorFromU8Array(palette.ui.tab_inactive),
         .ui_pane_border = colorFromU8Array(palette.ui.pane_border),
-        .ui_pane_border_active = colorFromU8Array(palette.ui.pane_border_active),
         .ui_status_bar_bg = colorFromU8Array(palette.ui.status_bar_bg),
         .ui_agent_alert = colorFromU8Array(palette.ui.agent_alert),
-        .ui_search_bar_bg = colorFromU8Array(palette.ui.search_bar_bg),
-        .ui_search_match = colorFromU8Array(palette.ui.search_match),
-        .ui_search_current_match = colorFromU8Array(palette.ui.search_current_match),
-        .ui_url_hover = colorFromU8Array(palette.ui.url_hover),
-        .ui_bell_flash = colorFromU8Array(palette.ui.bell_flash),
-        .ui_bell_badge = colorFromU8Array(palette.ui.bell_badge),
     };
 }
 
 /// Build a default RendererPalette matching the compile-time Catppuccin Mocha palette.
-/// Used when no config file exists.
+/// Used when no config file exists for identical behavior to pre-Phase 4.
 pub fn defaultRendererPalette() RendererPalette {
     const builtin_themes = @import("builtin_themes");
     const default_palette = builtin_themes.get("default").?;
@@ -166,7 +144,7 @@ pub fn buildRendererPaletteFromConfig(colors: anytype) RendererPalette {
         .selection_fg = colors.selection_fg orelse defaults.selection_fg,
         .normal = defaults.normal, // ANSI colors not yet in Config.Colors; use defaults
         .bright = defaults.bright,
-        .ui = defaults.ui,
+        .ui = defaults.ui, // UI colors not wired until Phase 5/7
     };
 
     return buildRendererPalette(merged) catch {

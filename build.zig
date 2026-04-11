@@ -396,6 +396,7 @@ pub fn build(b: *std.Build) void {
     if (ghostty_vt_mod) |m| {
         render_state_mod.addImport("ghostty-vt", m);
     }
+    // Phase 4: theme import for RendererPalette parameter (added later, forward-declared here)
     if (freetype_dep) |dep| {
         render_state_mod.linkLibrary(dep.artifact("freetype"));
     }
@@ -403,12 +404,59 @@ pub fn build(b: *std.Build) void {
         render_state_mod.linkLibrary(dep.artifact("harfbuzz"));
     }
 
-    // App config module (hardcoded defaults for Phase 2)
-    const config_mod = b.createModule(.{
-        .root_source_file = b.path("src/app/Config.zig"),
+    // TOML parser dependency (sam701/zig-toml)
+    const tomlz_dep = b.lazyDependency("tomlz", .{
         .target = target,
         .optimize = optimize,
     });
+
+    // Config loader module (TOML file loading + import chain)
+    const config_loader_mod = b.createModule(.{
+        .root_source_file = b.path("src/config/loader.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    if (tomlz_dep) |dep| {
+        config_loader_mod.addImport("toml", dep.module("toml"));
+    }
+
+    // Config defaults module (platform path detection + dump-config)
+    const config_defaults_mod = b.createModule(.{
+        .root_source_file = b.path("src/config/defaults.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Config CLI module (argument parsing + overrides)
+    const config_cli_mod = b.createModule(.{
+        .root_source_file = b.path("src/config/cli.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Config env module (TERMP_* environment variable overrides)
+    const config_env_mod = b.createModule(.{
+        .root_source_file = b.path("src/config/env.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // App config module (Phase 4: full TOML-based config system)
+    const config_mod = b.createModule(.{
+        .root_source_file = b.path("src/config/Config.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    config_mod.addImport("loader", config_loader_mod);
+    config_mod.addImport("defaults", config_defaults_mod);
+    config_mod.addImport("cli", config_cli_mod);
+    config_mod.addImport("env", config_env_mod);
+
+    // Wire Config.zig back into sub-modules that reference it
+    config_loader_mod.addImport("Config.zig", config_mod);
+    config_cli_mod.addImport("Config.zig", config_mod);
+    config_cli_mod.addImport("defaults", config_defaults_mod);
+    config_env_mod.addImport("Config.zig", config_mod);
 
     // Surface coordinator module (wires TermIO + Renderer + FontGrid + Input)
     const surface_mod = b.createModule(.{
@@ -466,6 +514,34 @@ pub fn build(b: *std.Build) void {
 
     // Wire app module into main executable
     exe_mod.addImport("app", app_mod);
+    exe_mod.addImport("config", config_mod);
+    exe_mod.addImport("cli", config_cli_mod);
+    exe_mod.addImport("defaults", config_defaults_mod);
+
+    // -------------------------------------------------------
+    // Phase 4 Plan 02: Keybinding system modules (defined early for exe + surface + test reuse)
+    // -------------------------------------------------------
+
+    // Keybinding types, parser, map builder, reserved keys
+    const keybindings_mod = b.createModule(.{
+        .root_source_file = b.path("src/config/keybindings.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Keybinding TUI (interactive configurator, D-22)
+    const keybinding_tui_mod = b.createModule(.{
+        .root_source_file = b.path("src/config/keybinding_tui.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    keybinding_tui_mod.addImport("keybindings", keybindings_mod);
+
+    // Wire keybindings into surface module (same instance to avoid duplicate module error)
+    surface_mod.addImport("keybindings", keybindings_mod);
+
+    // Wire keybinding TUI into main executable
+    exe_mod.addImport("keybinding_tui", keybinding_tui_mod);
 
     // Test step
     const test_step = b.step("test", "Run unit tests");
@@ -622,6 +698,27 @@ pub fn build(b: *std.Build) void {
     const run_shaper_tests = b.addRunArtifact(shaper_tests);
     test_step.dependOn(&run_shaper_tests.step);
 
+    // Config system tests (Phase 4)
+    const config_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/config_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    config_test_mod.addImport("config", config_mod);
+    config_test_mod.addImport("loader", config_loader_mod);
+    config_test_mod.addImport("defaults", config_defaults_mod);
+    config_test_mod.addImport("cli", config_cli_mod);
+    config_test_mod.addImport("env", config_env_mod);
+    if (tomlz_dep) |dep| {
+        config_test_mod.addImport("toml", dep.module("toml"));
+    }
+
+    const config_tests = b.addTest(.{
+        .root_module = config_test_mod,
+    });
+    const run_config_tests = b.addRunArtifact(config_tests);
+    test_step.dependOn(&run_config_tests.step);
+
     // RenderState tests (Phase 3: shaping-aware rendering)
     const render_state_test_mod = b.createModule(.{
         .root_source_file = b.path("tests/render_state_test.zig"),
@@ -634,4 +731,96 @@ pub fn build(b: *std.Build) void {
     const render_state_tests = b.addTest(.{ .root_module = render_state_test_mod });
     const run_render_state_tests = b.addRunArtifact(render_state_tests);
     test_step.dependOn(&run_render_state_tests.step);
+
+    // -------------------------------------------------------
+    // Phase 4 Plan 02: Keybinding tests
+    // -------------------------------------------------------
+
+    // Keybinding inline tests (keybindings.zig)
+    const keybinding_inline_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/config/keybindings.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const keybinding_inline_tests = b.addTest(.{ .root_module = keybinding_inline_test_mod });
+    const run_keybinding_inline_tests = b.addRunArtifact(keybinding_inline_tests);
+    test_step.dependOn(&run_keybinding_inline_tests.step);
+
+    // Keybinding TUI inline tests (keybinding_tui.zig)
+    const keybinding_tui_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/config/keybinding_tui.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    keybinding_tui_test_mod.addImport("keybindings", keybindings_mod);
+    const keybinding_tui_tests = b.addTest(.{ .root_module = keybinding_tui_test_mod });
+    const run_keybinding_tui_tests = b.addRunArtifact(keybinding_tui_tests);
+    test_step.dependOn(&run_keybinding_tui_tests.step);
+
+    // Keybinding external tests (tests/keybinding_test.zig)
+    const keybinding_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/keybinding_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    keybinding_test_mod.addImport("keybindings", keybindings_mod);
+    keybinding_test_mod.addImport("keybinding_tui", keybinding_tui_mod);
+    const keybinding_tests = b.addTest(.{ .root_module = keybinding_test_mod });
+    const run_keybinding_tests = b.addRunArtifact(keybinding_tests);
+    test_step.dependOn(&run_keybinding_tests.step);
+
+    // -------------------------------------------------------
+    // Phase 4 Plan 03: Theme and color palette modules
+    // -------------------------------------------------------
+
+    // Theme module (hex parsing, RendererPalette, palette conversion)
+    const theme_mod = b.createModule(.{
+        .root_source_file = b.path("src/config/theme.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    theme_mod.addImport("renderer_types", renderer_types_mod);
+
+    // Built-in themes module
+    const builtin_themes_mod = b.createModule(.{
+        .root_source_file = b.path("src/config/builtin_themes.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    builtin_themes_mod.addImport("theme", theme_mod);
+
+    // Cross-reference: theme needs builtin_themes for defaultRendererPalette
+    theme_mod.addImport("builtin_themes", builtin_themes_mod);
+
+    // Wire theme into render_state_mod (for RendererPalette parameter)
+    render_state_mod.addImport("theme", theme_mod);
+
+    // File watcher module (config hot-reload, D-14)
+    const watcher_mod = b.createModule(.{
+        .root_source_file = b.path("src/config/watcher.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Theme tests
+    const theme_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/theme_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    theme_test_mod.addImport("theme", theme_mod);
+    theme_test_mod.addImport("builtin_themes", builtin_themes_mod);
+    theme_test_mod.addImport("renderer_types", renderer_types_mod);
+
+    const theme_tests = b.addTest(.{ .root_module = theme_test_mod });
+    const run_theme_tests = b.addRunArtifact(theme_tests);
+    test_step.dependOn(&run_theme_tests.step);
+
+    // Wire theme and watcher modules into surface and app
+    surface_mod.addImport("theme", theme_mod);
+    surface_mod.addImport("builtin_themes", builtin_themes_mod);
+    surface_mod.addImport("watcher", watcher_mod);
+    app_mod.addImport("theme", theme_mod);
+    app_mod.addImport("watcher", watcher_mod);
+    app_mod.addImport("cli", config_cli_mod);
 }

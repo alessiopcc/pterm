@@ -1,4 +1,4 @@
-/// Keybinding system tests.
+/// Keybinding system tests (Phase 04 Plan 02).
 ///
 /// Tests parseKeyCombo, isReservedClipboardKey, buildMap (with D-18 multi-combo),
 /// conflict detection (D-25), unbind via none (D-23), and formatKeyCombo.
@@ -67,7 +67,7 @@ test "parse empty string returns error" {
 // isReservedClipboardKey tests
 // -------------------------------------------------------
 
-test "reserved: ctrl+c (D-17 smart copy/SIGINT)" {
+test "reserved: ctrl+c" {
     const combo = try kb.parseKeyCombo("ctrl+c");
     try std.testing.expect(kb.isReservedClipboardKey(combo));
 }
@@ -77,7 +77,7 @@ test "reserved: ctrl+v" {
     try std.testing.expect(kb.isReservedClipboardKey(combo));
 }
 
-test "reserved: super+c (D-17 smart copy/SIGINT on macOS)" {
+test "reserved: super+c (macOS Cmd+C)" {
     const combo = try kb.parseKeyCombo("super+c");
     try std.testing.expect(kb.isReservedClipboardKey(combo));
 }
@@ -105,9 +105,9 @@ test "default map has copy, paste, new_tab, scroll_page_up, font actions" {
     var map = try kb.buildMap(std.testing.allocator, null);
     defer map.deinit();
 
-    // ctrl+c is NOT in the map (passes through to terminal as SIGINT)
+    // copy on ctrl+c
     const ctrl_c = try kb.parseKeyCombo("ctrl+c");
-    try std.testing.expectEqual(@as(?Action, null), map.get(ctrl_c));
+    try std.testing.expectEqual(Action.copy, map.get(ctrl_c).?);
 
     // paste on ctrl+v
     const ctrl_v = try kb.parseKeyCombo("ctrl+v");
@@ -145,29 +145,28 @@ test "buildMap: user override new_tab to ctrl+n" {
     try std.testing.expectEqual(Action.new_tab, map.get(ctrl_n).?);
 }
 
-test "buildMap: reserved clipboard key (ctrl+v) cannot be overridden, warning emitted" {
+test "buildMap: reserved key cannot be overridden, warning emitted" {
     const overrides = [_]UserBinding{
-        .{ .action_name = "new_tab", .combo_str = "ctrl+v" },
+        .{ .action_name = "new_tab", .combo_str = "ctrl+c" },
     };
     var map = try kb.buildMap(std.testing.allocator, &overrides);
     defer map.deinit();
 
-    // ctrl+v should still be paste (reserved clipboard key)
-    const ctrl_v = try kb.parseKeyCombo("ctrl+v");
-    try std.testing.expectEqual(Action.paste, map.get(ctrl_v).?);
+    // ctrl+c should still be copy
+    const ctrl_c = try kb.parseKeyCombo("ctrl+c");
+    try std.testing.expectEqual(Action.copy, map.get(ctrl_c).?);
     try std.testing.expect(map.warnings.items.len > 0);
 }
 
-test "buildMap: copy is reserved and cannot be rebound" {
+test "buildMap: ctrl+shift+c accepted (not reserved, shift makes it different)" {
     const overrides = [_]UserBinding{
         .{ .action_name = "copy", .combo_str = "ctrl+shift+c" },
     };
     var map = try kb.buildMap(std.testing.allocator, &overrides);
     defer map.deinit();
 
-    // copy is a reserved action — override is rejected
     const csc = try kb.parseKeyCombo("ctrl+shift+c");
-    try std.testing.expect(map.get(csc) == null);
+    try std.testing.expectEqual(Action.copy, map.get(csc).?);
 }
 
 test "buildMap: unbind scroll_page_up with none (D-23)" {
@@ -194,15 +193,15 @@ test "buildMap: conflict detection warns, last wins (D-25)" {
     try std.testing.expect(map.warnings.items.len > 0);
 }
 
-test "buildMap: single combo per action (non-reserved)" {
+test "buildMap: single combo per action" {
     const overrides = [_]UserBinding{
-        .{ .action_name = "new_tab", .combo_str = "ctrl+shift+n" },
+        .{ .action_name = "copy", .combo_str = "ctrl+shift+c" },
     };
     var map = try kb.buildMap(std.testing.allocator, &overrides);
     defer map.deinit();
 
-    const csn = try kb.parseKeyCombo("ctrl+shift+n");
-    try std.testing.expectEqual(Action.new_tab, map.get(csn).?);
+    const csc = try kb.parseKeyCombo("ctrl+shift+c");
+    try std.testing.expectEqual(Action.copy, map.get(csc).?);
 }
 
 // -------------------------------------------------------
