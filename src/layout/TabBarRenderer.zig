@@ -31,6 +31,13 @@ pub const TabBarConfig = struct {
 
     /// Hovered control button (0=none, 1=minimize, 2=maximize, 3=close)
     hovered_control: u8 = 0,
+
+    /// Bell badge color (D-29: pink badge on tabs with bell, default #f38ba8).
+    bell_badge_color: ColorU32 = 0xF38BA8FF,
+
+    /// Per-tab bell badge flags. Slice length matches tab count.
+    /// null means no bell badge info available (skip rendering).
+    tab_bell_badges: ?[]const bool = null,
 };
 
 // Control button colors
@@ -235,6 +242,26 @@ pub const TabBarRenderer = struct {
                 const display_len = @min(title_text.len, max_title_chars);
                 if (display_len > 0) {
                     draw_text_fn(title_text[0..display_len], text_x, text_y, config.fg_color, draw_ctx);
+                }
+            }
+
+            // Bell badge — pink filled circle on tabs with bell (D-29)
+            if (config.tab_bell_badges) |badges| {
+                if (idx < badges.len and badges[idx] and !is_active) {
+                    const badge_r: i32 = @intFromFloat(config.cell_height * 0.12);
+                    const badge_x = tab_x + @as(i32, @intCast(tab_w)) - cell_w_int * 3;
+                    const badge_cy = tab_y + @divFloor(@as(i32, @intCast(tab_h)), 2);
+                    // Draw filled circle as horizontal slices (diamond approximation)
+                    var bi: i32 = -badge_r;
+                    while (bi <= badge_r) : (bi += 1) {
+                        const span = badge_r - @as(i32, if (bi < 0) -bi else bi);
+                        draw_rect_fn(.{
+                            .x = badge_x - span,
+                            .y = badge_cy + bi,
+                            .w = @intCast(@as(u32, @intCast(span * 2 + 1))),
+                            .h = 1,
+                        }, config.bell_badge_color, draw_ctx);
+                    }
                 }
             }
 

@@ -237,6 +237,7 @@ pub const FontGrid = struct {
             .font_index = font_index,
             .glyph_id = glyph_id,
             .size_px = @intFromFloat(@round(self.config.size_pt * self.config.dpi_scale)),
+            .is_glyph_index = true,
         };
 
         if (color) {

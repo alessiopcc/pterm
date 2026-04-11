@@ -1,4 +1,4 @@
-/// CLI argument parsing for TermP configuration.
+/// CLI argument parsing for PTerm configuration.
 ///
 /// Parses command-line flags: --config, --font-size, --title, --cols, --rows,
 /// --working-dir, --dump-config, --check-config, --set-keybindings, --perf, --debug-keys.
@@ -80,9 +80,9 @@ fn printHelp(cli_config_path: ?[]const u8, allocator: std.mem.Allocator) void {
     const resolved = cli_config_path orelse (defaults_mod.defaultConfigPathAlloc(allocator) catch null) orelse "(none)";
 
     std.debug.print(
-        \\TermP - GPU-accelerated terminal emulator
+        \\PTerm - GPU-accelerated terminal emulator
         \\
-        \\Usage: termp [options]
+        \\Usage: pterm [options]
         \\
         \\Config: {s}
         \\
@@ -98,7 +98,7 @@ fn printHelp(cli_config_path: ?[]const u8, allocator: std.mem.Allocator) void {
         \\  --set-keybindings     Interactive keybinding configuration
         \\  --layout <name>       Start with named layout preset
         \\  --perf                Enable performance logging
-        \\  --debug-keys          Log keystrokes to termp_debug.log
+        \\  --debug-keys          Log keystrokes to pterm_debug.log
         \\  -h, --help            Show this help
         \\
     , .{resolved});

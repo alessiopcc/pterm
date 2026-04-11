@@ -1,4 +1,4 @@
-/// Scrollback ring buffer manager for TermP.
+/// Scrollback ring buffer manager for PTerm.
 ///
 /// Wraps terminal scrollback with a fixed-capacity ring buffer (D-12).
 /// When the buffer reaches capacity, the oldest line is evicted (D-15: default 10,000 lines).

@@ -518,6 +518,50 @@ pub const OpenGLBackend = struct {
         gl.Disable(gl.SCISSOR_TEST);
     }
 
+    /// Draw a filled rectangle with alpha blending enabled.
+    /// Used for semi-transparent overlays (bell flash D-27).
+    pub fn drawFilledRectAlpha(self: *OpenGLBackend, rect: layout_types.Rect, color: Color) void {
+        gl.Viewport(0, 0, @intCast(self.viewport_width), @intCast(self.viewport_height));
+        const gl_y: i32 = @as(i32, @intCast(self.viewport_height)) - rect.y - @as(i32, @intCast(rect.h));
+        gl.Enable(gl.SCISSOR_TEST);
+        gl.Scissor(@intCast(rect.x), gl_y, @intCast(rect.w), @intCast(rect.h));
+
+        const proj = computeOrthoMatrix(0.0, @floatFromInt(self.viewport_width), @floatFromInt(self.viewport_height), 0.0, -1.0, 1.0);
+
+        self.bg_program.use();
+        self.bg_program.setUniformMat4("uProjection", proj);
+        self.bg_program.setUniformVec2("uCellSize", @floatFromInt(rect.w), @floatFromInt(rect.h));
+        self.bg_program.setUniformVec2("uGridOffset", @floatFromInt(rect.x), @floatFromInt(rect.y));
+
+        // Enable alpha blending for semi-transparent overlay
+        gl.Enable(gl.BLEND);
+        gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+        const instance = CellInstance{
+            .grid_col = 0,
+            .grid_row = 0,
+            .atlas_x = 0,
+            .atlas_y = 0,
+            .atlas_w = 0,
+            .atlas_h = 0,
+            .bearing_x = 0,
+            .bearing_y = 0,
+            .fg_color = 0,
+            .bg_color = color.toU32(),
+            .flags = 0,
+        };
+
+        gl.BindVertexArray(self.quad_vao);
+        gl.BindBuffer(gl.ARRAY_BUFFER, self.bg_instance_vbo);
+        gl.BufferSubData(gl.ARRAY_BUFFER, 0, @intCast(@sizeOf(CellInstance)), @ptrCast(&instance));
+        setupInstanceAttributes(self.bg_instance_vbo);
+        gl.DrawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, 1);
+        gl.BindVertexArray(0);
+
+        gl.Disable(gl.BLEND);
+        gl.Disable(gl.SCISSOR_TEST);
+    }
+
     /// Upload RGBA icon pixels for title bar logo rendering.
     pub fn uploadIcon(self: *OpenGLBackend, pixels: []const u8, size: u32) void {
         if (self.icon_texture == 0) {

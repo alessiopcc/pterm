@@ -22,9 +22,25 @@ pub const Observer = struct {
     /// Phase 7 integration point. Fired when custom VT parser replaces ghostty-vt (D-01).
     onSequence: ?*const fn (action: u8, params: []const u16) void = null,
 
+    /// Phase 6 D-26: Bell detection callback. Fired when BEL byte (0x07) is found
+    /// in the raw output stream before VT parsing strips it.
+    onBell: ?*const fn (ctx: ?*anyopaque) void = null,
+    bell_ctx: ?*anyopaque = null,
+
     pub fn notify(self: *const Observer, event: Event) void {
         switch (event) {
-            .output => |bytes| if (self.onOutput) |cb| cb(bytes),
+            .output => |bytes| {
+                if (self.onOutput) |cb| cb(bytes);
+                // Bell detection: scan for BEL byte (0x07) in raw output
+                if (self.onBell) |bell_cb| {
+                    for (bytes) |b| {
+                        if (b == 0x07) {
+                            bell_cb(self.bell_ctx);
+                            break;
+                        }
+                    }
+                }
+            },
             .screen_change => if (self.onScreenChange) |cb| cb(self.screen_change_ctx),
             .mode_change => |m| if (self.onModeChange) |cb| cb(m.mode, m.enabled),
             .sequence => |s| if (self.onSequence) |cb| cb(s.action, s.params),

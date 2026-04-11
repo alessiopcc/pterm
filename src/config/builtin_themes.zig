@@ -43,7 +43,7 @@ const std = @import("std");
 // Theme definitions
 // ---------------------------------------------------------------
 
-/// TermP default (Catppuccin Mocha — matches existing hardcoded palette).
+/// PTerm default (Catppuccin Mocha — matches existing hardcoded palette).
 const default_theme = ColorPalette{
     .foreground = "#CDD6F4",
     .background = "#1E1E2E",

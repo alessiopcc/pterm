@@ -22,7 +22,7 @@ test "Config.defaults returns expected default values" {
     try testing.expectEqual(@as(i64, 55), config.window.rows);
     try testing.expectEqual(@as(f32, 4.0), config.window.padding);
     try testing.expectEqual(@as(i64, 10_000), config.scrollback.lines);
-    try testing.expectEqualStrings("TermP", config.window.title);
+    try testing.expectEqualStrings("PTerm", config.window.title);
     try testing.expectEqual(@as(?[]const u8, null), config.font.family);
     try testing.expectEqual(Config.CursorStyle.block, config.cursor.style);
     try testing.expectEqual(true, config.cursor.blink);
@@ -59,7 +59,7 @@ test "loadConfigFromPath loads valid config" {
     try testing.expectEqual(@as(f32, 15.0), config.font.size);
     try testing.expectEqual(@as(i64, 120), config.window.cols);
     // Window title should be overridden
-    try testing.expectEqualStrings("TestTermP", config.window.title);
+    try testing.expectEqualStrings("TestPTerm", config.window.title);
 }
 
 // ============================================================================
@@ -283,7 +283,7 @@ test "env overrides apply to config" {
     // that the function at least doesn't crash with no env vars set)
     const config = Config.defaults();
     const result = env_mod.applyOverrides(config);
-    // Without TERMP_* env vars set, should return unchanged config
+    // Without PTERM_* env vars set, should return unchanged config
     try testing.expectEqual(@as(f32, 12.0), result.font.size);
     try testing.expectEqual(@as(i64, 200), result.window.cols);
 }

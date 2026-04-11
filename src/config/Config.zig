@@ -1,9 +1,9 @@
-/// Configuration system for TermP.
+/// Configuration system for PTerm.
 ///
 /// Provides a four-tier config loading pipeline:
 ///   1. Built-in defaults (zero-friction first launch)
 ///   2. TOML config file (with import/merge support)
-///   3. TERMP_* environment variable overrides
+///   3. PTERM_* environment variable overrides
 ///   4. CLI flag overrides (highest priority)
 ///
 /// After loading, validate() clamps invalid values to safe defaults.
@@ -28,10 +28,31 @@ pub const Config = struct {
     shell: Shell = .{},
     // [colors]
     colors: Colors = .{},
+    // [search]
+    search: Search = .{},
+    // [url]
+    url: Url = .{},
+    // [bell]
+    bell: Bell = .{},
     // [keybindings] — raw action=combo pairs from TOML, passed to buildMap at runtime
     keybindings: []const KeybindingEntry = &.{},
     // [layout.*] — named layout presets parsed from TOML
     layouts: []LayoutPreset.LayoutPreset = &.{},
+
+    /// Phase 6: Search config (D-03/D-13: empty stub for v1, no regex, no history).
+    pub const Search = struct {};
+
+    /// Phase 6: URL detection config (D-34: enabled by default).
+    pub const Url = struct {
+        enabled: bool = true,
+    };
+
+    /// Phase 6: Bell notification config (D-24/D-25: visual mode default).
+    pub const Bell = struct {
+        mode: BellMode = .visual,
+
+        pub const BellMode = enum { visual, sound, both, none };
+    };
 
     pub const KeybindingEntry = struct {
         action_name: []const u8,
@@ -44,7 +65,7 @@ pub const Config = struct {
     };
 
     pub const Window = struct {
-        title: []const u8 = "TermP",
+        title: []const u8 = "PTerm",
         cols: i64 = 200,
         rows: i64 = 55,
         padding: f32 = 4.0,
@@ -89,6 +110,13 @@ pub const Config = struct {
         pane_border_active: ?[]const u8 = null,
         status_bar_bg: ?[]const u8 = null,
         agent_alert: ?[]const u8 = null,
+        // Phase 6: search, URL, bell UI colors
+        search_bar_bg: ?[]const u8 = null,
+        search_match: ?[]const u8 = null,
+        search_current_match: ?[]const u8 = null,
+        url_hover: ?[]const u8 = null,
+        bell_flash: ?[]const u8 = null,
+        bell_badge: ?[]const u8 = null,
     };
 
     /// Default config path constants.
@@ -152,7 +180,7 @@ pub const Config = struct {
         if (file.font.size != default_font_size) result.font.size = file.font.size;
 
         // Window
-        if (!std.mem.eql(u8, file.window.title, "TermP")) result.window.title = file.window.title;
+        if (!std.mem.eql(u8, file.window.title, "PTerm")) result.window.title = file.window.title;
         if (file.window.cols != default_cols) result.window.cols = file.window.cols;
         if (file.window.rows != default_rows) result.window.rows = file.window.rows;
         if (file.window.padding != default_padding) result.window.padding = file.window.padding;
@@ -185,6 +213,18 @@ pub const Config = struct {
         if (file.colors.ui.pane_border_active) |v| result.colors.ui.pane_border_active = v;
         if (file.colors.ui.status_bar_bg) |v| result.colors.ui.status_bar_bg = v;
         if (file.colors.ui.agent_alert) |v| result.colors.ui.agent_alert = v;
+        if (file.colors.ui.search_bar_bg) |v| result.colors.ui.search_bar_bg = v;
+        if (file.colors.ui.search_match) |v| result.colors.ui.search_match = v;
+        if (file.colors.ui.search_current_match) |v| result.colors.ui.search_current_match = v;
+        if (file.colors.ui.url_hover) |v| result.colors.ui.url_hover = v;
+        if (file.colors.ui.bell_flash) |v| result.colors.ui.bell_flash = v;
+        if (file.colors.ui.bell_badge) |v| result.colors.ui.bell_badge = v;
+
+        // Bell
+        if (file.bell.mode != .visual) result.bell.mode = file.bell.mode;
+
+        // URL
+        if (!file.url.enabled) result.url.enabled = file.url.enabled;
 
         // Keybindings: file overrides completely replace base
         if (file.keybindings.len > 0) result.keybindings = file.keybindings;

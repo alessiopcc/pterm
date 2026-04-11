@@ -25,7 +25,7 @@ const theme_mod = @import("theme");
 const RendererPalette = theme_mod.RendererPalette;
 const FontGrid = @import("fontgrid").FontGrid;
 const FontMetrics = font_types.FontMetrics;
-const TermPTerminal = terminal_mod.TermPTerminal;
+const PTermTerminal = terminal_mod.PTermTerminal;
 const Shaper = shaper_mod.Shaper;
 const ShapedGlyph = shaper_mod.ShapedGlyph;
 
@@ -48,20 +48,35 @@ const CachedRow = struct {
     bg_cells: []CellInstance,
 };
 
-/// Persistent row cache — uses page_allocator, NOT the frame arena.
-/// The frame arena resets every frame; cached data must outlive it.
+/// Persistent allocator for row cache data (NOT the frame arena).
 const cache_alloc = std.heap.page_allocator;
-var row_cache: ?[]CachedRow = null;
-var cached_cols: u16 = 0;
-var cached_rows: u16 = 0;
-var cached_cursor_row: u16 = std.math.maxInt(u16);
+
+/// Per-pane row cache. Each pane keeps its own cache so switching between
+/// panes during rendering doesn't thrash a shared global cache.
+pub const RowCache = struct {
+    rows: ?[]CachedRow = null,
+    cols: u16 = 0,
+    row_count: u16 = 0,
+    cursor_row: u16 = std.math.maxInt(u16),
+
+    pub fn invalidate(self: *RowCache) void {
+        if (self.rows) |cache| {
+            for (cache) |*entry| {
+                if (entry.text_cells.len > 0) cache_alloc.free(entry.text_cells);
+                if (entry.bg_cells.len > 0) cache_alloc.free(entry.bg_cells);
+            }
+            cache_alloc.free(cache);
+            self.rows = null;
+        }
+    }
+};
 
 /// Phase 1: Copy cell data from terminal. Call while holding the mutex.
 /// Accepts an optional RendererPalette for config-driven default colors.
 /// If pal is null, falls back to the compile-time palette.
 pub fn snapshotCells(
     allocator: std.mem.Allocator,
-    terminal: *const TermPTerminal,
+    terminal: *const PTermTerminal,
     pal: ?*const RendererPalette,
 ) !struct {
     cells: []CellSnapshot,
@@ -168,26 +183,30 @@ pub fn buildFromSnapshot(
     viewport_width: u32,
     viewport_height: u32,
     pal: ?*const RendererPalette,
+    pane_cache: ?*RowCache,
 ) !RenderState {
     const cols = snap.cols;
     const rows = snap.rows;
     const metrics = font_grid.getMetrics();
     const total: usize = @as(usize, cols) * @as(usize, rows);
 
-    // Invalidate row cache on grid resize.
-    const need_new_cache = row_cache == null or cached_cols != cols or cached_rows != rows;
-    if (need_new_cache) {
-        invalidateRowCache();
-        row_cache = try cache_alloc.alloc(CachedRow, rows);
-        cached_cols = cols;
-        cached_rows = rows;
-        cached_cursor_row = std.math.maxInt(u16);
-        for (row_cache.?) |*entry| {
-            entry.* = .{ .hash = 0, .text_cells = &.{}, .bg_cells = &.{} };
+    // Per-pane row cache: invalidate on grid resize.
+    if (pane_cache) |rc| {
+        const need_new = rc.rows == null or rc.cols != cols or rc.row_count != rows;
+        if (need_new) {
+            rc.invalidate();
+            rc.rows = try cache_alloc.alloc(CachedRow, rows);
+            rc.cols = cols;
+            rc.row_count = rows;
+            rc.cursor_row = std.math.maxInt(u16);
+            for (rc.rows.?) |*entry| {
+                entry.* = .{ .hash = 0, .text_cells = &.{}, .bg_cells = &.{} };
+            }
         }
     }
 
-    const cache = row_cache.?;
+    const cache = if (pane_cache) |rc| rc.rows else null;
+    const prev_cursor = if (pane_cache) |rc| rc.cursor_row else std.math.maxInt(u16);
     const shaper = font_grid.getShaper();
 
     // Per-frame output buffers (frame arena — reset is fine).
@@ -203,15 +222,15 @@ pub fn buildFromSnapshot(
         const row_hash = computeRowHash(row_cells);
 
         const cursor_on = snap.cursor_row == row;
-        const cursor_was = cached_cursor_row == row;
-        const can_reuse = (cache[row].hash == row_hash and row_hash != 0) and !cursor_on and !cursor_was;
+        const cursor_was = prev_cursor == row;
+        const can_reuse = cache != null and (cache.?[row].hash == row_hash and row_hash != 0) and !cursor_on and !cursor_was;
 
         if (can_reuse) {
-            for (cache[row].text_cells) |ci| {
+            for (cache.?[row].text_cells) |ci| {
                 text_cells[text_count] = ci;
                 text_count += 1;
             }
-            for (cache[row].bg_cells) |ci| {
+            for (cache.?[row].bg_cells) |ci| {
                 bg_cells[bg_count] = ci;
                 bg_count += 1;
             }
@@ -221,16 +240,18 @@ pub fn buildFromSnapshot(
 
             shapeRowInto(row_cells, row, cols, snap.cursor_col, cursor_on, font_grid, shaper, &metrics, text_cells, &text_count, bg_cells, &bg_count);
 
-            // Persist this row's output in the cache (persistent allocator).
-            const new_text = @constCast(cache_alloc.dupe(CellInstance, text_cells[t_start..text_count]) catch &.{});
-            const new_bg = @constCast(cache_alloc.dupe(CellInstance, bg_cells[b_start..bg_count]) catch &.{});
-            if (cache[row].text_cells.len > 0) cache_alloc.free(cache[row].text_cells);
-            if (cache[row].bg_cells.len > 0) cache_alloc.free(cache[row].bg_cells);
-            cache[row] = .{ .hash = row_hash, .text_cells = new_text, .bg_cells = new_bg };
+            // Persist this row's output in the per-pane cache (persistent allocator).
+            if (cache) |c| {
+                const new_text = @constCast(cache_alloc.dupe(CellInstance, text_cells[t_start..text_count]) catch &.{});
+                const new_bg = @constCast(cache_alloc.dupe(CellInstance, bg_cells[b_start..bg_count]) catch &.{});
+                if (c[row].text_cells.len > 0) cache_alloc.free(c[row].text_cells);
+                if (c[row].bg_cells.len > 0) cache_alloc.free(c[row].bg_cells);
+                c[row] = .{ .hash = row_hash, .text_cells = new_text, .bg_cells = new_bg };
+            }
         }
     }
 
-    cached_cursor_row = snap.cursor_row;
+    if (pane_cache) |rc| rc.cursor_row = snap.cursor_row;
 
     return RenderState{
         .cells = text_cells[0..text_count],
@@ -513,30 +534,51 @@ fn computeRowHash(row_cells: []const CellSnapshot) u64 {
     return hasher.final();
 }
 
-/// Invalidate and free the entire row cache.
-fn invalidateRowCache() void {
-    if (row_cache) |cache| {
-        for (cache) |*entry| {
-            if (entry.text_cells.len > 0) cache_alloc.free(entry.text_cells);
-            if (entry.bg_cells.len > 0) cache_alloc.free(entry.bg_cells);
+/// Phase 6: Highlight search matches in cell instances by overriding background colors.
+/// Iterates bg_cells and overrides backgrounds for cells within match ranges.
+/// Keeps search highlighting decoupled from the snapshot pipeline.
+pub fn highlightSearchMatches(
+    rs: *RenderState,
+    matches: []const SearchMatch,
+    current_match_idx: u32,
+    match_color: Color,
+    current_color: Color,
+) void {
+    for (matches, 0..) |m, mi| {
+        const is_current = @as(u32, @intCast(mi)) == current_match_idx;
+        const highlight = if (is_current) current_color else match_color;
+
+        // Override bg_cells within the match range
+        for (rs.bg_cells) |*cell| {
+            if (cell.grid_row == @as(u16, @intCast(m.line_index))) {
+                if (cell.grid_col >= m.col_start and cell.grid_col < m.col_end) {
+                    cell.bg_color = highlight.toU32();
+                }
+            }
         }
-        cache_alloc.free(cache);
-        row_cache = null;
     }
 }
+
+/// Search match position (imported type for highlightSearchMatches).
+pub const SearchMatch = struct {
+    line_index: u32,
+    col_start: u16,
+    col_end: u16,
+    in_scrollback: bool,
+};
 
 /// Legacy single-call API (kept for compatibility).
 /// Accepts optional RendererPalette for config-driven colors.
 pub fn buildRenderState(
     allocator: std.mem.Allocator,
-    terminal: *const TermPTerminal,
+    terminal: *const PTermTerminal,
     font_grid: *FontGrid,
     viewport_width: u32,
     viewport_height: u32,
     pal: ?*const RendererPalette,
 ) !RenderState {
     const snap = try snapshotCells(allocator, terminal, pal);
-    return buildFromSnapshot(allocator, snap, font_grid, viewport_width, viewport_height, pal);
+    return buildFromSnapshot(allocator, snap, font_grid, viewport_width, viewport_height, pal, null);
 }
 
 fn resolveColor(vt_color: anytype, default: Color, pal: ?*const RendererPalette) Color {

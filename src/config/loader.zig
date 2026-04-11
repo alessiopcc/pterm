@@ -66,6 +66,13 @@ const FileUiColors = struct {
     pane_border_active: ?[]const u8 = null,
     status_bar_bg: ?[]const u8 = null,
     agent_alert: ?[]const u8 = null,
+    // Phase 6: search, URL, bell UI colors
+    search_bar_bg: ?[]const u8 = null,
+    search_match: ?[]const u8 = null,
+    search_current_match: ?[]const u8 = null,
+    url_hover: ?[]const u8 = null,
+    bell_flash: ?[]const u8 = null,
+    bell_badge: ?[]const u8 = null,
 };
 
 const FileColors = struct {
@@ -78,6 +85,16 @@ const FileColors = struct {
     ui: ?FileUiColors = null,
 };
 
+const FileSearch = struct {};
+
+const FileUrl = struct {
+    enabled: bool = true,
+};
+
+const FileBell = struct {
+    mode: ?[]const u8 = null,
+};
+
 const FileConfig = struct {
     import: ?[]const []const u8 = null,
     font: ?FileFont = null,
@@ -86,6 +103,9 @@ const FileConfig = struct {
     scrollback: ?FileScrollback = null,
     shell: ?FileShell = null,
     colors: ?FileColors = null,
+    search: ?FileSearch = null,
+    url: ?FileUrl = null,
+    bell: ?FileBell = null,
 };
 
 /// Load a config file and resolve its import chain, returning a merged Config.
@@ -201,7 +221,7 @@ fn mergeConfigs(base: Config, over: Config) Config {
     if (over.font.size != Config.default_font_size) result.font.size = over.font.size;
 
     // Window
-    if (!std.mem.eql(u8, over.window.title, "TermP")) result.window.title = over.window.title;
+    if (!std.mem.eql(u8, over.window.title, "PTerm")) result.window.title = over.window.title;
     if (over.window.cols != Config.default_cols) result.window.cols = over.window.cols;
     if (over.window.rows != Config.default_rows) result.window.rows = over.window.rows;
     if (over.window.padding != Config.default_padding) result.window.padding = over.window.padding;
@@ -234,6 +254,18 @@ fn mergeConfigs(base: Config, over: Config) Config {
     if (over.colors.ui.pane_border_active) |v| result.colors.ui.pane_border_active = v;
     if (over.colors.ui.status_bar_bg) |v| result.colors.ui.status_bar_bg = v;
     if (over.colors.ui.agent_alert) |v| result.colors.ui.agent_alert = v;
+    if (over.colors.ui.search_bar_bg) |v| result.colors.ui.search_bar_bg = v;
+    if (over.colors.ui.search_match) |v| result.colors.ui.search_match = v;
+    if (over.colors.ui.search_current_match) |v| result.colors.ui.search_current_match = v;
+    if (over.colors.ui.url_hover) |v| result.colors.ui.url_hover = v;
+    if (over.colors.ui.bell_flash) |v| result.colors.ui.bell_flash = v;
+    if (over.colors.ui.bell_badge) |v| result.colors.ui.bell_badge = v;
+
+    // Bell
+    if (over.bell.mode != .visual) result.bell.mode = over.bell.mode;
+
+    // URL
+    if (!over.url.enabled) result.url.enabled = over.url.enabled;
 
     return result;
 }
@@ -296,7 +328,35 @@ fn applyFileConfig(allocator: std.mem.Allocator, base: Config, file: FileConfig)
             if (ui.pane_border_active) |v| result.colors.ui.pane_border_active = try allocator.dupe(u8, v);
             if (ui.status_bar_bg) |v| result.colors.ui.status_bar_bg = try allocator.dupe(u8, v);
             if (ui.agent_alert) |v| result.colors.ui.agent_alert = try allocator.dupe(u8, v);
+            if (ui.search_bar_bg) |v| result.colors.ui.search_bar_bg = try allocator.dupe(u8, v);
+            if (ui.search_match) |v| result.colors.ui.search_match = try allocator.dupe(u8, v);
+            if (ui.search_current_match) |v| result.colors.ui.search_current_match = try allocator.dupe(u8, v);
+            if (ui.url_hover) |v| result.colors.ui.url_hover = try allocator.dupe(u8, v);
+            if (ui.bell_flash) |v| result.colors.ui.bell_flash = try allocator.dupe(u8, v);
+            if (ui.bell_badge) |v| result.colors.ui.bell_badge = try allocator.dupe(u8, v);
         }
+    }
+
+    // Bell
+    if (file.bell) |b| {
+        if (b.mode) |mode_str| {
+            if (std.mem.eql(u8, mode_str, "visual")) {
+                result.bell.mode = .visual;
+            } else if (std.mem.eql(u8, mode_str, "sound")) {
+                result.bell.mode = .sound;
+            } else if (std.mem.eql(u8, mode_str, "both")) {
+                result.bell.mode = .both;
+            } else if (std.mem.eql(u8, mode_str, "none")) {
+                result.bell.mode = .none;
+            } else {
+                std.log.warn("Unknown bell mode: {s}, using default", .{mode_str});
+            }
+        }
+    }
+
+    // URL
+    if (file.url) |u| {
+        if (!u.enabled) result.url.enabled = false;
     }
 
     return result;

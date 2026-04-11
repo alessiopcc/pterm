@@ -1,9 +1,9 @@
 /// Platform-specific config path detection and --dump-config formatting.
 ///
 /// Default config paths per platform (D-01):
-///   Linux:   ~/.config/termp/config.toml (XDG_CONFIG_HOME)
-///   macOS:   ~/Library/Application Support/termp/config.toml
-///   Windows: %APPDATA%\termp\config.toml
+///   Linux:   ~/.config/pterm/config.toml (XDG_CONFIG_HOME)
+///   macOS:   ~/Library/Application Support/pterm/config.toml
+///   Windows: %APPDATA%\pterm\config.toml
 const std = @import("std");
 const builtin = @import("builtin");
 
@@ -15,7 +15,7 @@ pub fn defaultConfigPath() ?[]const u8 {
 
 fn defaultConfigPathImpl() ?[]const u8 {
     if (builtin.os.tag == .windows) {
-        // %APPDATA%\termp\config.toml
+        // %APPDATA%\pterm\config.toml
         const appdata = std.process.getEnvVarOwned(std.heap.page_allocator, "APPDATA") catch return null;
         // Note: This leaks the appdata string, but it's called at most once at startup.
         // A proper implementation would use an allocator, but for the default path
@@ -25,10 +25,10 @@ fn defaultConfigPathImpl() ?[]const u8 {
         // needs an allocator which we don't want to require here.
         return null; // Caller should check APPDATA env var
     } else if (builtin.os.tag == .macos) {
-        return null; // ~/Library/Application Support/termp/config.toml -- needs HOME
+        return null; // ~/Library/Application Support/pterm/config.toml -- needs HOME
     } else {
         // Linux/other: XDG_CONFIG_HOME or ~/.config
-        return null; // $XDG_CONFIG_HOME/termp/config.toml or ~/.config/termp/config.toml
+        return null; // $XDG_CONFIG_HOME/pterm/config.toml or ~/.config/pterm/config.toml
     }
 }
 
@@ -37,23 +37,23 @@ pub fn defaultConfigPathAlloc(allocator: std.mem.Allocator) !?[]const u8 {
     if (builtin.os.tag == .windows) {
         const appdata = std.process.getEnvVarOwned(allocator, "APPDATA") catch return null;
         defer allocator.free(appdata);
-        const path = try std.fmt.allocPrint(allocator, "{s}\\termp\\config.toml", .{appdata});
+        const path = try std.fmt.allocPrint(allocator, "{s}\\pterm\\config.toml", .{appdata});
         return path;
     } else if (builtin.os.tag == .macos) {
         const home = std.process.getEnvVarOwned(allocator, "HOME") catch return null;
         defer allocator.free(home);
-        const path = try std.fmt.allocPrint(allocator, "{s}/Library/Application Support/termp/config.toml", .{home});
+        const path = try std.fmt.allocPrint(allocator, "{s}/Library/Application Support/pterm/config.toml", .{home});
         return path;
     } else {
         // Linux: XDG_CONFIG_HOME or ~/.config
         const config_home = std.process.getEnvVarOwned(allocator, "XDG_CONFIG_HOME") catch {
             const home = std.process.getEnvVarOwned(allocator, "HOME") catch return null;
             defer allocator.free(home);
-            const path = try std.fmt.allocPrint(allocator, "{s}/.config/termp/config.toml", .{home});
+            const path = try std.fmt.allocPrint(allocator, "{s}/.config/pterm/config.toml", .{home});
             return path;
         };
         defer allocator.free(config_home);
-        const path = try std.fmt.allocPrint(allocator, "{s}/termp/config.toml", .{config_home});
+        const path = try std.fmt.allocPrint(allocator, "{s}/pterm/config.toml", .{config_home});
         return path;
     }
 }
@@ -62,7 +62,7 @@ pub fn defaultConfigPathAlloc(allocator: std.mem.Allocator) !?[]const u8 {
 /// This implements --dump-config (D-04).
 pub fn dumpConfig() void {
     const output =
-        \\# TermP Configuration
+        \\# PTerm Configuration
         \\# Default values shown. Uncomment and modify to customize.
         \\
         \\# Import other config files (resolved relative to this file)
@@ -73,7 +73,7 @@ pub fn dumpConfig() void {
         \\size = 13.0
         \\
         \\[window]
-        \\title = "TermP"
+        \\title = "PTerm"
         \\cols = 160
         \\rows = 48
         \\padding = 4.0
@@ -106,6 +106,21 @@ pub fn dumpConfig() void {
         \\# pane_border_active = "#89B4FA"
         \\# status_bar_bg = "#181825"
         \\# agent_alert = "#f9e2af"
+        \\# search_bar_bg = "#181825"
+        \\# search_match = "#f9e2af"
+        \\# search_current_match = "#f38ba8"
+        \\# url_hover = "#89B4FA"
+        \\# bell_flash = "#f9e2af"
+        \\# bell_badge = "#f38ba8"
+        \\
+        \\[search]
+        \\# Empty for v1 (plain text search only)
+        \\
+        \\[url]
+        \\enabled = true
+        \\
+        \\[bell]
+        \\mode = "visual"     # visual, sound, both, none
         \\
     ;
     const stdout_file = std.fs.File.stdout();

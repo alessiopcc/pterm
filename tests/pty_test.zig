@@ -117,7 +117,7 @@ test "pty write and read roundtrip" {
 
     // On Windows within another terminal (nested ConPTY), the actual text
     // output goes to the parent console, not the pipe. The pipe only
-    // carries VT escape sequences. In production (when TermP IS the
+    // carries VT escape sequences. In production (when PTerm IS the
     // terminal), all output goes through the pipe.
     // For now, we verify that write succeeded and the PTY is still alive.
     if (comptime builtin.os.tag != .windows) {

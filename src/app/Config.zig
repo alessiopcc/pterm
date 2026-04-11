@@ -10,5 +10,5 @@ pub const Config = struct {
     rows: u16 = 48,
     grid_padding: f32 = 4.0,
     scrollback_lines: u32 = 10_000,
-    window_title: [:0]const u8 = "TermP",
+    window_title: [:0]const u8 = "PTerm",
 };

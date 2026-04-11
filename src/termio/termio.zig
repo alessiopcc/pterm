@@ -20,7 +20,7 @@ const parser_mod = @import("parser");
 const reader_mod = @import("reader");
 const pty_mod = @import("pty");
 
-const TermPTerminal = terminal_mod.TermPTerminal;
+const PTermTerminal = terminal_mod.PTermTerminal;
 const Config = terminal_mod.Config;
 const MailboxType = mailbox_mod.Mailbox(65536);
 const ParseThread = parser_mod.ParseThread;
@@ -35,9 +35,9 @@ pub const TermIOConfig = struct {
 
 pub const TermIO = struct {
     /// Single terminal buffer, protected by mutex.
-    terminal: *TermPTerminal,
+    terminal: *PTermTerminal,
     /// Kept for API compatibility — points to same terminal.
-    terminal_back: *TermPTerminal,
+    terminal_back: *PTermTerminal,
     /// Parse thread: pops from mailbox, feeds terminal.
     parser: ?ParseThread,
     /// SPSC ring buffer connecting reader -> parser.
@@ -58,9 +58,9 @@ pub const TermIO = struct {
             .scrollback_lines = config.scrollback_lines,
         };
 
-        const term = try allocator.create(TermPTerminal);
+        const term = try allocator.create(PTermTerminal);
         errdefer allocator.destroy(term);
-        term.* = try TermPTerminal.init(allocator, term_config);
+        term.* = try PTermTerminal.init(allocator, term_config);
         errdefer term.deinit();
 
         const mailbox = try allocator.create(MailboxType);
@@ -127,7 +127,7 @@ pub const TermIO = struct {
     }
 
     /// Get the terminal for rendering. Caller MUST call unlockTerminal() when done.
-    pub fn lockTerminal(self: *TermIO) *const TermPTerminal {
+    pub fn lockTerminal(self: *TermIO) *const PTermTerminal {
         self.mutex.lock();
         return self.terminal;
     }
@@ -137,7 +137,7 @@ pub const TermIO = struct {
     }
 
     /// Legacy API — returns terminal pointer. For backwards compat only.
-    pub fn getSnapshot(self: *TermIO) *const TermPTerminal {
+    pub fn getSnapshot(self: *TermIO) *const PTermTerminal {
         return self.terminal;
     }
 

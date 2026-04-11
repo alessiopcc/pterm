@@ -13,6 +13,7 @@
 ///   GLFW user pointer -> *App
 ///   Key/char events -> focused pane's Surface (VT encoding + keybinding dispatch)
 ///   Mouse clicks -> hit-test tab bar / pane borders / pane area
+const builtin = @import("builtin");
 const std = @import("std");
 const glfw = @import("zglfw");
 const gl = @import("gl");
@@ -46,6 +47,21 @@ const OpenGLBackend = opengl_backend_mod.OpenGLBackend;
 const RendererPalette = theme_mod.RendererPalette;
 const layout_types = @import("layout_types");
 const RendererRect = layout_types.Rect;
+
+const search_mod = @import("search");
+const SearchState = search_mod.SearchState.SearchState;
+const SearchOverlay = search_mod.SearchOverlay.SearchOverlay;
+const SearchColors = search_mod.SearchOverlay.SearchColors;
+const matcher = search_mod.matcher;
+
+const url_mod = @import("url");
+const UrlDetector = url_mod.UrlDetector;
+const UrlState = url_mod.UrlState.UrlState;
+const open_url = @import("open_url");
+
+const bell_state_mod = @import("bell_state");
+const BellState = bell_state_mod.BellState;
+const system_beep = @import("system_beep");
 
 const TabManager = layout_mod.TabManager.TabManager;
 const Tab = layout_mod.Tab.Tab;
@@ -84,6 +100,18 @@ pub const PaneData = struct {
 
     /// Screen change callback pointer for this pane (static per-pane).
     screen_change_fn: ?*const fn () void,
+
+    /// Per-pane row cache for dirty-row rendering optimization.
+    row_cache: render_state.RowCache,
+
+    /// Per-pane search state (Phase 6, D-09: independent per pane).
+    search_state: SearchState = .{},
+
+    /// Per-pane URL hover state (Phase 6, D-14/D-20: underline + hand cursor on hover).
+    url_state: UrlState = .{},
+
+    /// Per-pane bell state (Phase 6, D-26: per-pane flash + badge).
+    bell_state: BellState = .{},
 };
 
 // Static state for config reload callback (FileWatcher callback has no context pointer).
@@ -173,6 +201,9 @@ pub const App = struct {
     // Suppress activity for N frames after resize (async redraws cause false positives)
     suppress_activity_frames: std.atomic.Value(u32),
 
+    // URL hover cursor (Phase 6, D-20: pointing hand on URL hover)
+    hand_cursor: ?*glfw.Cursor,
+
     // Window edge resize state (frameless window)
     window_resize_active: bool,
     window_resize_edge: WindowEdge,
@@ -229,7 +260,7 @@ pub const App = struct {
             .cell_height = metrics.cell_height,
             .grid_padding = config.grid_padding(),
             .chrome_height = chrome_h,
-            .title = "TermP",
+            .title = "PTerm",
         });
         errdefer window.deinit();
 
@@ -286,7 +317,7 @@ pub const App = struct {
             .perf_logging = options.perf_logging,
             .debug_keys = options.debug_keys,
             .debug_key_file = if (options.debug_keys)
-                std.fs.cwd().createFile("termp_debug.log", .{}) catch null
+                std.fs.cwd().createFile("pterm_debug.log", .{}) catch null
             else
                 null,
             .frame_count = 0,
@@ -310,6 +341,7 @@ pub const App = struct {
             .window_drag_screen_y = 0,
             .hovered_control = 0,
             .suppress_activity_frames = std.atomic.Value(u32).init(0),
+            .hand_cursor = glfw.Cursor.createStandard(.hand) catch null,
             .window_resize_active = false,
             .window_resize_edge = .{},
             .window_resize_start_screen_x = 0,
@@ -461,6 +493,7 @@ pub const App = struct {
             .process_name = proc_name_buf,
             .process_name_len = proc_name_len,
             .screen_change_fn = null,
+            .row_cache = .{},
         };
 
         // Fix up internal pointers to point to PaneData's copies (not the stack locals)
@@ -471,6 +504,10 @@ pub const App = struct {
         // old stack-local pty. Now that pty lives inside PaneData, re-attach so all
         // pointers reference the stable heap location.
         pd.termio.attachPty(&pd.pty);
+
+        // Wire bell detection: Observer fires bellCallback when BEL (0x07) found in output.
+        pd.termio.terminal.observer.onBell = bellCallback;
+        pd.termio.terminal.observer.bell_ctx = @ptrCast(&pd.bell_state);
 
         // Create PaneState for registry
         const ps = try self.allocator.create(PaneState);
@@ -491,6 +528,9 @@ pub const App = struct {
         if (self.pane_data.get(pane_id)) |pd| {
             // Stop TermIO threads
             pd.termio.stop();
+
+            // Free per-pane row cache
+            pd.row_cache.invalidate();
 
             // Deinit in reverse order
             pd.surface.deinit();
@@ -598,6 +638,14 @@ pub const App = struct {
             return;
         }
 
+        // D-11: Full input capture when search is open
+        if (self.getFocusedPaneData()) |pd| {
+            if (pd.search_state.is_open) {
+                self.handleSearchKeyInput(pd, key, mods);
+                return;
+            }
+        }
+
         if (self.debug_key_file) |f| {
             var tmp: [128]u8 = undefined;
             const line = std.fmt.bufPrint(&tmp, "[key] code={d} action={d} ctrl={} shift={} alt={}\n", .{
@@ -671,6 +719,18 @@ pub const App = struct {
     /// Handle character input: route to focused pane.
     fn handleCharInput(self: *App, codepoint: u32) void {
         const cp: u21 = if (codepoint <= 0x10FFFF) @intCast(codepoint) else return;
+
+        // D-11: When search is open, printable chars go to search query
+        if (self.getFocusedPaneData()) |pd| {
+            if (pd.search_state.is_open) {
+                if (cp >= 0x20 and cp < 0x7F) {
+                    pd.search_state.addChar(@intCast(cp));
+                    self.requestFrame();
+                }
+                return;
+            }
+        }
+
         const combo = keybindings.KeyCombo{
             .key = .{ .char = if (cp >= 'A' and cp <= 'Z') cp + 32 else cp },
             .mods = self.last_mods,
@@ -695,7 +755,7 @@ pub const App = struct {
     }
 
     /// Handle mouse button: hit-test tab bar, pane borders, pane area (D-07, D-08, D-34).
-    pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Action, _: glfw.Mods) void {
+    pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Action, mods: glfw.Mods) void {
         // Handle drag release
         if (action == .release and button == .left) {
             if (self.window_resize_active) {
@@ -816,6 +876,20 @@ pub const App = struct {
             self.border_drag_start_pos = if (border_info.is_vertical) pos[0] else pos[1];
             self.border_drag_start_ratio = border_info.branch.branch.ratio;
             return;
+        }
+
+        // Phase 6 D-16: Ctrl+Click (Cmd+Click macOS) opens hovered URL
+        // Only when url.enabled=true (D-22: when disabled, Ctrl+Click passes through)
+        if (self.config.url.enabled) {
+            const is_url_click = if (builtin.os.tag == .macos) mods.super else mods.control;
+            if (is_url_click) {
+                if (self.getFocusedPaneData()) |pd| {
+                    if (pd.url_state.getHoveredUrl()) |url| {
+                        open_url.openUrl(url);
+                        return; // Consume click (D-16: no terminal selection)
+                    }
+                }
+            }
         }
 
         // Check pane area: focus the clicked pane (D-34)
@@ -967,6 +1041,69 @@ pub const App = struct {
                 self.window.handle.setCursor(cursor);
             } else |_| {}
         } else {
+            // Phase 6 D-14/D-20: URL hover detection + pointing hand cursor
+            if (self.config.url.enabled) {
+                if (self.getFocusedPaneData()) |pd| {
+                    // Convert pixel position to cell coordinates
+                    const cur_m = self.font_grid.getMetrics();
+                    const active_t = self.tab_manager.getActiveTab();
+                    if (active_t) |at| {
+                        if (tree_ops.findLeaf(at.root, at.focused_pane_id)) |leaf| {
+                            const bounds = leaf.leaf.bounds;
+                            const rel_x = fb_x - bounds.x;
+                            const rel_y = fb_y - bounds.y;
+                            const cw_int: u32 = @intFromFloat(cur_m.cell_width);
+                            const ch_int: u32 = @intFromFloat(cur_m.cell_height);
+                            if (rel_x >= 0 and rel_y >= 0 and cw_int > 0 and ch_int > 0) {
+                                const cell_col: u16 = @intCast(@min(@as(u32, @intCast(rel_x)) / cw_int, 65535));
+                                const cell_row: u32 = @as(u32, @intCast(rel_y)) / ch_int;
+
+                                // Extract line codepoints for URL string extraction
+                                var line_buf: [512]u21 = undefined;
+                                var line_slice: ?[]const u21 = null;
+                                {
+                                    const snapshot = pd.termio.lockTerminal();
+                                    defer pd.termio.unlockTerminal();
+                                    const screens = @constCast(snapshot).getScreens();
+                                    const screen = screens.active;
+                                    const cols: u16 = @intCast(screen.pages.cols);
+                                    var ci: u16 = 0;
+                                    while (ci < cols and ci < 512) : (ci += 1) {
+                                        const pin = screen.pages.pin(.{ .active = .{
+                                            .x = @intCast(ci),
+                                            .y = @intCast(cell_row),
+                                        } }) orelse {
+                                            line_buf[ci] = ' ';
+                                            continue;
+                                        };
+                                        const rac = pin.rowAndCell();
+                                        const cp = rac.cell.codepoint();
+                                        line_buf[ci] = if (cp > 0) cp else ' ';
+                                    }
+                                    line_slice = line_buf[0..ci];
+                                }
+                                pd.url_state.updateHoverWithLine(cell_row, cell_col, line_slice);
+
+                                if (pd.url_state.hovered_url != null) {
+                                    if (!pd.url_state.cursor_is_hand) {
+                                        if (self.hand_cursor) |hc| {
+                                            self.window.handle.setCursor(hc);
+                                        }
+                                        pd.url_state.cursor_is_hand = true;
+                                    }
+                                    self.requestFrame(); // Redraw underline
+                                    return;
+                                } else if (pd.url_state.cursor_is_hand) {
+                                    pd.url_state.cursor_is_hand = false;
+                                    self.window.handle.setCursor(null);
+                                    self.requestFrame(); // Remove underline
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             self.window.handle.setCursor(null); // Default arrow
         }
     }
@@ -1119,7 +1256,39 @@ pub const App = struct {
                 }
             },
             .scroll_to_top, .scroll_to_bottom => {},
-            .search => {},
+            .search => {
+                // Phase 6: Toggle search overlay on focused pane (D-08 viewport save/restore)
+                if (self.getFocusedPaneData()) |pd| {
+                    if (pd.search_state.is_open) {
+                        // Close search and restore viewport (D-08)
+                        const saved = pd.search_state.getSavedViewport();
+                        pd.search_state.close();
+                        // Restore viewport position
+                        const snap = pd.termio.lockTerminal();
+                        defer pd.termio.unlockTerminal();
+                        const scr = @constCast(snap).getScreens();
+                        switch (saved) {
+                            .active => scr.active.pages.scroll(.active),
+                            .top => scr.active.pages.scroll(.top),
+                            .row => |r| scr.active.pages.scroll(.{ .row = r }),
+                        }
+                    } else {
+                        // Open search, saving current viewport (D-08)
+                        const snap = pd.termio.lockTerminal();
+                        defer pd.termio.unlockTerminal();
+                        const scr = @constCast(snap).getScreens();
+                        const current_vp: SearchState.SavedViewport = switch (scr.active.pages.viewport) {
+                            .active => .active,
+                            .top => .top,
+                            // For .pin, conservatively save as .active (most common case).
+                            // Precise row offset computation deferred to v2.
+                            .pin => .active,
+                        };
+                        pd.search_state.open(current_vp);
+                    }
+                    self.requestFrame();
+                }
+            },
             .none => {},
         }
     }
@@ -1181,6 +1350,14 @@ pub const App = struct {
         // Clear activity on the now-active tab
         if (self.tab_manager.getActiveTab()) |tab| {
             tab.has_activity = false;
+            // Clear bell badges on the now-active tab's panes (D-29)
+            const leaf_infos = tree_ops.collectLeafInfos(tab.root, self.allocator) catch &.{};
+            defer if (leaf_infos.len > 0) self.allocator.free(leaf_infos);
+            for (leaf_infos) |info| {
+                if (self.pane_data.getPtr(info.pane_id)) |pd_ptr| {
+                    pd_ptr.*.bell_state.clearBadge();
+                }
+            }
         }
         self.requestFrame();
     }
@@ -1604,6 +1781,135 @@ pub const App = struct {
     }
 
     /// Get PaneData for the currently focused pane.
+    // -------------------------------------------------------
+    // Phase 6: Search input handling (D-11: full input capture)
+    // -------------------------------------------------------
+
+    /// Handle key input when search is open. Intercepts all keys.
+    fn handleSearchKeyInput(self: *App, pd: *PaneData, key: glfw.Key, mods: glfw.Mods) void {
+        switch (key) {
+            .escape => {
+                pd.search_state.close();
+                self.requestFrame();
+            },
+            .enter => {
+                if (mods.shift) {
+                    pd.search_state.navigatePrev();
+                } else {
+                    pd.search_state.navigateNext();
+                }
+                self.requestFrame();
+            },
+            .backspace => {
+                pd.search_state.deleteChar();
+                self.requestFrame();
+            },
+            else => {
+                // Ctrl+Shift+F toggles search closed
+                if (mods.control and mods.shift) {
+                    if (glfwKeyToChar(key)) |ch| {
+                        if (ch == 'f') {
+                            pd.search_state.close();
+                            self.requestFrame();
+                        }
+                    }
+                }
+                // Printable chars handled via charCallback (handleCharInput)
+            },
+        }
+    }
+
+    /// Run search matching for a pane's current query against scrollback history + visible screen (D-07).
+    /// Extracts history rows from ghostty-vt PageList using .screen coordinates, then scans
+    /// visible screen lines via .active coordinates.
+    fn runSearchForPane(self: *App, pd: *PaneData) void {
+        _ = self;
+        const query = pd.search_state.getQuery();
+        if (query.len == 0) {
+            pd.search_state.clearMatches(std.heap.page_allocator);
+            return;
+        }
+
+        // Lock terminal for screen access
+        const snapshot = pd.termio.lockTerminal();
+        defer pd.termio.unlockTerminal();
+
+        // Collect screen lines from ghostty-vt
+        const screens = @constCast(snapshot).getScreens();
+        const screen = screens.active;
+        const cols: u16 = @intCast(screen.pages.cols);
+        const rows: u16 = @intCast(screen.pages.rows);
+
+        // --- Extract scrollback (history) lines from ghostty-vt PageList (D-07) ---
+        const total_rows = screen.pages.total_rows;
+        const active_rows = screen.pages.rows;
+        const history_rows: u32 = if (total_rows > active_rows) @intCast(total_rows - active_rows) else 0;
+        const max_history: u32 = @min(history_rows, 10_000); // Cap to prevent huge allocations
+
+        const alloc = std.heap.page_allocator;
+        const scrollback_lines_alloc = alloc.alloc([]const u21, max_history) catch return;
+        defer alloc.free(scrollback_lines_alloc);
+
+        // Flat buffer for codepoint storage: max_history * 512 u21 values
+        const cps_per_row: usize = 512;
+        const scrollback_cps_flat = alloc.alloc(u21, @as(usize, max_history) * cps_per_row) catch return;
+        defer alloc.free(scrollback_cps_flat);
+
+        var sb_row: u32 = 0;
+        while (sb_row < max_history) : (sb_row += 1) {
+            const row_offset = @as(usize, sb_row) * cps_per_row;
+            var col: u16 = 0;
+            var len: usize = 0;
+            while (col < cols and len < cps_per_row) : (col += 1) {
+                const pin_result = screen.pages.pin(.{ .screen = .{
+                    .x = @intCast(col),
+                    .y = @intCast(sb_row),
+                } }) orelse {
+                    scrollback_cps_flat[row_offset + len] = ' ';
+                    len += 1;
+                    continue;
+                };
+                const rac = pin_result.rowAndCell();
+                const cp = rac.cell.codepoint();
+                scrollback_cps_flat[row_offset + len] = if (cp > 0) cp else ' ';
+                len += 1;
+            }
+            scrollback_lines_alloc[sb_row] = scrollback_cps_flat[row_offset .. row_offset + len];
+        }
+
+        // --- Extract visible screen lines using .active coordinates ---
+        var screen_lines_buf: [500][]const u21 = undefined;
+        var screen_cps_buf: [500][512]u21 = undefined;
+        const screen_rows = @min(rows, 500);
+        var row: u16 = 0;
+        while (row < screen_rows) : (row += 1) {
+            var col: u16 = 0;
+            var len: usize = 0;
+            while (col < cols and len < 512) : (col += 1) {
+                const pin = screen.pages.pin(.{ .active = .{
+                    .x = @intCast(col),
+                    .y = @intCast(row),
+                } }) orelse {
+                    screen_cps_buf[row][len] = ' ';
+                    len += 1;
+                    continue;
+                };
+                const rac = pin.rowAndCell();
+                const cp = rac.cell.codepoint();
+                screen_cps_buf[row][len] = if (cp > 0) cp else ' ';
+                len += 1;
+            }
+            screen_lines_buf[row] = screen_cps_buf[row][0..len];
+        }
+        const screen_lines = screen_lines_buf[0..screen_rows];
+
+        const matches = matcher.findMatches(scrollback_lines_alloc, screen_lines, query, alloc) catch return;
+        defer alloc.free(matches);
+
+        pd.search_state.scrollback_offset = max_history;
+        pd.search_state.updateMatches(alloc, matches);
+    }
+
     fn getFocusedPaneData(self: *App) ?*PaneData {
         const tab = self.tab_manager.getActiveTab() orelse return null;
         return self.pane_data.get(tab.focused_pane_id);
@@ -1646,7 +1952,7 @@ pub const App = struct {
         self.resizeAllPanes();
 
         const perf_log = if (self.perf_logging)
-            std.fs.cwd().createFile("termp_perf.log", .{}) catch null
+            std.fs.cwd().createFile("pterm_perf.log", .{}) catch null
         else
             null;
 
@@ -1725,6 +2031,24 @@ pub const App = struct {
                     backend.uploadIcon(img.pixels[0..byte_count], sz);
                 }
 
+                // Build per-tab bell badge flags for TabBarRenderer (D-29)
+                var bell_badges_buf: [64]bool = [_]bool{false} ** 64;
+                const tab_count = self.tab_manager.tabCount();
+                const badge_count = @min(tab_count, 64);
+                for (self.tab_manager.tabs.items, 0..) |tab, ti| {
+                    if (ti >= 64) break;
+                    // Check if any pane in this tab has show_badge set
+                    const leaf_infos = tree_ops.collectLeafInfos(tab.root, self.frame_arena.allocator()) catch &.{};
+                    for (leaf_infos) |info| {
+                        if (self.pane_data.getPtr(info.pane_id)) |pd_ptr| {
+                            if (pd_ptr.*.bell_state.show_badge) {
+                                bell_badges_buf[ti] = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
                 TabBarRenderer.render(
                     &self.tab_manager,
                     .{
@@ -1737,6 +2061,8 @@ pub const App = struct {
                         .cell_width = metrics.cell_width,
                         .cell_height = metrics.cell_height,
                         .hovered_control = self.hovered_control,
+                        .bell_badge_color = self.renderer_palette.ui_bell_badge.toU32(),
+                        .tab_bell_badges = bell_badges_buf[0..badge_count],
                     },
                     fb.width,
                     tab_bar_height,
@@ -1767,15 +2093,27 @@ pub const App = struct {
 
                     tree_ops.computeBounds(active_tab.root, available, metrics.cell_width, metrics.cell_height, 1);
 
-                    // Render each pane
-                    const leaves = tree_ops.collectLeaves(active_tab.root, std.heap.page_allocator) catch &.{};
-                    defer if (leaves.len > 0) std.heap.page_allocator.free(leaves);
+                    // Render each pane (single tree walk, no re-lookup per leaf)
+                    const leaf_infos = tree_ops.collectLeafInfos(active_tab.root, std.heap.page_allocator) catch &.{};
+                    defer if (leaf_infos.len > 0) std.heap.page_allocator.free(leaf_infos);
 
-                    for (leaves) |pane_id| {
-                        if (self.pane_data.get(pane_id)) |pd| {
-                            if (tree_ops.findLeaf(active_tab.root, pane_id)) |leaf| {
-                                const bounds = leaf.leaf.bounds;
+                    for (leaf_infos) |info| {
+                        if (self.pane_data.get(info.pane_id)) |pd| {
+                            {
+                                const bounds = info.bounds;
                                 if (bounds.w == 0 or bounds.h == 0) continue;
+
+                                // Debounced search: run after 150ms of no input
+                                if (pd.search_state.is_open and pd.search_state.query_dirty) {
+                                    const search_now = std.time.nanoTimestamp();
+                                    const elapsed_ms = @divFloor(search_now - pd.search_state.last_input_ns, 1_000_000);
+                                    if (elapsed_ms >= 150) {
+                                        pd.search_state.query_dirty = false;
+                                        self.runSearchForPane(pd);
+                                    } else {
+                                        self.requestFrame(); // keep rendering until debounce fires
+                                    }
+                                }
 
                                 // Snapshot under mutex
                                 const snapshot = pd.termio.lockTerminal();
@@ -1789,7 +2127,7 @@ pub const App = struct {
                                 };
                                 pd.termio.unlockTerminal();
 
-                                // Build render state
+                                // Build render state (per-pane row cache)
                                 var rs = render_state.buildFromSnapshot(
                                     self.frame_arena.allocator(),
                                     snap,
@@ -1797,10 +2135,11 @@ pub const App = struct {
                                     bounds.w,
                                     bounds.h,
                                     &self.renderer_palette,
+                                    &pd.row_cache,
                                 ) catch continue;
 
                                 // Cursor visibility
-                                const is_focused = pane_id == active_tab.focused_pane_id;
+                                const is_focused = info.pane_id == active_tab.focused_pane_id;
                                 rs.cursor.visible = self.cursor_visible and self.focused and is_focused;
                                 rs.cell_width = metrics.cell_width;
                                 rs.cell_height = metrics.cell_height;
@@ -1817,6 +2156,34 @@ pub const App = struct {
                                     self.font_grid.getAtlasMut().clearColorDirty();
                                 }
 
+                                // Phase 6 D-21: URL detection on visible viewport
+                                if (self.config.url.enabled) {
+                                    // Extract visible lines as u21 codepoint slices for URL scanning
+                                    const url_rows = snap.rows;
+                                    const url_cols = snap.cols;
+                                    const url_lines = self.frame_arena.allocator().alloc([]const u21, url_rows) catch null;
+                                    if (url_lines) |lines| {
+                                        for (0..url_rows) |r| {
+                                            const row_start = r * @as(usize, url_cols);
+                                            const row_cps = self.frame_arena.allocator().alloc(u21, url_cols) catch {
+                                                lines[r] = &.{};
+                                                continue;
+                                            };
+                                            for (0..url_cols) |c| {
+                                                const cell_snap = snap.cells[row_start + c];
+                                                row_cps[c] = if (cell_snap.grapheme_len > 0) cell_snap.grapheme[0] else ' ';
+                                            }
+                                            lines[r] = row_cps;
+                                        }
+                                        const detected = UrlDetector.detectUrls(lines, 0, self.frame_arena.allocator()) catch &.{};
+                                        pd.url_state.updateDetected(detected, self.frame_arena.allocator());
+                                        // NOTE: detected_allocator is frame arena, freed each frame -- ok because
+                                        // updateDetected is called every frame when url.enabled=true.
+                                        // Override allocator to null so deinit doesn't double-free arena memory.
+                                        pd.url_state.detected_allocator = null;
+                                    }
+                                }
+
                                 // Draw pane — slightly dimmed background for unfocused panes
                                 const pane_bg = if (is_focused)
                                     self.renderer_palette.default_bg
@@ -1830,6 +2197,83 @@ pub const App = struct {
                                     };
                                 };
                                 backend.drawFrameInRect(&rs, pane_bg, toRendererRect(bounds));
+
+                                // Phase 6: Draw search match highlight rectangles (semi-transparent over text)
+                                if (pd.search_state.is_open and pd.search_state.total_matches > 0) {
+                                    const current_idx = pd.search_state.current_match;
+                                    const sb_off = pd.search_state.scrollback_offset;
+                                    const cw: u32 = @intFromFloat(metrics.cell_width);
+                                    const ch: u32 = @intFromFloat(metrics.cell_height);
+                                    const pad: i32 = @intFromFloat(rs.grid_padding);
+                                    for (pd.search_state.matches.items, 0..) |m, mi| {
+                                        if (m.in_scrollback) continue;
+                                        if (m.line_index < sb_off) continue;
+                                        const vis_row: u32 = m.line_index - sb_off;
+                                        const is_current = @as(u32, @intCast(mi)) == current_idx;
+                                        const hl = renderer_types.Color{
+                                            .r = if (is_current) 0xF3 else 0xF9,
+                                            .g = if (is_current) 0x8B else 0xE2,
+                                            .b = if (is_current) 0xA8 else 0xAF,
+                                            .a = 90,
+                                        };
+                                        var mcol: u16 = m.col_start;
+                                        while (mcol < m.col_end) : (mcol += 1) {
+                                            backend.drawFilledRectAlpha(RendererRect{
+                                                .x = bounds.x + pad + @as(i32, @intCast(@as(u32, mcol) * cw)),
+                                                .y = bounds.y + pad + @as(i32, @intCast(vis_row * ch)),
+                                                .w = cw,
+                                                .h = ch,
+                                            }, hl);
+                                        }
+                                    }
+                                }
+
+                                // Phase 6 D-14: URL hover underline rendering
+                                if (pd.url_state.hovered_url) |hurl| {
+                                    const url_color = self.renderer_palette.ui_url_hover;
+                                    const cw_u: u32 = @intFromFloat(metrics.cell_width);
+                                    const ch_u: u32 = @intFromFloat(metrics.cell_height);
+                                    var ucol: u16 = hurl.col_start;
+                                    while (ucol < hurl.col_end) : (ucol += 1) {
+                                        backend.drawFilledRect(RendererRect{
+                                            .x = bounds.x + @as(i32, @intCast(@as(u32, ucol) * cw_u)),
+                                            .y = bounds.y + @as(i32, @intCast((@as(u32, hurl.row) + 1) * ch_u)) - 1,
+                                            .w = cw_u,
+                                            .h = 1,
+                                        }, url_color);
+                                    }
+                                }
+
+                                // Phase 6 D-26/D-27: Bell flash overlay + sound + window attention
+                                self.processBellForPane(pd, toRendererRect(bounds), &backend);
+
+                                // Phase 6: Search overlay rendering
+                                if (pd.search_state.is_open and is_focused) {
+                                    const search_metrics = SearchOverlay.computeMetrics(
+                                        @intCast(bounds.x),
+                                        @intCast(bounds.y),
+                                        bounds.w,
+                                        metrics.cell_width,
+                                        metrics.cell_height,
+                                    );
+                                    var search_ctx = SearchRenderCtx{
+                                        .backend = &backend,
+                                        .font_grid = self.font_grid,
+                                    };
+                                    SearchOverlay.render(
+                                        &pd.search_state,
+                                        search_metrics,
+                                        .{
+                                            .bar_bg = self.renderer_palette.ui_search_bar_bg.toU32(),
+                                            .fg = self.renderer_palette.default_fg.toU32(),
+                                            .no_match = self.renderer_palette.ui_search_current_match.toU32(),
+                                            .cursor_color = self.renderer_palette.ui_pane_border_active.toU32(),
+                                        },
+                                        searchDrawRect,
+                                        searchDrawText,
+                                        @ptrCast(&search_ctx),
+                                    );
+                                }
                             }
                         }
                     }
@@ -2040,6 +2484,25 @@ pub const App = struct {
         gl.BindVertexArray(0);
     }
 
+    // -- Search overlay render callbacks (Phase 6) --
+
+    const SearchRenderCtx = struct {
+        backend: *OpenGLBackend,
+        font_grid: *FontGrid,
+    };
+
+    fn searchDrawRect(x: i32, y: i32, w: u32, h: u32, color: u32, ctx: *anyopaque) void {
+        const rc: *SearchRenderCtx = @ptrCast(@alignCast(ctx));
+        const c = renderer_types.Color.fromU32(color);
+        rc.backend.drawFilledRect(.{ .x = x, .y = y, .w = w, .h = h }, c);
+    }
+
+    fn searchDrawText(text: []const u8, px_x: i32, px_y: i32, color: u32, ctx: *anyopaque) void {
+        const rc: *SearchRenderCtx = @ptrCast(@alignCast(ctx));
+        // Reuse the same glyph text rendering as tab bar
+        drawTextCallback(text, px_x, px_y, color, @ptrCast(rc));
+    }
+
     fn renderPaneBorders(node: *PaneNode, focused_id: u32, backend: *OpenGLBackend, pal: *const RendererPalette) void {
         switch (node.*) {
             .branch => |b| {
@@ -2192,6 +2655,51 @@ pub const App = struct {
         // All panes share the same callback since any screen change triggers a frame.
         _ = pd;
         g_screen_change_app = self;
+    }
+
+    /// Process bell state for a pane during render: consume trigger, draw flash, play sound.
+    fn processBellForPane(self: *App, pd: *PaneData, bounds: RendererRect, backend: *OpenGLBackend) void {
+        const mode = self.config.bell.mode;
+        const wants_visual = (mode == .visual or mode == .both);
+        const wants_sound = (mode == .sound or mode == .both);
+
+        // Consume trigger from read thread (atomic)
+        if (pd.bell_state.consumeTrigger()) {
+            // Window attention when not focused (D-31)
+            if (!self.focused) {
+                self.window.handle.requestAttention();
+            }
+            // Sound (D-32)
+            if (wants_sound) {
+                system_beep.beep();
+            }
+        }
+
+        // Update and render flash overlay (D-27: 120ms amber 15% alpha)
+        if (wants_visual) {
+            pd.bell_state.updateFlash();
+            if (pd.bell_state.flash_active) {
+                const flash_color = renderer_types.Color{
+                    .r = self.renderer_palette.ui_bell_flash.r,
+                    .g = self.renderer_palette.ui_bell_flash.g,
+                    .b = self.renderer_palette.ui_bell_flash.b,
+                    .a = 38, // 15% of 255 ~= 38
+                };
+                backend.drawFilledRectAlpha(bounds, flash_color);
+                self.requestFrame(); // Keep rendering until flash ends
+            }
+        }
+
+        // If mode is none, consume and discard (already consumed above if trigger fired)
+    }
+
+    /// Bell callback: invoked from read thread when BEL byte detected in output.
+    /// Context pointer points to the PaneData's BellState.
+    fn bellCallback(ctx: ?*anyopaque) void {
+        if (ctx) |c| {
+            const state: *BellState = @ptrCast(@alignCast(c));
+            _ = state.trigger();
+        }
     }
 
     // -- Static GLFW callbacks --

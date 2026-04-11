@@ -1,6 +1,6 @@
 .{
-    .fingerprint = 0x11ab6ecbd97eda95,
-    .name = .termp,
+    .fingerprint = 0xbbbb2f437addc811,
+    .name = .pterm,
     .version = "0.1.0",
     .minimum_zig_version = "0.15.1",
     .dependencies = .{

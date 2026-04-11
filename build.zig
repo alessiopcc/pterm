@@ -21,7 +21,7 @@ pub fn build(b: *std.Build) void {
     }
 
     const exe = b.addExecutable(.{
-        .name = "termp",
+        .name = "pterm",
         .root_module = exe_mod,
     });
     b.installArtifact(exe);
@@ -880,4 +880,136 @@ pub fn build(b: *std.Build) void {
     app_mod.addImport("watcher", watcher_mod);
     app_mod.addImport("cli", config_cli_mod);
     app_mod.addImport("icon", icon_mod);
+
+    // -------------------------------------------------------
+    // Phase 6 Plan 01: Search modules (scrollback search)
+    // -------------------------------------------------------
+
+    const search_state_mod = b.createModule(.{
+        .root_source_file = b.path("src/search/SearchState.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const search_overlay_mod = b.createModule(.{
+        .root_source_file = b.path("src/search/SearchOverlay.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    search_overlay_mod.addImport("SearchState.zig", search_state_mod);
+
+    const matcher_mod = b.createModule(.{
+        .root_source_file = b.path("src/search/matcher.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    matcher_mod.addImport("SearchState.zig", search_state_mod);
+
+    // Barrel module for app import
+    const search_mod = b.createModule(.{
+        .root_source_file = b.path("src/search/search.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    search_mod.addImport("SearchState.zig", search_state_mod);
+    search_mod.addImport("SearchOverlay.zig", search_overlay_mod);
+    search_mod.addImport("matcher.zig", matcher_mod);
+
+    // Wire search into app
+    app_mod.addImport("search", search_mod);
+
+    // SearchState inline tests
+    const search_state_tests = b.addTest(.{ .root_module = search_state_mod });
+    const run_search_state_tests = b.addRunArtifact(search_state_tests);
+    test_step.dependOn(&run_search_state_tests.step);
+
+    // matcher inline tests
+    const matcher_tests = b.addTest(.{ .root_module = matcher_mod });
+    const run_matcher_tests = b.addRunArtifact(matcher_tests);
+    test_step.dependOn(&run_matcher_tests.step);
+
+    // SearchOverlay inline tests
+    const search_overlay_tests = b.addTest(.{ .root_module = search_overlay_mod });
+    const run_search_overlay_tests = b.addRunArtifact(search_overlay_tests);
+    test_step.dependOn(&run_search_overlay_tests.step);
+
+    // Phase 6 Plan 02: URL detection modules (clickable URLs)
+    // -------------------------------------------------------
+
+    const url_detector_mod = b.createModule(.{
+        .root_source_file = b.path("src/url/UrlDetector.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const url_state_mod = b.createModule(.{
+        .root_source_file = b.path("src/url/UrlState.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    url_state_mod.addImport("UrlDetector.zig", url_detector_mod);
+
+    const open_url_mod = b.createModule(.{
+        .root_source_file = b.path("src/platform/open_url.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Barrel module for app import
+    const url_mod = b.createModule(.{
+        .root_source_file = b.path("src/url/url.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    url_mod.addImport("UrlDetector.zig", url_detector_mod);
+    url_mod.addImport("UrlState.zig", url_state_mod);
+
+    // Wire URL modules into app
+    app_mod.addImport("url", url_mod);
+    app_mod.addImport("open_url", open_url_mod);
+
+    // UrlDetector inline tests
+    const url_detector_tests = b.addTest(.{ .root_module = url_detector_mod });
+    const run_url_detector_tests = b.addRunArtifact(url_detector_tests);
+    test_step.dependOn(&run_url_detector_tests.step);
+
+    // UrlState inline tests
+    const url_state_tests = b.addTest(.{ .root_module = url_state_mod });
+    const run_url_state_tests = b.addRunArtifact(url_state_tests);
+    test_step.dependOn(&run_url_state_tests.step);
+
+    // open_url inline tests
+    const open_url_tests = b.addTest(.{ .root_module = open_url_mod });
+    const run_open_url_tests = b.addRunArtifact(open_url_tests);
+    test_step.dependOn(&run_open_url_tests.step);
+
+    // -------------------------------------------------------
+    // Phase 6 Plan 03: Bell notification modules
+    // -------------------------------------------------------
+
+    const bell_state_mod = b.createModule(.{
+        .root_source_file = b.path("src/bell/BellState.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const system_beep_mod = b.createModule(.{
+        .root_source_file = b.path("src/platform/system_beep.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Wire bell modules into app
+    app_mod.addImport("bell_state", bell_state_mod);
+    app_mod.addImport("system_beep", system_beep_mod);
+
+    // BellState inline tests
+    const bell_state_tests = b.addTest(.{ .root_module = bell_state_mod });
+    const run_bell_state_tests = b.addRunArtifact(bell_state_tests);
+    test_step.dependOn(&run_bell_state_tests.step);
+
+    // system_beep inline tests
+    const system_beep_tests = b.addTest(.{ .root_module = system_beep_mod });
+    const run_system_beep_tests = b.addRunArtifact(system_beep_tests);
+    test_step.dependOn(&run_system_beep_tests.step);
 }

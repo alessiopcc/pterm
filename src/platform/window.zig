@@ -16,7 +16,7 @@ pub const WindowConfig = struct {
     cell_height: f32,
     grid_padding: f32 = 4.0,
     chrome_height: u32 = 0, // Title bar + tab bar height in pixels
-    title: [:0]const u8 = "TermP",
+    title: [:0]const u8 = "PTerm",
 };
 
 pub const Callbacks = struct {
@@ -54,7 +54,7 @@ pub const Window = struct {
         glfw.windowHint(.opengl_profile, .opengl_core_profile);
         glfw.windowHint(.opengl_forward_compat, true);
 
-        // Frameless window — TermP renders its own tab bar with window controls
+        // Frameless window — PTerm renders its own tab bar with window controls
         glfw.windowHint(.decorated, false);
 
         const handle = glfw.createWindow(

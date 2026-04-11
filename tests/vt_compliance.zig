@@ -3,11 +3,11 @@ const testing = std.testing;
 const ghostty_vt = @import("ghostty-vt");
 const terminal_mod = @import("core_terminal");
 const observer_mod = @import("core_observer");
-const TermPTerminal = terminal_mod.TermPTerminal;
+const PTermTerminal = terminal_mod.PTermTerminal;
 const Config = terminal_mod.Config;
 
-fn createTestTerminal() !TermPTerminal {
-    return try TermPTerminal.init(testing.allocator, .{
+fn createTestTerminal() !PTermTerminal {
+    return try PTermTerminal.init(testing.allocator, .{
         .cols = 80,
         .rows = 24,
     });

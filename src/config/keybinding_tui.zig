@@ -1,6 +1,6 @@
 /// Interactive TUI for keybinding configuration (D-22).
 ///
-/// `termp --set-keybindings` launches this mode. Shows all actions with their
+/// `pterm --set-keybindings` launches this mode. Shows all actions with their
 /// current bindings, lets user type new combos as strings (e.g. "ctrl+n"),
 /// and writes updated keybindings to config.toml.
 ///
@@ -84,7 +84,7 @@ pub fn run(allocator: Allocator, config_path: []const u8, _: ?[]const kb.UserBin
         var display_count: usize = 0;
 
         // Display menu each iteration
-        std.debug.print("\n=== TermP Keybinding Configuration ===\n\n", .{});
+        std.debug.print("\n=== PTerm Keybinding Configuration ===\n\n", .{});
 
         for (actions, 0..) |info, i| {
             if (info.action == .none) continue;
@@ -127,7 +127,7 @@ pub fn run(allocator: Allocator, config_path: []const u8, _: ?[]const kb.UserBin
 
         if (std.mem.eql(u8, input, "s")) {
             try writeKeybindingsToConfig(allocator, config_path, &map);
-            std.debug.print("\nSaved to {s}. Restart TermP to apply.\n", .{config_path});
+            std.debug.print("\nSaved to {s}. Restart PTerm to apply.\n", .{config_path});
             modified = false;
             continue;
         }

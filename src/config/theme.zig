@@ -22,6 +22,7 @@ pub fn colorFromU8Array(rgb: [3]u8) Color {
 }
 
 /// UI chrome colors (D-28: tab bar, pane borders, status bar, agent alert).
+/// Phase 6 adds: search, URL, bell colors.
 pub const UiColors = struct {
     tab_bar_bg: [3]u8,
     tab_active: [3]u8,
@@ -30,6 +31,13 @@ pub const UiColors = struct {
     pane_border_active: [3]u8,
     status_bar_bg: [3]u8,
     agent_alert: [3]u8,
+    // Phase 6
+    search_bar_bg: [3]u8 = .{ 0x18, 0x18, 0x25 },
+    search_match: [3]u8 = .{ 0x58, 0x4A, 0x1E },
+    search_current_match: [3]u8 = .{ 0x6B, 0x2E, 0x3A },
+    url_hover: [3]u8 = .{ 0x89, 0xB4, 0xFA },
+    bell_flash: [3]u8 = .{ 0xF9, 0xE2, 0xAF },
+    bell_badge: [3]u8 = .{ 0xF3, 0x8B, 0xA8 },
 };
 
 /// Color palette as stored in config: hex strings for ANSI + named colors,
@@ -70,6 +78,13 @@ pub const RendererPalette = struct {
     ui_pane_border_active: Color,
     ui_status_bar_bg: Color,
     ui_agent_alert: Color,
+    // Phase 6 UI colors
+    ui_search_bar_bg: Color,
+    ui_search_match: Color,
+    ui_search_current_match: Color,
+    ui_url_hover: Color,
+    ui_bell_flash: Color,
+    ui_bell_badge: Color,
 
     /// Resolve a 256-color index using this palette's ANSI colors.
     /// Indices 0-7: normal, 8-15: bright, 16-231: 6x6x6 cube, 232-255: grayscale.
@@ -119,6 +134,12 @@ pub fn buildRendererPalette(palette: ColorPalette) !RendererPalette {
         .ui_pane_border_active = colorFromU8Array(palette.ui.pane_border_active),
         .ui_status_bar_bg = colorFromU8Array(palette.ui.status_bar_bg),
         .ui_agent_alert = colorFromU8Array(palette.ui.agent_alert),
+        .ui_search_bar_bg = colorFromU8Array(palette.ui.search_bar_bg),
+        .ui_search_match = colorFromU8Array(palette.ui.search_match),
+        .ui_search_current_match = colorFromU8Array(palette.ui.search_current_match),
+        .ui_url_hover = colorFromU8Array(palette.ui.url_hover),
+        .ui_bell_flash = colorFromU8Array(palette.ui.bell_flash),
+        .ui_bell_badge = colorFromU8Array(palette.ui.bell_badge),
     };
 }
 

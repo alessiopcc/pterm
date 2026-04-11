@@ -1,4 +1,4 @@
-/// Re-export and extend ghostty-vt Cell type for TermP use.
+/// Re-export and extend ghostty-vt Cell type for PTerm use.
 const ghostty_vt = @import("ghostty-vt");
 
 pub const Cell = ghostty_vt.Cell;

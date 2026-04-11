@@ -148,7 +148,7 @@ pub const Surface = struct {
             .perf_logging = options.perf_logging,
             .debug_keys = options.debug_keys,
             .debug_key_file = if (options.debug_keys)
-                std.fs.cwd().createFile("termp_debug.log", .{}) catch null
+                std.fs.cwd().createFile("pterm_debug.log", .{}) catch null
             else
                 null,
             .gl_procs = undefined,
@@ -223,7 +223,7 @@ pub const Surface = struct {
 
         // 6. Open perf log file if --perf flag (D-17: observable latency measurement)
         const perf_log = if (self.perf_logging)
-            std.fs.cwd().createFile("termp_perf.log", .{}) catch null
+            std.fs.cwd().createFile("pterm_perf.log", .{}) catch null
         else
             null;
 
@@ -307,6 +307,7 @@ pub const Surface = struct {
                     fb.width,
                     fb.height,
                     &self.renderer_palette,
+                    null, // no per-pane cache in single-surface mode
                 ) catch {
                     _ = self.frame_arena.reset(.retain_capacity);
                     continue;
@@ -344,7 +345,7 @@ pub const Surface = struct {
                 // Draw frame with config-driven background color
                 backend.drawFrame(&rs, self.renderer_palette.default_bg);
 
-                // Periodic diagnostics: log frame timing to termp_perf.log (D-17)
+                // Periodic diagnostics: log frame timing to pterm_perf.log (D-17)
                 self.frame_count += 1;
                 if (perf_log) |f| {
                     if (self.frame_count == 1 or self.frame_count % 60 == 0) {
@@ -403,7 +404,7 @@ pub const Surface = struct {
         // Store modifier state for charCallback (D-21: logical key detection)
         self.last_mods = glfwModsToModifiers(mods);
 
-        // --debug-keys: write each keystroke to termp_debug.log (file opened once at init)
+        // --debug-keys: write each keystroke to pterm_debug.log (file opened once at init)
         if (self.debug_key_file) |f| {
             var tmp: [128]u8 = undefined;
             const line = std.fmt.bufPrint(&tmp, "[key] code={d} action={d} ctrl={} shift={} alt={}\n", .{

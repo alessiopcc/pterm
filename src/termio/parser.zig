@@ -8,11 +8,11 @@ const std = @import("std");
 const terminal_mod = @import("terminal");
 const mailbox_mod = @import("mailbox");
 
-const TermPTerminal = terminal_mod.TermPTerminal;
+const PTermTerminal = terminal_mod.PTermTerminal;
 const MailboxType = mailbox_mod.Mailbox(65536);
 
 pub const ParseThread = struct {
-    terminal: *TermPTerminal,
+    terminal: *PTermTerminal,
     mailbox: *MailboxType,
     running: std.atomic.Value(bool),
     thread: ?std.Thread,
@@ -23,7 +23,7 @@ pub const ParseThread = struct {
     pending_resize_rows: std.atomic.Value(u16),
     pending_resize: std.atomic.Value(bool),
 
-    pub fn init(terminal: *TermPTerminal, mailbox: *MailboxType) ParseThread {
+    pub fn init(terminal: *PTermTerminal, mailbox: *MailboxType) ParseThread {
         return .{
             .terminal = terminal,
             .mailbox = mailbox,

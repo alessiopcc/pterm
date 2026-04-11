@@ -15,10 +15,17 @@ pub const GlyphBitmap = struct {
 };
 
 /// Cache key for glyph atlas lookup.
+/// The `is_glyph_index` field disambiguates between codepoint-based lookups
+/// (getGlyph, where glyph_id is a Unicode codepoint) and glyph-index-based
+/// lookups (getGlyphByID, where glyph_id is a font-internal glyph index
+/// from HarfBuzz shaping). Without this, the two namespaces collide: e.g.
+/// HarfBuzz glyph index 101 for 'L' would hit the cached bitmap for 'e'
+/// (Unicode codepoint 101), causing wrong characters to render.
 pub const GlyphKey = struct {
     font_index: u8,
     glyph_id: u32,
     size_px: u16,
+    is_glyph_index: bool = false,
 };
 
 /// Region within the glyph atlas texture.
