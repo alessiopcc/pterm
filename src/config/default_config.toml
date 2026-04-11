@@ -1,0 +1,60 @@
+# PTerm Configuration
+# Default values shown. Uncomment and modify to customize.
+
+# Import other config files (resolved relative to this file)
+# import = ["base.toml"]
+
+[font]
+# family = ""        # empty = platform default
+size = 13.0
+
+[window]
+title = "PTerm"
+cols = 160
+rows = 48
+padding = 4.0
+opacity = 1.0
+
+[cursor]
+style = "block"      # block, hollow, bar, underline
+blink = false
+
+[scrollback]
+lines = 10000
+
+[shell]
+# program = ""       # empty = auto-detect
+# working_dir = ""   # empty = inherit
+# args = []           # extra arguments, e.g. ["--login", "--norc"]
+
+[colors]
+# foreground = "#cdd6f4"
+# background = "#1e1e2e"
+# cursor_color = "#f5e0dc"
+# cursor_text = "#1e1e2e"
+# selection_bg = "#45475a"
+# selection_fg = "#cdd6f4"
+
+[colors.ui]
+# tab_bar_bg = "#181825"
+# tab_active = "#1e1e2e"
+# tab_inactive = "#313244"
+# pane_border = "#45475a"
+# pane_border_active = "#89B4FA"
+# status_bar_bg = "#181825"
+# agent_alert = "#f9e2af"
+# search_bar_bg = "#181825"
+# search_match = "#f9e2af"
+# search_current_match = "#f38ba8"
+# url_hover = "#89B4FA"
+# bell_flash = "#f9e2af"
+# bell_badge = "#f38ba8"
+
+[search]
+# Empty for v1 (plain text search only)
+
+[url]
+enabled = true
+
+[bell]
+mode = "visual"     # visual, sound, both, none

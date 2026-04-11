@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=PTerm
+Comment=GPU-accelerated terminal emulator for the agentic code era
+Exec=pterm
+Terminal=false
+Type=Application
+Categories=System;TerminalEmulator;
+Keywords=terminal;console;shell;
+StartupWMClass=pterm

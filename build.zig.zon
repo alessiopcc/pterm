@@ -1,0 +1,17 @@
+.{
+    .fingerprint = 0x11ab6ecbd97eda95,
+    .name = .termp,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.15.1",
+    .dependencies = .{
+        .ghostty = .{
+            .url = "https://github.com/ghostty-org/ghostty/archive/0790937d03df6e7a9420c61de91ce520a85fe4ef.tar.gz",
+            .hash = "ghostty-1.3.2-dev-5UdBC5_sAwUBqKuaUfvrQECPGY_XhoKKxs0y8DDRMF9M",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
