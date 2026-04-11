@@ -56,6 +56,7 @@ const FileScrollback = struct {
 const FileShell = struct {
     program: ?[]const u8 = null,
     working_dir: ?[]const u8 = null,
+    args: ?[]const []const u8 = null,
 };
 
 const FileUiColors = struct {
@@ -237,6 +238,7 @@ fn mergeConfigs(base: Config, over: Config) Config {
     // Shell
     if (over.shell.program) |v| result.shell.program = v;
     if (over.shell.working_dir) |v| result.shell.working_dir = v;
+    if (over.shell.args) |v| result.shell.args = v;
 
     // Colors
     if (over.colors.foreground) |v| result.colors.foreground = v;
@@ -316,6 +318,13 @@ fn applyFileConfig(allocator: std.mem.Allocator, base: Config, file: FileConfig)
     if (file.shell) |s| {
         if (s.program) |v| result.shell.program = try allocator.dupe(u8, v);
         if (s.working_dir) |v| result.shell.working_dir = try allocator.dupe(u8, v);
+        if (s.args) |v| {
+            const duped = try allocator.alloc([]const u8, v.len);
+            for (v, 0..) |arg, i| {
+                duped[i] = try allocator.dupe(u8, arg);
+            }
+            result.shell.args = duped;
+        }
     }
 
     if (file.colors) |c| {

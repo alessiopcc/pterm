@@ -6,6 +6,7 @@
 ///   - GL context attach/detach for render thread handoff (D-15)
 ///   - Callback registration for input, resize, and focus events
 const std = @import("std");
+const builtin = @import("builtin");
 const glfw = @import("zglfw");
 const icon = @import("icon");
 
@@ -67,6 +68,19 @@ pub const Window = struct {
 
         // Set window icon (taskbar + title bar on Windows/Linux)
         icon.setWindowIcon(handle);
+
+        // On Windows, re-add WS_MAXIMIZEBOX so that Win+Up maximize works
+        // even though the window is undecorated (decorated=false).
+        if (comptime builtin.os.tag == .windows) {
+            const GWL_STYLE = -16;
+            const WS_MAXIMIZEBOX: u32 = 0x00010000;
+            const hwnd = glfw.getWin32Window(handle);
+            if (hwnd) |h| {
+                const current = win32.GetWindowLongPtrW(h, GWL_STYLE);
+                _ = win32.SetWindowLongPtrW(h, GWL_STYLE, current | @as(isize, WS_MAXIMIZEBOX));
+                _ = win32.SetWindowPos(h, null, 0, 0, 0, 0, win32.SWP_FRAMECHANGED | win32.SWP_NOMOVE | win32.SWP_NOSIZE | win32.SWP_NOZORDER);
+            }
+        }
 
         // Query DPI scale
         const scale = handle.getContentScale();
@@ -195,3 +209,15 @@ pub const Window = struct {
         glfw.waitEventsTimeout(timeout);
     }
 };
+
+// Win32 API imports for Aero Snap support on undecorated windows
+const win32 = if (builtin.os.tag == .windows) struct {
+    const HWND = std.os.windows.HWND;
+    const SWP_FRAMECHANGED: u32 = 0x0020;
+    const SWP_NOMOVE: u32 = 0x0002;
+    const SWP_NOSIZE: u32 = 0x0001;
+    const SWP_NOZORDER: u32 = 0x0004;
+    extern "user32" fn GetWindowLongPtrW(hWnd: HWND, nIndex: i32) callconv(.c) isize;
+    extern "user32" fn SetWindowLongPtrW(hWnd: HWND, nIndex: i32, dwNewLong: isize) callconv(.c) isize;
+    extern "user32" fn SetWindowPos(hWnd: HWND, hWndInsertAfter: ?HWND, x: i32, y: i32, cx: i32, cy: i32, uFlags: u32) callconv(.c) i32;
+} else struct {};

@@ -42,7 +42,7 @@ pub const PosixPty = struct {
     }
 
     /// Spawn a child process in a new pseudo-terminal via forkpty.
-    pub fn spawn(self: *PosixPty, shell_path: [*:0]const u8, args: ?[*:null]const ?[*:0]const u8) PosixPtyError!void {
+    pub fn spawn(self: *PosixPty, shell_path: [*:0]const u8, args: ?[*:null]const ?[*:0]const u8, working_dir: ?[*:0]const u8) PosixPtyError!void {
         var ws: c.struct_winsize = .{
             .ws_col = self.config.cols,
             .ws_row = self.config.rows,
@@ -61,6 +61,11 @@ pub const PosixPty = struct {
             // Child process -- exec the shell
             const default_args = [_:null]?[*:0]const u8{shell_path};
             const exec_args = if (args) |a| a else &default_args;
+
+            // Change to working directory if specified (D-23: per-pane CWD)
+            if (working_dir) |wd| {
+                _ = c.chdir(wd);
+            }
 
             // Set TERM and COLORTERM for proper terminal capability detection (D-48)
             _ = c.setenv("TERM", "xterm-256color", 1);

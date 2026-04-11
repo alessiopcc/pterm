@@ -30,6 +30,8 @@ pub const PresetPane = struct {
     cmd: ?[]const u8 = null,
     split: ?SplitDirection = null, // null for the first pane (root)
     ratio: f32 = 0.5,
+    shell: ?[]const u8 = null, // D-07: per-pane shell override
+    shell_args: ?[]const []const u8 = null, // D-08: per-pane shell args
 };
 
 /// A tab in a preset, containing one or more panes.
@@ -208,6 +210,13 @@ fn parseOnePreset(allocator: std.mem.Allocator, content: []const u8, name: []con
                 current_pane.split = parseSplitDirection(value) orelse return error.InvalidSplitDirection;
             } else if (std.mem.eql(u8, key, "ratio")) {
                 current_pane.ratio = std.fmt.parseFloat(f32, value) catch 0.5;
+            } else if (std.mem.eql(u8, key, "shell")) {
+                current_pane.shell = allocator.dupe(u8, value) catch return error.OutOfMemory;
+            } else if (std.mem.eql(u8, key, "shell_args")) {
+                // Parse TOML inline array: ["--login", "--norc"]
+                // Re-read the raw value (before quote stripping) for array parsing
+                const raw_value = std.mem.trim(u8, trimmed[eq_idx + 1 ..], " \t");
+                current_pane.shell_args = parseInlineStringArray(allocator, raw_value) catch return error.OutOfMemory;
             }
         }
     }
@@ -231,6 +240,36 @@ fn parseOnePreset(allocator: std.mem.Allocator, content: []const u8, name: []con
         .name = name_duped,
         .tabs = tabs_slice,
     };
+}
+
+/// Parse a TOML inline string array like ["--login", "--norc"].
+/// Returns null if the array is empty or malformed.
+fn parseInlineStringArray(allocator: std.mem.Allocator, value: []const u8) !?[]const []const u8 {
+    const trimmed = std.mem.trim(u8, value, " \t");
+    if (trimmed.len < 2 or trimmed[0] != '[') return null;
+    const close = std.mem.lastIndexOfScalar(u8, trimmed, ']') orelse return null;
+    const inner = std.mem.trim(u8, trimmed[1..close], " \t");
+    if (inner.len == 0) return null;
+
+    var items = std.ArrayListUnmanaged([]const u8){};
+    errdefer {
+        for (items.items) |item| allocator.free(item);
+        items.deinit(allocator);
+    }
+
+    var iter = std.mem.splitScalar(u8, inner, ',');
+    while (iter.next()) |part| {
+        var s = std.mem.trim(u8, part, " \t");
+        // Strip quotes
+        if (s.len >= 2 and s[0] == '"' and s[s.len - 1] == '"') {
+            s = s[1 .. s.len - 1];
+        }
+        if (s.len > 0) {
+            try items.append(allocator, try allocator.dupe(u8, s));
+        }
+    }
+    if (items.items.len == 0) return null;
+    return try items.toOwnedSlice(allocator);
 }
 
 /// Parse a split direction string (D-37).
@@ -331,6 +370,11 @@ pub fn freePreset(allocator: std.mem.Allocator, preset: LayoutPreset) void {
         for (tab.panes) |pane| {
             if (pane.dir) |d| allocator.free(d);
             if (pane.cmd) |c| allocator.free(c);
+            if (pane.shell) |s| allocator.free(s);
+            if (pane.shell_args) |sa| {
+                for (sa) |arg| allocator.free(arg);
+                allocator.free(sa);
+            }
         }
         allocator.free(tab.panes);
     }
@@ -536,4 +580,62 @@ test "formatError produces correct message" {
     const msg = formatError("work", "unknown split direction", &buf);
     try std.testing.expect(std.mem.indexOf(u8, msg, "Layout \"work\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, msg, "Check TOML syntax") != null);
+}
+
+test "parsePresets: pane with shell and shell_args" {
+    const alloc = std.testing.allocator;
+    const toml =
+        \\[layout.mixed]
+        \\[[layout.mixed.tab]]
+        \\  [[layout.mixed.tab.pane]]
+        \\  dir = "/tmp"
+        \\  shell = "bash"
+        \\  shell_args = ["--login", "--norc"]
+        \\
+        \\  [[layout.mixed.tab.pane]]
+        \\  split = "right"
+        \\  shell = "fish"
+    ;
+    const presets = try parsePresets(alloc, toml);
+    defer {
+        for (presets) |p| freePreset(alloc, p);
+        alloc.free(presets);
+    }
+    try std.testing.expectEqual(@as(usize, 1), presets.len);
+    const panes = presets[0].tabs[0].panes;
+    try std.testing.expectEqual(@as(usize, 2), panes.len);
+    // First pane has shell and shell_args
+    try std.testing.expect(std.mem.eql(u8, "bash", panes[0].shell.?));
+    try std.testing.expect(panes[0].shell_args != null);
+    try std.testing.expectEqual(@as(usize, 2), panes[0].shell_args.?.len);
+    try std.testing.expect(std.mem.eql(u8, "--login", panes[0].shell_args.?[0]));
+    try std.testing.expect(std.mem.eql(u8, "--norc", panes[0].shell_args.?[1]));
+    // Second pane has shell but no shell_args
+    try std.testing.expect(std.mem.eql(u8, "fish", panes[1].shell.?));
+    try std.testing.expect(panes[1].shell_args == null);
+}
+
+test "parseInlineStringArray: valid array" {
+    const alloc = std.testing.allocator;
+    const result = try parseInlineStringArray(alloc, "[\"--login\", \"--norc\"]");
+    try std.testing.expect(result != null);
+    defer {
+        for (result.?) |item| alloc.free(item);
+        alloc.free(result.?);
+    }
+    try std.testing.expectEqual(@as(usize, 2), result.?.len);
+    try std.testing.expect(std.mem.eql(u8, "--login", result.?[0]));
+    try std.testing.expect(std.mem.eql(u8, "--norc", result.?[1]));
+}
+
+test "parseInlineStringArray: empty array returns null" {
+    const alloc = std.testing.allocator;
+    const result = try parseInlineStringArray(alloc, "[]");
+    try std.testing.expect(result == null);
+}
+
+test "parseInlineStringArray: non-array returns null" {
+    const alloc = std.testing.allocator;
+    const result = try parseInlineStringArray(alloc, "not an array");
+    try std.testing.expect(result == null);
 }

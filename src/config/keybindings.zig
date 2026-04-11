@@ -63,6 +63,8 @@ pub const Action = enum {
     search,
     // Phase 7: agent monitoring actions
     toggle_agent_tab,
+    // Phase 11: shell switching
+    change_shell,
     none,
 };
 
@@ -407,6 +409,8 @@ pub fn defaultBindings() []const DefaultBinding {
         .{ .action = .open_layout_picker, .combo_str = "ctrl+shift+l" },
         // Phase 7: agent monitoring bindings
         .{ .action = .toggle_agent_tab, .combo_str = "ctrl+shift+a" },
+        // Phase 11: shell switching
+        .{ .action = .change_shell, .combo_str = "ctrl+shift+s" },
     };
 }
 

@@ -11,6 +11,7 @@ pub const Compositor = @import("Compositor.zig");
 pub const TabBarRenderer = @import("TabBarRenderer.zig");
 pub const LayoutPreset = @import("LayoutPreset.zig");
 pub const PresetPicker = @import("PresetPicker.zig");
+pub const ShellPicker = @import("ShellPicker.zig");
 
 test {
     // Pull in all module tests
@@ -23,4 +24,5 @@ test {
     _ = TabBarRenderer;
     _ = LayoutPreset;
     _ = PresetPicker;
+    _ = ShellPicker;
 }

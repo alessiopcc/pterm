@@ -255,13 +255,26 @@ pub const ConPty = struct {
     }
 
     /// Spawn a child process attached to the ConPTY.
-    pub fn spawn(self: *ConPty, shell_path: [*:0]const u8, _: ?[*:null]const ?[*:0]const u8) ConPtyError!void {
+    pub fn spawn(self: *ConPty, shell_path: [*:0]const u8, args: ?[*:null]const ?[*:0]const u8, working_dir: ?[*:0]const u8) ConPtyError!void {
         // Convert shell path from UTF-8 to UTF-16 for CreateProcessW
-        var cmd_line_buf: [512]u16 = undefined;
+        var cmd_line_buf: [2048]u16 = undefined;
         const shell_slice = std.mem.span(shell_path);
-        const len = std.unicode.utf8ToUtf16Le(&cmd_line_buf, shell_slice) catch return ConPtyError.CreateProcessFailed;
-        cmd_line_buf[len] = 0;
-        const cmd_line: [*:0]u16 = cmd_line_buf[0..len :0];
+        var pos: usize = std.unicode.utf8ToUtf16Le(&cmd_line_buf, shell_slice) catch return ConPtyError.CreateProcessFailed;
+        // Append args if present (D-11: pass shell args in command line)
+        if (args) |arg_list| {
+            var i: usize = 0;
+            while (arg_list[i]) |arg| : (i += 1) {
+                if (i == 0) continue; // skip argv[0] (shell path already written)
+                if (pos >= cmd_line_buf.len - 1) break; // prevent overflow
+                cmd_line_buf[pos] = ' ';
+                pos += 1;
+                const arg_slice = std.mem.span(arg);
+                const written = std.unicode.utf8ToUtf16Le(cmd_line_buf[pos..], arg_slice) catch break;
+                pos += written;
+            }
+        }
+        cmd_line_buf[pos] = 0;
+        const cmd_line: [*:0]u16 = cmd_line_buf[0..pos :0];
 
         // Initialize thread attribute list with ConPTY attribute
         var attr_list_size: usize = 0;
@@ -297,6 +310,15 @@ pub const ConPty = struct {
         _ = SetEnvironmentVariableA("TERM", "xterm-256color");
         _ = SetEnvironmentVariableA("COLORTERM", "truecolor");
 
+        // Convert working directory from UTF-8 to UTF-16 if specified (D-23: per-pane CWD)
+        var wd_buf: [1024]u16 = undefined;
+        const wd_ptr: ?[*:0]const u16 = if (working_dir) |wd| blk: {
+            const wd_slice = std.mem.span(wd);
+            const wd_len = std.unicode.utf8ToUtf16Le(&wd_buf, wd_slice) catch break :blk null;
+            wd_buf[wd_len] = 0;
+            break :blk wd_buf[0..wd_len :0];
+        } else null;
+
         var startup_info = STARTUPINFOEXW{
             .StartupInfo = .{ .cb = @sizeOf(STARTUPINFOEXW) },
             .lpAttributeList = attr_list,
@@ -312,7 +334,7 @@ pub const ConPty = struct {
             0, // do not inherit handles
             EXTENDED_STARTUPINFO_PRESENT,
             null,
-            null,
+            wd_ptr,
             &startup_info,
             &proc_info,
         ) == 0) {

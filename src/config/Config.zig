@@ -124,6 +124,7 @@ pub const Config = struct {
     pub const Shell = struct {
         program: ?[]const u8 = null, // null = auto-detect
         working_dir: ?[]const u8 = null,
+        args: ?[]const []const u8 = null, // D-02: raw args appended after shell binary
     };
 
     pub const Colors = struct {
@@ -182,7 +183,7 @@ pub const Config = struct {
         var config = Config.defaults();
 
         // Tier 2: Load TOML config file (if exists)
-        const config_path = cli_args.config_path orelse defaults_mod.defaultConfigPath();
+        const config_path = cli_args.config_path orelse (defaults_mod.defaultConfigPathAlloc(allocator) catch null);
         if (config_path) |path| {
             if (loader.loadConfigFromPath(allocator, path)) |file_config| {
                 config = mergeFileIntoConfig(config, file_config);
@@ -234,6 +235,7 @@ pub const Config = struct {
         // Shell
         if (file.shell.program) |v| result.shell.program = v;
         if (file.shell.working_dir) |v| result.shell.working_dir = v;
+        if (file.shell.args) |v| result.shell.args = v;
 
         // Colors
         if (file.colors.foreground) |v| result.colors.foreground = v;

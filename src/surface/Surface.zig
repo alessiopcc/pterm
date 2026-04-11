@@ -540,6 +540,7 @@ pub const Surface = struct {
             .scroll_to_top, .scroll_to_bottom => {},
             .search => {}, // Phase 6
             .toggle_agent_tab => {}, // Phase 7: handled in App.dispatchAction
+            .change_shell => {}, // Phase 11: handled in App.dispatchAction
             .none => {},
         }
     }

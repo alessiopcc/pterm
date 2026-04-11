@@ -78,7 +78,7 @@ test "pty spawn and read output" {
         "cmd.exe"
     else
         "/bin/sh";
-    try p.spawn(shell_path, null);
+    try p.spawn(shell_path, null, null);
 
     const pid = p.getChildPid();
     try testing.expect(pid != null);
@@ -100,7 +100,7 @@ test "pty write and read roundtrip" {
         "cmd.exe"
     else
         "/bin/sh";
-    try p.spawn(shell_path, null);
+    try p.spawn(shell_path, null, null);
 
     // Read initial output
     var initial_buf: [8192]u8 = undefined;
@@ -144,7 +144,7 @@ test "pty resize (D-10)" {
         "cmd.exe"
     else
         "/bin/sh";
-    try p.spawn(shell_path, null);
+    try p.spawn(shell_path, null, null);
 
     // Wait for shell to start
     var buf: [4096]u8 = undefined;
@@ -168,7 +168,7 @@ test "pty spawn default shell" {
         const shell = shell_mod.detectShell();
         break :blk shell.path;
     };
-    try p.spawn(shell_path, null);
+    try p.spawn(shell_path, null, null);
 
     // Should be able to read at least 1 byte (VT sequences on Windows)
     var buf: [4096]u8 = undefined;
@@ -255,7 +255,7 @@ test "pty reader thread delivers bytes" {
         "cmd.exe"
     else
         "/bin/sh";
-    try p.spawn(shell_path, null);
+    try p.spawn(shell_path, null, null);
 
     // Create mailbox and reader
     const Mailbox = mailbox_mod.Mailbox(65536);
@@ -292,7 +292,7 @@ test "pty reader stop" {
         "cmd.exe"
     else
         "/bin/sh";
-    try p.spawn(shell_path, null);
+    try p.spawn(shell_path, null, null);
 
     const Mailbox = mailbox_mod.Mailbox(65536);
     var mbox = Mailbox{};

@@ -83,6 +83,9 @@ const PaneState = layout_mod.Compositor.PaneState;
 const TabBarRenderer = layout_mod.TabBarRenderer.TabBarRenderer;
 const LayoutPreset = layout_mod.LayoutPreset;
 const PresetPicker = layout_mod.PresetPicker.PresetPicker;
+const ShellPicker = layout_mod.ShellPicker.ShellPicker;
+const ShellPickerColors = layout_mod.ShellPicker.ShellPickerColors;
+const ShellInfo = shell_mod.ShellInfo;
 
 pub const AppOptions = struct {
     perf_logging: bool = false,
@@ -203,12 +206,22 @@ pub const App = struct {
     // Layout preset picker overlay
     preset_picker: PresetPicker,
 
+    // Shell picker overlay (Phase 11)
+    shell_picker: ShellPicker,
+    available_shells: ?[]ShellInfo = null,
+    available_shell_display: [16][128]u8 = undefined,
+    available_shell_display_slices: [16][]const u8 = undefined,
+
     // Pending --layout activation (from CLI flag)
     pending_layout_name: ?[]const u8,
 
     // Pending pane operations (main thread -> render thread, mutex-protected)
     pending_ops: std.ArrayListUnmanaged(PaneOp),
     pending_ops_mutex: std.Thread.Mutex,
+
+    /// Protects pane_data and tab_manager from concurrent access
+    /// between the main thread (input/close) and render thread.
+    pane_mutex: std.Thread.Mutex,
 
     // Border drag state (mouse resize)
     border_drag_active: bool,
@@ -381,9 +394,11 @@ pub const App = struct {
                 config.agent.notification_sound,
             ),
             .preset_picker = .{},
+            .shell_picker = .{},
             .pending_layout_name = options.layout_name,
             .pending_ops = .{},
             .pending_ops_mutex = .{},
+            .pane_mutex = .{},
             .text_select_active = false,
             .text_select_pane_id = null,
             .text_select_click_count = 0,
@@ -421,7 +436,7 @@ pub const App = struct {
     pub fn start(self: *App) !void {
         // Create first pane (TermIO + PTY + Surface)
         const first_tab = self.tab_manager.getActiveTab() orelse return error.NoTab;
-        const pane_id = try self.createPane(null);
+        const pane_id = try self.createPane(null, null, null);
 
         // Update the tab's root leaf to use this pane_id
         first_tab.root.leaf.pane_id = pane_id;
@@ -441,6 +456,24 @@ pub const App = struct {
             .cursor_pos_callback = cursorPosCallback,
         });
 
+        // Activate --layout preset BEFORE starting the render thread to avoid
+        // racing on tab tree mutations (the render thread walks active_tab.root).
+        if (self.pending_layout_name) |name| {
+            self.activatePresetByName(name);
+            self.pending_layout_name = null;
+
+            // Close the default tab (tab 0) — layout replaces it at startup
+            if (self.tab_manager.tabCount() > 1) {
+                // Destroy panes in the default tab before removing it
+                switch (self.tab_manager.tabs.items[0].root.*) {
+                    .leaf => |leaf| self.destroyPane(leaf.pane_id),
+                    .branch => {}, // default tab is always a single leaf
+                }
+                _ = self.tab_manager.closeTab(0);
+                self.tab_manager.switchTab(0);
+            }
+        }
+
         // Detach GL context from main thread
         Window.detachContext();
 
@@ -452,15 +485,10 @@ pub const App = struct {
         var it = self.pane_data.iterator();
         while (it.next()) |entry| {
             const pane = entry.value_ptr.*;
+            if (pane.termio.reader == null or pane.termio.parser != null) continue;
             try pane.termio.start();
             pane.termio.terminal.observer.onScreenChange = &screenChangeCallback;
             pane.termio.terminal.observer.screen_change_ctx = @ptrCast(pane);
-        }
-
-        // Activate --layout preset if specified
-        if (self.pending_layout_name) |name| {
-            self.activatePresetByName(name);
-            self.pending_layout_name = null;
         }
 
         // Initialize config file watcher
@@ -476,9 +504,12 @@ pub const App = struct {
 
     /// Create a new pane with its own TermIO + PTY.
     /// Returns the pane_id.
-    pub fn createPane(self: *App, working_dir: ?[]const u8) !u32 {
-        // TODO: pass working_dir to PTY spawn for per-pane CWD (D-23)
-
+    pub fn createPane(
+        self: *App,
+        working_dir: ?[]const u8,
+        shell_override: ?[]const u8,
+        shell_args_override: ?[]const []const u8,
+    ) !u32 {
         var termio = try TermIO.init(self.allocator, TermIOConfig{
             .cols = self.config.cols(),
             .rows = self.config.rows(),
@@ -492,8 +523,28 @@ pub const App = struct {
         });
         errdefer pty.deinit();
 
-        const shell_config = shell_mod.detectShell();
-        try pty.spawn(shell_config.path, shell_config.args);
+        // D-07: per-pane shell override > global config > auto-detect
+        // D-09: if per-pane shell not specified, inherit global [shell] config
+        const effective_program = shell_override orelse self.config.shell.program;
+        const effective_args = shell_args_override orelse self.config.shell.args;
+        const shell_config = shell_mod.resolveShell(
+            self.allocator,
+            effective_program,
+            effective_args,
+        );
+        defer shell_config.deinit();
+
+        // D-23: pass working_dir to PTY spawn for per-pane CWD
+        var wd_buf: [1024]u8 = undefined;
+        const wd_z: ?[*:0]const u8 = if (working_dir) |wd| blk: {
+            if (wd.len < wd_buf.len) {
+                @memcpy(wd_buf[0..wd.len], wd);
+                wd_buf[wd.len] = 0;
+                break :blk wd_buf[0..wd.len :0];
+            }
+            break :blk null;
+        } else null;
+        try pty.spawn(shell_config.path, shell_config.args, wd_z);
         termio.attachPty(&pty);
 
         // Allocate PaneData
@@ -606,6 +657,10 @@ pub const App = struct {
             // Free per-pane row cache
             pd.row_cache.invalidate();
 
+            // Free per-pane search and URL state
+            pd.search_state.deinit(self.allocator);
+            pd.url_state.deinit();
+
             // Deinit in reverse order
             pd.surface.deinit();
             pd.pty.deinit();
@@ -643,6 +698,9 @@ pub const App = struct {
     }
 
     pub fn deinit(self: *App) void {
+        // Free cached shell list (Phase 11)
+        self.closeShellPicker();
+
         // Stop config watcher
         if (self.config_watcher) |*w| {
             w.deinit();
@@ -661,6 +719,8 @@ pub const App = struct {
         while (it.next()) |entry| {
             const pd = entry.value_ptr.*;
             pd.termio.stop();
+            pd.search_state.deinit(self.allocator);
+            pd.url_state.deinit();
             pd.surface.deinit();
             pd.pty.deinit();
             pd.termio.deinit();
@@ -740,6 +800,12 @@ pub const App = struct {
                 pd.scroll_offset = 0;
                 self.requestFrame();
             }
+        }
+
+        // Intercept input when shell picker is visible (Phase 11)
+        if (self.shell_picker.visible) {
+            self.handleShellPickerInput(key);
+            return;
         }
 
         // Intercept input when preset picker is visible
@@ -1586,6 +1652,8 @@ pub const App = struct {
                     self.requestFrame();
                 }
             },
+            // Phase 11: shell switching
+            .change_shell => self.actionOpenShellPicker(),
             .scroll_to_top, .scroll_to_bottom => {},
             .search => {
                 // Phase 6: Toggle search overlay on focused pane (D-08 viewport save/restore)
@@ -1632,7 +1700,7 @@ pub const App = struct {
     /// Switch to a tab by index, clearing activity indicator (D-13).
     fn actionNewTab(self: *App) void {
         const tab = self.tab_manager.createTab() catch return;
-        const pane_id = self.createPane(null) catch return;
+        const pane_id = self.createPane(null, null, null) catch return;
 
         // Wire the new tab's root leaf to this pane
         tab.root.leaf.pane_id = pane_id;
@@ -1657,6 +1725,9 @@ pub const App = struct {
     }
 
     fn actionCloseTab(self: *App) void {
+        self.pane_mutex.lock();
+        defer self.pane_mutex.unlock();
+
         const tab = self.tab_manager.getActiveTab() orelse return;
 
         // Destroy all panes in this tab
@@ -1677,6 +1748,8 @@ pub const App = struct {
     }
 
     fn switchToTab(self: *App, idx: usize) void {
+        // Close overlays on tab switch (Pitfall 3: prevent acting on wrong pane)
+        self.closeShellPicker();
         self.tab_manager.switchTab(idx);
         // Clear activity on the now-active tab
         if (self.tab_manager.getActiveTab()) |tab| {
@@ -1724,7 +1797,7 @@ pub const App = struct {
         const new_id = tab.splitFocused(direction) catch return;
 
         // Create pane with TermIO + PTY
-        const pane_id = self.createPane(null) catch return;
+        const pane_id = self.createPane(null, null, null) catch return;
 
         // Update the new leaf's pane_id to match the created pane
         if (tree_ops.findLeaf(tab.root, new_id)) |new_leaf| {
@@ -1747,6 +1820,9 @@ pub const App = struct {
 
     /// Close the focused pane (D-20, D-27).
     fn actionClosePane(self: *App) void {
+        self.pane_mutex.lock();
+        defer self.pane_mutex.unlock();
+
         const tab = self.tab_manager.getActiveTab() orelse return;
         const old_pane_id = tab.focused_pane_id;
 
@@ -2004,6 +2080,203 @@ pub const App = struct {
         }
     }
 
+    /// Open the shell picker overlay (D-10: single action opens picker).
+    fn actionOpenShellPicker(self: *App) void {
+        // Get the currently active pane's shell name for marking
+        const current_shell_name: []const u8 = if (self.getFocusedPaneData()) |pd|
+            pd.process_name[0..pd.process_name_len]
+        else
+            "";
+
+        // Filter available shells (D-11, D-12, D-13)
+        const result = shell_mod.filterAvailableShells(
+            self.allocator,
+            self.config.shell.program,
+        );
+
+        if (result.count == 0) {
+            if (result.items.len > 0) self.allocator.free(result.items);
+            return;
+        }
+
+        // Free any previous list (including path allocations)
+        if (self.available_shells) |prev| {
+            for (prev) |si| {
+                if (si.path_alloc) |alloc_ptr| {
+                    const sentinel_len = std.mem.len(alloc_ptr);
+                    self.allocator.free(alloc_ptr[0 .. sentinel_len + 1]);
+                }
+            }
+            self.allocator.free(prev);
+        }
+        self.available_shells = result.items;
+
+        // Build display strings: "name -- path" or "* name -- path" for active
+        var active_idx: usize = 0;
+        for (result.items[0..result.count], 0..) |si, i| {
+            const is_active = std.mem.eql(u8, si.name, current_shell_name);
+            if (is_active) active_idx = i;
+
+            const buf = &self.available_shell_display[i];
+            const prefix: []const u8 = if (is_active) "* " else "  ";
+            const display = std.fmt.bufPrint(buf, "{s}{s} -- {s}", .{ prefix, si.name, si.path }) catch "???";
+            self.available_shell_display_slices[i] = display;
+        }
+
+        self.shell_picker.open(result.count, active_idx);
+        self.requestFrame();
+    }
+
+    /// Handle keyboard input while the shell picker overlay is visible (D-05).
+    fn handleShellPickerInput(self: *App, key: glfw.Key) void {
+        switch (key) {
+            .up => {
+                self.shell_picker.moveUp();
+                self.requestFrame();
+            },
+            .down => {
+                self.shell_picker.moveDown();
+                self.requestFrame();
+            },
+            .enter, .kp_enter => {
+                const idx = self.shell_picker.getSelectedIndex();
+                if (self.available_shells) |shells| {
+                    if (idx < shells.len) {
+                        const selected = shells[idx];
+                        if (self.getFocusedPaneData()) |pd| {
+                            self.respawnShell(pd, selected.name) catch |err| {
+                                std.log.err("Shell switch failed: {}", .{err});
+                            };
+                        }
+                    }
+                }
+                self.closeShellPicker();
+                self.requestFrame();
+            },
+            .escape => {
+                self.closeShellPicker();
+                self.requestFrame();
+            },
+            else => {},
+        }
+    }
+
+    /// Close shell picker and free cached shell list.
+    fn closeShellPicker(self: *App) void {
+        self.shell_picker.close();
+        if (self.available_shells) |shells| {
+            // Free path allocations from findExecutable
+            for (shells) |si| {
+                if (si.path_alloc) |alloc_ptr| {
+                    const sentinel_len = std.mem.len(alloc_ptr);
+                    const slice = alloc_ptr[0 .. sentinel_len + 1];
+                    self.allocator.free(slice);
+                }
+            }
+            self.allocator.free(shells);
+            self.available_shells = null;
+        }
+    }
+
+    /// Kill current PTY and respawn with a new shell, preserving pane position (D-01, D-03).
+    /// Content is lost (D-02). Follows destroyPane ordering for teardown, createPane for spawn.
+    fn respawnShell(self: *App, pd: *PaneData, shell_name: []const u8) !void {
+        // Compute actual pane dimensions from bounds (not default config)
+        const metrics = self.font_grid.getMetrics();
+        var actual_cols = self.config.cols();
+        var actual_rows = self.config.rows();
+        if (self.tab_manager.getActiveTab()) |tab| {
+            if (tree_ops.findLeaf(tab.root, pd.pane_id)) |leaf_node| {
+                const bounds = leaf_node.leaf.bounds;
+                actual_cols = @intFromFloat(@min(500.0, @max(1.0, @as(f32, @floatFromInt(bounds.w)) / metrics.cell_width)));
+                actual_rows = @intFromFloat(@min(500.0, @max(1.0, @as(f32, @floatFromInt(bounds.h)) / metrics.cell_height)));
+            }
+        }
+
+        // --- TEARDOWN (same order as destroyPane) ---
+        pd.termio.stop();
+        pd.row_cache.invalidate();
+        pd.search_state.deinit(self.allocator);
+        pd.url_state.deinit();
+        pd.surface.deinit();
+        pd.pty.deinit();
+        pd.termio.deinit();
+
+        // --- RESPAWN (same sequence as createPane lines 487-586) ---
+        pd.termio = try TermIO.init(self.allocator, TermIOConfig{
+            .cols = actual_cols,
+            .rows = actual_rows,
+            .scrollback_lines = self.config.scrollback_lines(),
+        });
+
+        pd.pty = try Pty.init(self.allocator, .{
+            .cols = actual_cols,
+            .rows = actual_rows,
+        });
+
+        // Resolve and spawn the selected shell
+        const shell_config = shell_mod.resolveShell(self.allocator, shell_name, null);
+        defer shell_config.deinit();
+        try pd.pty.spawn(shell_config.path, shell_config.args, null);
+        pd.termio.attachPty(&pd.pty);
+
+        pd.surface = try Surface.init(self.allocator, self.config, &self.window, &pd.termio, .{
+            .perf_logging = self.perf_logging,
+            .debug_keys = false,
+        });
+
+        // Fix up internal pointers (Pitfall 1 — CRITICAL, same as createPane lines 580-586)
+        pd.surface.termio = &pd.termio;
+        pd.surface.window = &self.window;
+
+        // Rewire observer callbacks (same as createPane lines 588-594)
+        pd.termio.terminal.observer.onBell = bellCallback;
+        pd.termio.terminal.observer.bell_ctx = @ptrCast(&pd.bell_state);
+        pd.termio.terminal.observer.onAgentOutput = agentOutputCallback;
+        pd.termio.terminal.observer.agent_ctx = @ptrCast(pd);
+
+        // Update process name from new shell
+        {
+            const shell_path_slice = std.mem.span(shell_config.path);
+            const base = if (std.mem.lastIndexOfScalar(u8, shell_path_slice, '/')) |idx|
+                shell_path_slice[idx + 1 ..]
+            else if (std.mem.lastIndexOfScalar(u8, shell_path_slice, '\\')) |idx|
+                shell_path_slice[idx + 1 ..]
+            else
+                shell_path_slice;
+            const name = if (std.mem.endsWith(u8, base, ".exe"))
+                base[0 .. base.len - 4]
+            else
+                base;
+            const copy_len = @min(name.len, pd.process_name.len);
+            @memset(&pd.process_name, 0);
+            @memcpy(pd.process_name[0..copy_len], name[0..copy_len]);
+            pd.process_name_len = @intCast(copy_len);
+        }
+
+        // Reset transient pane state (D-02: content lost)
+        pd.scroll_offset = 0;
+        pd.search_state = .{};
+        pd.url_state = .{};
+        pd.bell_state = .{};
+        pd.agent_state = .{};
+        pd.needs_agent_scan = std.atomic.Value(bool).init(false);
+        pd.suppress_agent_output = std.atomic.Value(bool).init(false);
+        pd.idle_tracker = IdleTracker.init(
+            @intCast(self.config.agent.idle_timeout),
+            self.config.agent.idle_detection,
+        );
+
+        // Wire screen change callback (triggers frame request on terminal output)
+        pd.termio.terminal.observer.onScreenChange = &screenChangeCallback;
+        pd.termio.terminal.observer.screen_change_ctx = @ptrCast(pd);
+
+        // Start TermIO reader thread (must happen after attachPty and observer wiring)
+        try pd.termio.start();
+
+        std.log.info("Shell switched to '{s}' in pane {d}", .{ shell_name, pd.pane_id });
+    }
+
     /// Activate a layout preset: create new tabs with the preset's pane tree.
     /// Non-destructive: opens in new tab(s), preserving existing tabs (D-39).
     fn activatePreset(self: *App, preset: *const LayoutPreset.LayoutPreset) void {
@@ -2032,7 +2305,9 @@ pub const App = struct {
 
             for (leaves, 0..) |pane_id, i| {
                 const dir = if (i < tab_def.panes.len) tab_def.panes[i].dir else null;
-                const actual_id = self.createPane(dir) catch continue;
+                const pane_shell = if (i < tab_def.panes.len) tab_def.panes[i].shell else null;
+                const pane_shell_args = if (i < tab_def.panes.len) tab_def.panes[i].shell_args else null;
+                const actual_id = self.createPane(dir, pane_shell, pane_shell_args) catch continue;
 
                 // If the generated pane_id differs from what buildTree assigned,
                 // update the tree leaf to match the actual pane_id
@@ -2122,6 +2397,7 @@ pub const App = struct {
         self.pending_ops.append(self.allocator, op) catch {};
         self.requestFrame();
     }
+
 
     /// Get PaneData for the currently focused pane.
     // -------------------------------------------------------
@@ -2383,22 +2659,26 @@ pub const App = struct {
                 var agent_tab_buf: [64]bool = [_]bool{false} ** 64;
                 const tab_count = self.tab_manager.tabCount();
                 const badge_count = @min(tab_count, 64);
-                for (self.tab_manager.tabs.items, 0..) |tab, ti| {
-                    if (ti >= 64) break;
-                    // Check if any pane in this tab has show_badge or agent state
-                    const leaf_infos = tree_ops.collectLeafInfos(tab.root, self.frame_arena.allocator()) catch &.{};
-                    for (leaf_infos) |info| {
-                        if (self.pane_data.getPtr(info.pane_id)) |pd_ptr| {
-                            if (pd_ptr.*.bell_state.show_badge) {
-                                bell_badges_buf[ti] = true;
-                            }
-                            // Phase 7: Agent waiting badge
-                            if (pd_ptr.*.agent_state.show_badge) {
-                                agent_badges_buf[ti] = true;
-                            }
-                            // Phase 7: Agent tab icon
-                            if (pd_ptr.*.agent_state.is_agent_tab.load(.acquire)) {
-                                agent_tab_buf[ti] = true;
+                {
+                    self.pane_mutex.lock();
+                    defer self.pane_mutex.unlock();
+                    for (self.tab_manager.tabs.items, 0..) |tab, ti| {
+                        if (ti >= 64) break;
+                        // Check if any pane in this tab has show_badge or agent state
+                        const leaf_infos = tree_ops.collectLeafInfos(tab.root, self.frame_arena.allocator()) catch &.{};
+                        for (leaf_infos) |info| {
+                            if (self.pane_data.getPtr(info.pane_id)) |pd_ptr| {
+                                if (pd_ptr.*.bell_state.show_badge) {
+                                    bell_badges_buf[ti] = true;
+                                }
+                                // Phase 7: Agent waiting badge
+                                if (pd_ptr.*.agent_state.show_badge) {
+                                    agent_badges_buf[ti] = true;
+                                }
+                                // Phase 7: Agent tab icon
+                                if (pd_ptr.*.agent_state.is_agent_tab.load(.acquire)) {
+                                    agent_tab_buf[ti] = true;
+                                }
                             }
                         }
                     }
@@ -2460,6 +2740,7 @@ pub const App = struct {
                     const leaf_infos = tree_ops.collectLeafInfos(active_tab.root, std.heap.page_allocator) catch &.{};
                     defer if (leaf_infos.len > 0) std.heap.page_allocator.free(leaf_infos);
 
+                    self.pane_mutex.lock();
                     for (leaf_infos) |info| {
                         if (self.pane_data.get(info.pane_id)) |pd| {
                             {
@@ -2706,10 +2987,10 @@ pub const App = struct {
                             }
                         }
                     }
-
                     // Render pane borders (after all panes, full viewport, no scissor)
                     backend.setFullViewport();
                     renderPaneBorders(active_tab.root, active_tab.focused_pane_id, &backend, &self.renderer_palette, &self.pane_data);
+                    self.pane_mutex.unlock();
 
                     // Re-draw tab bar bottom separator on top of pane content
                     // (pane background clear can bleed into the separator line)
@@ -2738,33 +3019,37 @@ pub const App = struct {
                         // Build PaneStatusInfo array for current tab
                         var pane_infos: [32]status_bar_mod.PaneStatusInfo = undefined;
                         var pane_count: usize = 0;
-                        const current_leaf_infos = tree_ops.collectLeafInfos(active_tab.root, self.frame_arena.allocator()) catch &.{};
-                        for (current_leaf_infos) |li| {
-                            if (pane_count >= 32) break;
-                            if (self.pane_data.get(li.pane_id)) |lpd| {
-                                const raw_state = lpd.agent_state.state.load(.acquire);
-                                pane_infos[pane_count] = .{
-                                    .pane_number = @intCast(pane_count + 1),
-                                    .state = switch (raw_state) {
-                                        .idle => .idle,
-                                        .working => .working,
-                                        .waiting => .waiting,
-                                    },
-                                    .is_focused = li.pane_id == active_tab.focused_pane_id,
-                                };
-                                pane_count += 1;
-                            }
-                        }
-
-                        // Count waiting panes in background (non-active) tabs
                         var bg_waiting: u32 = 0;
-                        for (self.tab_manager.tabs.items, 0..) |bg_tab, bti| {
-                            if (bti == self.tab_manager.active_idx) continue;
-                            const bg_leaves = tree_ops.collectLeafInfos(bg_tab.root, self.frame_arena.allocator()) catch &.{};
-                            for (bg_leaves) |bli| {
-                                if (self.pane_data.get(bli.pane_id)) |bpd| {
-                                    if (bpd.agent_state.state.load(.acquire) == .waiting) {
-                                        bg_waiting += 1;
+                        {
+                            self.pane_mutex.lock();
+                            defer self.pane_mutex.unlock();
+                            const current_leaf_infos = tree_ops.collectLeafInfos(active_tab.root, self.frame_arena.allocator()) catch &.{};
+                            for (current_leaf_infos) |li| {
+                                if (pane_count >= 32) break;
+                                if (self.pane_data.get(li.pane_id)) |lpd| {
+                                    const raw_state = lpd.agent_state.state.load(.acquire);
+                                    pane_infos[pane_count] = .{
+                                        .pane_number = @intCast(pane_count + 1),
+                                        .state = switch (raw_state) {
+                                            .idle => .idle,
+                                            .working => .working,
+                                            .waiting => .waiting,
+                                        },
+                                        .is_focused = li.pane_id == active_tab.focused_pane_id,
+                                    };
+                                    pane_count += 1;
+                                }
+                            }
+
+                            // Count waiting panes in background (non-active) tabs
+                            for (self.tab_manager.tabs.items, 0..) |bg_tab, bti| {
+                                if (bti == self.tab_manager.active_idx) continue;
+                                const bg_leaves = tree_ops.collectLeafInfos(bg_tab.root, self.frame_arena.allocator()) catch &.{};
+                                for (bg_leaves) |bli| {
+                                    if (self.pane_data.get(bli.pane_id)) |bpd| {
+                                        if (bpd.agent_state.state.load(.acquire) == .waiting) {
+                                            bg_waiting += 1;
+                                        }
                                     }
                                 }
                             }
@@ -2821,6 +3106,33 @@ pub const App = struct {
                         pickerDrawRectCallback,
                         pickerDrawTextCallback,
                         @ptrCast(&backend),
+                    );
+                }
+
+                // Render shell picker overlay if visible (Phase 11)
+                if (self.shell_picker.visible) {
+                    const shell_count = self.shell_picker.shell_count;
+                    var sp_render_ctx = TabBarRenderCtx{
+                        .backend = &backend,
+                        .font_grid = self.font_grid,
+                    };
+                    self.shell_picker.render(
+                        self.available_shell_display_slices[0..shell_count],
+                        metrics.cell_width,
+                        metrics.cell_height,
+                        fb.width,
+                        fb.height,
+                        .{
+                            .bg = 0x2A2A3AFF, // Dark blue-grey, opaque
+                            .border = self.renderer_palette.ui_pane_border.toU32(),
+                            .selected = 0x45475AFF, // Visible selection highlight
+                            .fg = self.renderer_palette.default_fg.toU32(),
+                            .overlay_bg = 0x000000C0, // Dark overlay backdrop
+                            .active_marker = self.renderer_palette.ui_agent_alert.toU32(),
+                        },
+                        shellPickerDrawRectCallback,
+                        drawTextCallback,
+                        @ptrCast(&sp_render_ctx),
                     );
                 }
 
@@ -2887,6 +3199,12 @@ pub const App = struct {
         const rc: *TabBarRenderCtx = @ptrCast(@alignCast(ctx));
         const c = renderer_types.Color.fromU32(color);
         rc.backend.drawFilledRect(toRendererRect(rect), c);
+    }
+
+    fn shellPickerDrawRectCallback(x: i32, y: i32, w: u32, h: u32, color: u32, ctx: *anyopaque) void {
+        const rc: *TabBarRenderCtx = @ptrCast(@alignCast(ctx));
+        const c = renderer_types.Color.fromU32(color);
+        rc.backend.drawFilledRect(.{ .x = x, .y = y, .w = w, .h = h }, c);
     }
 
     fn pickerDrawRectCallback(x: i32, y: i32, w: u32, h: u32, color: u32, ctx: *anyopaque) void {

@@ -70,6 +70,7 @@ pub fn dumpConfig() void {
         \\[shell]
         \\# program = ""       # empty = auto-detect
         \\# working_dir = ""   # empty = inherit
+        \\# args = []           # extra arguments, e.g. ["--login", "--norc"]
         \\
         \\[colors]
         \\# foreground = "#cdd6f4"
