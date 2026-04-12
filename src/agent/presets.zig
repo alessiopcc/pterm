@@ -6,7 +6,6 @@
 ///
 /// All patterns are matched as literal byte substrings via std.mem.indexOf.
 /// Custom user patterns (regex) are handled separately by AgentDetector.
-
 /// Conservative preset: major AI coding tools only.
 /// Targets Claude Code, Copilot CLI, Aider, Codex, and common inquirer.js prompts.
 pub const conservative_patterns = [_][]const u8{

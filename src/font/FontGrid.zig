@@ -201,7 +201,6 @@ pub const FontGrid = struct {
             // Check atlas cache (color atlas for emoji font, grayscale for others).
             if (is_emoji_font) {
                 if (self.atlas.lookupColor(key)) |cached| {
-
                     return GlyphResult{
                         .region = cached.region,
                         .bearing_x = cached.bearing_x,
@@ -211,7 +210,6 @@ pub const FontGrid = struct {
                 }
             } else {
                 if (self.atlas.lookup(key)) |cached| {
-
                     return GlyphResult{
                         .region = cached.region,
                         .bearing_x = cached.bearing_x,

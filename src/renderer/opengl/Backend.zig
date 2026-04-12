@@ -573,9 +573,15 @@ pub const OpenGLBackend = struct {
         gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
         gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
         gl.TexImage2D(
-            gl.TEXTURE_2D, 0, gl.RGBA,
-            @intCast(size), @intCast(size), 0,
-            gl.RGBA, gl.UNSIGNED_BYTE, @ptrCast(pixels.ptr),
+            gl.TEXTURE_2D,
+            0,
+            gl.RGBA,
+            @intCast(size),
+            @intCast(size),
+            0,
+            gl.RGBA,
+            gl.UNSIGNED_BYTE,
+            @ptrCast(pixels.ptr),
         );
         self.icon_size = size;
     }
@@ -734,10 +740,10 @@ pub fn computeOrthoMatrix(
 
     // Column-major layout: m[col * 4 + row]
     return [16]gl.float{
-        2.0 / rl,                 0.0,                      0.0,                       0.0, // col 0
-        0.0,                      2.0 / tb,                 0.0,                       0.0, // col 1
-        0.0,                      0.0,                      -2.0 / fn_,                0.0, // col 2
-        -(right + left) / rl,     -(top + bottom) / tb,     -(far + near) / fn_,       1.0, // col 3
+        2.0 / rl, 0.0, 0.0, 0.0, // col 0
+        0.0, 2.0 / tb, 0.0, 0.0, // col 1
+        0.0, 0.0, -2.0 / fn_, 0.0, // col 2
+        -(right + left) / rl, -(top + bottom) / tb, -(far + near) / fn_, 1.0, // col 3
     };
 }
 

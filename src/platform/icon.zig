@@ -21,12 +21,12 @@ const icon_256_pixels = @embedFile("icons/icon-256.rgba");
 /// All icon images, ordered smallest to largest.
 /// GLFW picks the closest match for each context (title bar, taskbar, etc.).
 pub const images = [_]glfw.Image{
-    .{ .width = 16, .height = 16, .pixels = @constCast(@ptrCast(icon_16_pixels.ptr)) },
-    .{ .width = 32, .height = 32, .pixels = @constCast(@ptrCast(icon_32_pixels.ptr)) },
-    .{ .width = 48, .height = 48, .pixels = @constCast(@ptrCast(icon_48_pixels.ptr)) },
-    .{ .width = 64, .height = 64, .pixels = @constCast(@ptrCast(icon_64_pixels.ptr)) },
-    .{ .width = 128, .height = 128, .pixels = @constCast(@ptrCast(icon_128_pixels.ptr)) },
-    .{ .width = 256, .height = 256, .pixels = @constCast(@ptrCast(icon_256_pixels.ptr)) },
+    .{ .width = 16, .height = 16, .pixels = @ptrCast(@constCast(icon_16_pixels.ptr)) },
+    .{ .width = 32, .height = 32, .pixels = @ptrCast(@constCast(icon_32_pixels.ptr)) },
+    .{ .width = 48, .height = 48, .pixels = @ptrCast(@constCast(icon_48_pixels.ptr)) },
+    .{ .width = 64, .height = 64, .pixels = @ptrCast(@constCast(icon_64_pixels.ptr)) },
+    .{ .width = 128, .height = 128, .pixels = @ptrCast(@constCast(icon_128_pixels.ptr)) },
+    .{ .width = 256, .height = 256, .pixels = @ptrCast(@constCast(icon_256_pixels.ptr)) },
 };
 
 /// Set the window icon using all embedded sizes.

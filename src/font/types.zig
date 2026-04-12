@@ -1,5 +1,4 @@
 /// Shared types for the font subsystem.
-
 /// Glyph bitmap pixel format.
 pub const GlyphFormat = enum { grayscale, rgba };
 

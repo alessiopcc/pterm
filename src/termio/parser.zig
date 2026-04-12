@@ -3,7 +3,6 @@
 /// Consumes bytes from the mailbox (SPSC ring buffer) and feeds them
 /// to the terminal's VT parser via feedBytes(). Holds the terminal mutex
 /// during feedBytes() to synchronize with the render thread.
-
 const std = @import("std");
 const terminal_mod = @import("terminal");
 const mailbox_mod = @import("mailbox");

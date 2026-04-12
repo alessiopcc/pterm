@@ -280,7 +280,6 @@ pub const Surface = struct {
                     // Without this, the OpenGL viewport/projection stays stale and text
                     // renders at wrong positions or gets clipped after zoom.
                     backend.resize(@intCast(fb2.width), @intCast(fb2.height));
-
                 }
 
                 // Handle pending resize: GL viewport + terminal buffer + PTY
@@ -363,7 +362,7 @@ pub const Surface = struct {
                         const diag = backend.getDiagnostics();
                         var pbuf: [128]u8 = undefined;
                         const pline = std.fmt.bufPrint(&pbuf, "frame={d} frame_time={d}us draws={d} hits={d} misses={d}\n", .{
-                            self.frame_count, diag.frame_time_us, diag.draw_calls,
+                            self.frame_count,      diag.frame_time_us,      diag.draw_calls,
                             diag.glyph_cache_hits, diag.glyph_cache_misses,
                         }) catch "";
                         if (pline.len > 0) _ = f.write(pline) catch 0;

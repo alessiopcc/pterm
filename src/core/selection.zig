@@ -3,7 +3,6 @@
 /// Tracks mouse-based text selection ranges and extracts selected text
 /// from the terminal screen. Supports normal (click-drag), word (double-click),
 /// and line (triple-click) selection modes.
-
 const std = @import("std");
 
 /// A range of selected cells in the terminal.

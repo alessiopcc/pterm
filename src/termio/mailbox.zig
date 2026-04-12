@@ -3,7 +3,6 @@
 ///
 /// This is a lock-free ring buffer using atomic operations for thread safety.
 /// The reader thread pushes bytes (producer), and the parser thread pops bytes (consumer).
-
 const std = @import("std");
 
 pub fn Mailbox(comptime capacity: usize) type {

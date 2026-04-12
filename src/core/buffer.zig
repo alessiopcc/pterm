@@ -11,7 +11,6 @@
 ///
 /// D-18 (Serialization): serialize/deserialize stubs are provided for future session
 /// persistence (v2). The API contract is established now; full implementation deferred.
-
 const std = @import("std");
 
 /// A single line in the scrollback buffer.

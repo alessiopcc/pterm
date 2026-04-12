@@ -325,10 +325,16 @@ fn shapeRowInto(
         if (cell0.wide_spacer) {
             emitBg(cell0, run_start, row, bg_buf, bg_count);
             text_buf[text_count.*] = CellInstance{
-                .grid_col = run_start, .grid_row = row,
-                .atlas_x = 0, .atlas_y = 0, .atlas_w = 0, .atlas_h = 0,
-                .bearing_x = 0, .bearing_y = 0,
-                .fg_color = 0, .bg_color = 0,
+                .grid_col = run_start,
+                .grid_row = row,
+                .atlas_x = 0,
+                .atlas_y = 0,
+                .atlas_w = 0,
+                .atlas_h = 0,
+                .bearing_x = 0,
+                .bearing_y = 0,
+                .fg_color = 0,
+                .bg_color = 0,
                 .flags = CellFlags.WIDE_CONTINUATION,
             };
             text_count.* += 1;
@@ -513,12 +519,16 @@ fn shapeRowInto(
 
                                     const sby: i32 = @as(i32, @intFromFloat(metrics.ascender)) - glyph_result.bearing_y;
                                     text_buf[text_count.*] = CellInstance{
-                                        .grid_col = run_start, .grid_row = row,
-                                        .atlas_x = glyph_result.region.x, .atlas_y = glyph_result.region.y,
-                                        .atlas_w = glyph_result.region.w, .atlas_h = glyph_result.region.h,
+                                        .grid_col = run_start,
+                                        .grid_row = row,
+                                        .atlas_x = glyph_result.region.x,
+                                        .atlas_y = glyph_result.region.y,
+                                        .atlas_w = glyph_result.region.w,
+                                        .atlas_h = glyph_result.region.h,
                                         .bearing_x = @intCast(std.math.clamp(glyph_result.bearing_x, -32768, 32767)),
                                         .bearing_y = @intCast(std.math.clamp(sby, -32768, 32767)),
-                                        .fg_color = fg.toU32(), .bg_color = bg.toU32(),
+                                        .fg_color = fg.toU32(),
+                                        .bg_color = bg.toU32(),
                                         .flags = glyph_flags,
                                     };
                                     text_count.* += 1;
@@ -527,10 +537,16 @@ fn shapeRowInto(
                                     var cont_col: u16 = run_start + 1;
                                     while (cont_col < seq_end) : (cont_col += 1) {
                                         text_buf[text_count.*] = CellInstance{
-                                            .grid_col = cont_col, .grid_row = row,
-                                            .atlas_x = 0, .atlas_y = 0, .atlas_w = 0, .atlas_h = 0,
-                                            .bearing_x = 0, .bearing_y = 0,
-                                            .fg_color = 0, .bg_color = 0,
+                                            .grid_col = cont_col,
+                                            .grid_row = row,
+                                            .atlas_x = 0,
+                                            .atlas_y = 0,
+                                            .atlas_w = 0,
+                                            .atlas_h = 0,
+                                            .bearing_x = 0,
+                                            .bearing_y = 0,
+                                            .fg_color = 0,
+                                            .bg_color = 0,
                                             .flags = CellFlags.WIDE_CONTINUATION,
                                         };
                                         text_count.* += 1;
@@ -574,12 +590,16 @@ fn shapeRowInto(
                                 const glyph_flags: u16 = CellFlags.COLOR_GLYPH | CellFlags.WIDE_CHAR;
                                 const sby: i32 = @as(i32, @intFromFloat(metrics.ascender)) - entry.bearing_y;
                                 text_buf[text_count.*] = CellInstance{
-                                    .grid_col = run_start, .grid_row = row,
-                                    .atlas_x = entry.region.x, .atlas_y = entry.region.y,
-                                    .atlas_w = entry.region.w, .atlas_h = entry.region.h,
+                                    .grid_col = run_start,
+                                    .grid_row = row,
+                                    .atlas_x = entry.region.x,
+                                    .atlas_y = entry.region.y,
+                                    .atlas_w = entry.region.w,
+                                    .atlas_h = entry.region.h,
                                     .bearing_x = @intCast(std.math.clamp(entry.bearing_x, -32768, 32767)),
                                     .bearing_y = @intCast(std.math.clamp(sby, -32768, 32767)),
-                                    .fg_color = fg.toU32(), .bg_color = bg.toU32(),
+                                    .fg_color = fg.toU32(),
+                                    .bg_color = bg.toU32(),
                                     .flags = glyph_flags,
                                 };
                                 text_count.* += 1;
@@ -588,10 +608,16 @@ fn shapeRowInto(
                                 var cont_col: u16 = run_start + 1;
                                 while (cont_col < seq_end) : (cont_col += 1) {
                                     text_buf[text_count.*] = CellInstance{
-                                        .grid_col = cont_col, .grid_row = row,
-                                        .atlas_x = 0, .atlas_y = 0, .atlas_w = 0, .atlas_h = 0,
-                                        .bearing_x = 0, .bearing_y = 0,
-                                        .fg_color = 0, .bg_color = 0,
+                                        .grid_col = cont_col,
+                                        .grid_row = row,
+                                        .atlas_x = 0,
+                                        .atlas_y = 0,
+                                        .atlas_w = 0,
+                                        .atlas_h = 0,
+                                        .bearing_x = 0,
+                                        .bearing_y = 0,
+                                        .fg_color = 0,
+                                        .bg_color = 0,
                                         .flags = CellFlags.WIDE_CONTINUATION,
                                     };
                                     text_count.* += 1;
@@ -628,12 +654,16 @@ fn shapeRowInto(
                         font_grid.getGlyph(cp) catch continue;
                     const sby: i32 = @as(i32, @intFromFloat(metrics.ascender)) - gr.bearing_y;
                     text_buf[text_count.*] = CellInstance{
-                        .grid_col = @intCast(ci), .grid_row = row,
-                        .atlas_x = gr.region.x, .atlas_y = gr.region.y,
-                        .atlas_w = gr.region.w, .atlas_h = gr.region.h,
+                        .grid_col = @intCast(ci),
+                        .grid_row = row,
+                        .atlas_x = gr.region.x,
+                        .atlas_y = gr.region.y,
+                        .atlas_w = gr.region.w,
+                        .atlas_h = gr.region.h,
                         .bearing_x = @intCast(std.math.clamp(gr.bearing_x, -32768, 32767)),
                         .bearing_y = @intCast(std.math.clamp(sby, -32768, 32767)),
-                        .fg_color = fg.toU32(), .bg_color = bg.toU32(),
+                        .fg_color = fg.toU32(),
+                        .bg_color = bg.toU32(),
                         .flags = per_cp_flags,
                     };
                     text_count.* += 1;
@@ -671,12 +701,16 @@ fn shapeRowInto(
                             const fallback = font_grid.getGlyph(cp) catch continue;
                             const sby: i32 = @as(i32, @intFromFloat(metrics.ascender)) - fallback.bearing_y;
                             text_buf[text_count.*] = CellInstance{
-                                .grid_col = glyph_col, .grid_row = row,
-                                .atlas_x = fallback.region.x, .atlas_y = fallback.region.y,
-                                .atlas_w = fallback.region.w, .atlas_h = fallback.region.h,
+                                .grid_col = glyph_col,
+                                .grid_row = row,
+                                .atlas_x = fallback.region.x,
+                                .atlas_y = fallback.region.y,
+                                .atlas_w = fallback.region.w,
+                                .atlas_h = fallback.region.h,
                                 .bearing_x = @intCast(std.math.clamp(fallback.bearing_x, -32768, 32767)),
                                 .bearing_y = @intCast(std.math.clamp(sby, -32768, 32767)),
-                                .fg_color = fg.toU32(), .bg_color = bg.toU32(),
+                                .fg_color = fg.toU32(),
+                                .bg_color = bg.toU32(),
                                 .flags = flags,
                             };
                             text_count.* += 1;
@@ -685,12 +719,16 @@ fn shapeRowInto(
 
                     const sby: i32 = @as(i32, @intFromFloat(metrics.ascender)) - glyph_result.bearing_y;
                     text_buf[text_count.*] = CellInstance{
-                        .grid_col = glyph_col, .grid_row = row,
-                        .atlas_x = glyph_result.region.x, .atlas_y = glyph_result.region.y,
-                        .atlas_w = glyph_result.region.w, .atlas_h = glyph_result.region.h,
+                        .grid_col = glyph_col,
+                        .grid_row = row,
+                        .atlas_x = glyph_result.region.x,
+                        .atlas_y = glyph_result.region.y,
+                        .atlas_w = glyph_result.region.w,
+                        .atlas_h = glyph_result.region.h,
                         .bearing_x = @intCast(std.math.clamp(glyph_result.bearing_x, -32768, 32767)),
                         .bearing_y = @intCast(std.math.clamp(sby, -32768, 32767)),
-                        .fg_color = fg.toU32(), .bg_color = bg.toU32(),
+                        .fg_color = fg.toU32(),
+                        .bg_color = bg.toU32(),
                         .flags = flags,
                     };
                     text_count.* += 1;
@@ -700,10 +738,16 @@ fn shapeRowInto(
                         var cont: u16 = 1;
                         while (cont < glyph.num_chars and glyph_col + cont < run_end) : (cont += 1) {
                             text_buf[text_count.*] = CellInstance{
-                                .grid_col = glyph_col + cont, .grid_row = row,
-                                .atlas_x = 0, .atlas_y = 0, .atlas_w = 0, .atlas_h = 0,
-                                .bearing_x = 0, .bearing_y = 0,
-                                .fg_color = 0, .bg_color = 0,
+                                .grid_col = glyph_col + cont,
+                                .grid_row = row,
+                                .atlas_x = 0,
+                                .atlas_y = 0,
+                                .atlas_w = 0,
+                                .atlas_h = 0,
+                                .bearing_x = 0,
+                                .bearing_y = 0,
+                                .fg_color = 0,
+                                .bg_color = 0,
                                 .flags = CellFlags.LIGATURE_CONTINUATION,
                             };
                             text_count.* += 1;
@@ -718,12 +762,16 @@ fn shapeRowInto(
                         const gr = font_grid.getGlyph(c.grapheme[0]) catch continue;
                         const sby: i32 = @as(i32, @intFromFloat(metrics.ascender)) - gr.bearing_y;
                         text_buf[text_count.*] = CellInstance{
-                            .grid_col = @intCast(ci), .grid_row = row,
-                            .atlas_x = gr.region.x, .atlas_y = gr.region.y,
-                            .atlas_w = gr.region.w, .atlas_h = gr.region.h,
+                            .grid_col = @intCast(ci),
+                            .grid_row = row,
+                            .atlas_x = gr.region.x,
+                            .atlas_y = gr.region.y,
+                            .atlas_w = gr.region.w,
+                            .atlas_h = gr.region.h,
                             .bearing_x = @intCast(std.math.clamp(gr.bearing_x, -32768, 32767)),
                             .bearing_y = @intCast(std.math.clamp(sby, -32768, 32767)),
-                            .fg_color = fg.toU32(), .bg_color = bg.toU32(),
+                            .fg_color = fg.toU32(),
+                            .bg_color = bg.toU32(),
                             .flags = 0,
                         };
                         text_count.* += 1;

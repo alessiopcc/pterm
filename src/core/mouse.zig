@@ -10,7 +10,6 @@
 ///   bit 4: ctrl
 ///   bit 5: motion (drag)
 ///   bit 6: scroll (64=up, 65=down)
-
 const std = @import("std");
 
 pub const MouseButton = enum {

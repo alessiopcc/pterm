@@ -1,7 +1,6 @@
 /// Observer hooks for agent monitor (D-06).
 /// Agent Monitor uses these hooks to tap into terminal output
 /// without refactoring the parser.
-
 pub const Event = union(enum) {
     /// Raw bytes before parsing
     output: []const u8,

@@ -62,7 +62,7 @@ pub fn dumpConfig() void {
         \\
         \\[cursor]
         \\style = "block"      # block, bar, underline
-        \\blink = true
+        \\blink = false
         \\
         \\[scrollback]
         \\lines = 10000

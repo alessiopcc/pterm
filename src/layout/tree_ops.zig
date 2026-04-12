@@ -30,13 +30,15 @@ pub fn split(
     errdefer PaneTree.destroyNode(allocator, second_leaf);
 
     // Convert the current node in-place to a branch
-    leaf_node.* = .{ .branch = .{
-        .direction = direction,
-        .ratio = 0.5, // D-19: always 50/50
-        .first = first_leaf,
-        .second = second_leaf,
-        .parent = parent,
-    } };
+    leaf_node.* = .{
+        .branch = .{
+            .direction = direction,
+            .ratio = 0.5, // D-19: always 50/50
+            .first = first_leaf,
+            .second = second_leaf,
+            .parent = parent,
+        },
+    };
 
     // Set parent pointers on children
     first_leaf.leaf.parent = leaf_node;

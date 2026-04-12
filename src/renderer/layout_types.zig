@@ -3,7 +3,6 @@
 /// between renderer and layout modules.
 ///
 /// IMPORTANT: This struct must stay in sync with layout/Rect.zig.
-
 pub const Rect = struct {
     x: i32,
     y: i32,

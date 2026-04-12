@@ -11,7 +11,6 @@
 ///
 /// Single buffer with mutex: simple, correct, no stale-state bugs.
 /// The mutex is held briefly for reads (render) and writes (parser).
-
 const std = @import("std");
 const terminal_mod = @import("terminal");
 const observer_mod = @import("observer");

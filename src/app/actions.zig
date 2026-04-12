@@ -43,7 +43,6 @@ const IdleTracker = @import("idle_tracker").IdleTracker;
 const AgentState = @import("agent_state").AgentState;
 const BellState = @import("bell_state").BellState;
 
-
 /// Dispatch a keybinding action.
 pub fn dispatchAction(self: *App, action: keybindings.Action) void {
     switch (action) {

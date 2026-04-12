@@ -132,10 +132,8 @@ pub const ShellPicker = struct {
         if (self.shell_count == 0) {
             const msg1 = "No shells detected.";
             const msg2 = "Check PATH or set shell.program in config.";
-            draw_text_fn(msg1, m.x + @as(i32, @intCast(m.col_width * 2)),
-                m.y + @as(i32, @intCast(m.row_height)), colors.fg, ctx);
-            draw_text_fn(msg2, m.x + @as(i32, @intCast(m.col_width * 2)),
-                m.y + @as(i32, @intCast(m.row_height * 2)), colors.fg, ctx);
+            draw_text_fn(msg1, m.x + @as(i32, @intCast(m.col_width * 2)), m.y + @as(i32, @intCast(m.row_height)), colors.fg, ctx);
+            draw_text_fn(msg2, m.x + @as(i32, @intCast(m.col_width * 2)), m.y + @as(i32, @intCast(m.row_height * 2)), colors.fg, ctx);
             return;
         }
 

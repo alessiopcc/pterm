@@ -442,7 +442,6 @@ pub const App = struct {
         first_tab.focused_pane_id = pane_id;
         first_tab.next_pane_id = pane_id + 1;
 
-
         // Set GLFW callbacks routing to App
         self.window.setUserPointer(@ptrCast(self));
         self.window.setCallbacks(.{
@@ -779,26 +778,66 @@ pub const App = struct {
     pub fn dispatchAction(self: *App, action_val: keybindings.Action) void {
         actions.dispatchAction(self, action_val);
     }
-    pub fn actionNewTab(self: *App) void { actions.actionNewTab(self); }
-    pub fn actionCloseTab(self: *App) void { actions.actionCloseTab(self); }
-    pub fn switchToTab(self: *App, idx: usize) void { actions.switchToTab(self, idx); }
-    pub fn focusDirection(self: *App, direction: PaneTree.FocusDirection) void { actions.focusDirection(self, direction); }
-    pub fn actionSplit(self: *App, direction: PaneTree.SplitDirection) void { actions.actionSplit(self, direction); }
-    pub fn actionClosePane(self: *App) void { actions.actionClosePane(self); }
-    pub fn actionZoomPane(self: *App) void { actions.actionZoomPane(self); }
-    pub fn actionResizePane(self: *App, direction: PaneTree.FocusDirection) void { actions.actionResizePane(self, direction); }
-    pub fn actionSwapDirectional(self: *App, direction: PaneTree.FocusDirection) void { actions.actionSwapDirectional(self, direction); }
-    pub fn actionRotateSplit(self: *App) void { actions.actionRotateSplit(self); }
-    pub fn actionBreakOut(self: *App) void { actions.actionBreakOut(self); }
-    pub fn resizeAllPanes(self: *App) void { actions.resizeAllPanes(self); }
-    pub fn updateTabTitles(self: *App) void { actions.updateTabTitles(self); }
-    pub fn actionOpenShellPicker(self: *App) void { actions.actionOpenShellPicker(self); }
-    pub fn closeShellPicker(self: *App) void { actions.closeShellPicker(self); }
-    pub fn respawnShell(self: *App, pd: *PaneData, shell_name: []const u8) !void { try actions.respawnShell(self, pd, shell_name); }
-    pub fn activatePreset(self: *App, preset: *const LayoutPreset.LayoutPreset) void { actions.activatePreset(self, preset); }
-    pub fn activatePresetByName(self: *App, name: []const u8) void { actions.activatePresetByName(self, name); }
-    pub fn changeFontSize(self: *App, delta: f32) void { actions.changeFontSize(self, delta); }
-    pub fn resetFontSize(self: *App) void { actions.resetFontSize(self); }
+    pub fn actionNewTab(self: *App) void {
+        actions.actionNewTab(self);
+    }
+    pub fn actionCloseTab(self: *App) void {
+        actions.actionCloseTab(self);
+    }
+    pub fn switchToTab(self: *App, idx: usize) void {
+        actions.switchToTab(self, idx);
+    }
+    pub fn focusDirection(self: *App, direction: PaneTree.FocusDirection) void {
+        actions.focusDirection(self, direction);
+    }
+    pub fn actionSplit(self: *App, direction: PaneTree.SplitDirection) void {
+        actions.actionSplit(self, direction);
+    }
+    pub fn actionClosePane(self: *App) void {
+        actions.actionClosePane(self);
+    }
+    pub fn actionZoomPane(self: *App) void {
+        actions.actionZoomPane(self);
+    }
+    pub fn actionResizePane(self: *App, direction: PaneTree.FocusDirection) void {
+        actions.actionResizePane(self, direction);
+    }
+    pub fn actionSwapDirectional(self: *App, direction: PaneTree.FocusDirection) void {
+        actions.actionSwapDirectional(self, direction);
+    }
+    pub fn actionRotateSplit(self: *App) void {
+        actions.actionRotateSplit(self);
+    }
+    pub fn actionBreakOut(self: *App) void {
+        actions.actionBreakOut(self);
+    }
+    pub fn resizeAllPanes(self: *App) void {
+        actions.resizeAllPanes(self);
+    }
+    pub fn updateTabTitles(self: *App) void {
+        actions.updateTabTitles(self);
+    }
+    pub fn actionOpenShellPicker(self: *App) void {
+        actions.actionOpenShellPicker(self);
+    }
+    pub fn closeShellPicker(self: *App) void {
+        actions.closeShellPicker(self);
+    }
+    pub fn respawnShell(self: *App, pd: *PaneData, shell_name: []const u8) !void {
+        try actions.respawnShell(self, pd, shell_name);
+    }
+    pub fn activatePreset(self: *App, preset: *const LayoutPreset.LayoutPreset) void {
+        actions.activatePreset(self, preset);
+    }
+    pub fn activatePresetByName(self: *App, name: []const u8) void {
+        actions.activatePresetByName(self, name);
+    }
+    pub fn changeFontSize(self: *App, delta: f32) void {
+        actions.changeFontSize(self, delta);
+    }
+    pub fn resetFontSize(self: *App) void {
+        actions.resetFontSize(self);
+    }
 
     pub fn requestFrame(self: *App) void {
         self.frame_requested.store(true, .release);
@@ -822,6 +861,4 @@ pub const App = struct {
 
     // Re-exported types for other modules
     pub const BorderHit = input.BorderHit;
-
 };
-

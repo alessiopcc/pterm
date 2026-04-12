@@ -2,7 +2,6 @@
 ///
 /// Provides default terminal configuration values. All fields have sensible
 /// defaults that match the UI-SPEC contract.
-
 pub const Config = struct {
     font_family: ?[]const u8 = null, // null = platform default
     font_size_pt: f32 = 13.0,

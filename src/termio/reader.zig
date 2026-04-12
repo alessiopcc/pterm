@@ -7,7 +7,6 @@
 /// The reader runs in a tight loop: read from PTY -> push to mailbox.
 /// When the mailbox is full, bytes are dropped (non-blocking push).
 /// When the PTY has no data, the read call blocks (which is expected).
-
 const std = @import("std");
 const builtin = @import("builtin");
 const mailbox_mod = @import("mailbox");

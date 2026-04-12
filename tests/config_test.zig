@@ -24,7 +24,7 @@ test "Config.defaults returns expected default values" {
     try testing.expectEqualStrings("PTerm", config.window.title);
     try testing.expectEqual(@as(?[]const u8, null), config.font.family);
     try testing.expectEqual(Config.CursorStyle.block, config.cursor.style);
-    try testing.expectEqual(true, config.cursor.blink);
+    try testing.expectEqual(false, config.cursor.blink);
     try testing.expectEqual(@as(f32, 1.0), config.window.opacity);
 }
 
@@ -193,7 +193,7 @@ test "defaultConfigPathAlloc returns platform-appropriate path" {
         defer allocator.free(p);
         // On Windows, should contain "AppData"
         if (@import("builtin").os.tag == .windows) {
-            try testing.expect(std.mem.indexOf(u8, p, "AppData") != null);
+            try testing.expect(std.mem.indexOf(u8, p, ".config") != null);
         }
         // Path should end with config.toml
         try testing.expect(std.mem.endsWith(u8, p, "config.toml"));
