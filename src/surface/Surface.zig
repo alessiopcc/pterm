@@ -326,8 +326,9 @@ pub const Surface = struct {
                 // Update cursor blink state
                 self.updateCursorBlink();
 
-                // Apply cursor visibility from blink state
-                rs.cursor.visible = self.cursor_visible and self.focused;
+                // Apply cursor visibility: honor DECTCEM (app-requested hide),
+                // blink state, and focus state.
+                rs.cursor.visible = snap.cursor_visible and self.cursor_visible and self.focused;
                 if (!self.focused) {
                     // Show hollow cursor when unfocused -- use ibeam as visual indicator
                     // (actual hollow rendering is backend-dependent; this signals "unfocused")

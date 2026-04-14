@@ -120,12 +120,13 @@ pub fn parseSgrMouse(params: []const u8) MouseError!MouseEvent {
     };
 }
 
+pub const SgrResult = struct { buf: [32]u8, len: usize };
+
 /// Encode a mouse event to SGR format.
-/// Returns the bytes for the parameter portion (e.g., "0;10;5M").
-pub fn encodeSgrMouse(event: MouseEvent) [32]u8 {
+/// Returns the parameter bytes (e.g., "0;10;5M") and their length.
+pub fn encodeSgrMouse(event: MouseEvent) SgrResult {
     var buf: [32]u8 = .{0} ** 32;
 
-    // Encode Cb
     var cb: u16 = switch (event.button) {
         .left => 0,
         .middle => 1,
@@ -142,12 +143,11 @@ pub fn encodeSgrMouse(event: MouseEvent) [32]u8 {
 
     const terminator: u8 = if (event.action == .release) 'm' else 'M';
 
-    // Format: Cb;Cx;Cy[Mm]
     var stream = std.io.fixedBufferStream(&buf);
     const writer = stream.writer();
     writer.print("{d};{d};{d}{c}", .{ cb, event.col, event.row, terminator }) catch {};
 
-    return buf;
+    return .{ .buf = buf, .len = stream.pos };
 }
 
 fn parseU16(s: []const u8) ?u16 {

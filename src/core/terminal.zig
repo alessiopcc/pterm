@@ -91,6 +91,24 @@ pub const PTermTerminal = struct {
         };
     }
 
+    /// Returns true if the terminal's DECTCEM mode (DEC mode 25) says the
+    /// cursor should be visible.  Applications hide the cursor with `\e[?25l`.
+    pub fn isCursorVisible(self: *PTermTerminal) bool {
+        return self.terminal.modes.get(.cursor_visible);
+    }
+
+    /// Returns true if any mouse tracking mode is active (1000/1002/1003).
+    pub fn isMouseTrackingEnabled(self: *PTermTerminal) bool {
+        return self.terminal.modes.get(.mouse_event_normal) or
+            self.terminal.modes.get(.mouse_event_button) or
+            self.terminal.modes.get(.mouse_event_any);
+    }
+
+    /// Returns true if SGR extended mouse format (mode 1006) is active.
+    pub fn isMouseFormatSgr(self: *PTermTerminal) bool {
+        return self.terminal.modes.get(.mouse_format_sgr);
+    }
+
     /// Access the underlying ghostty-vt ScreenSet for advanced queries.
     pub fn getScreens(self: *PTermTerminal) *ghostty_vt.ScreenSet {
         return &self.terminal.screens;

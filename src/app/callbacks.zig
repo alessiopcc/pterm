@@ -18,6 +18,51 @@ const Config = @import("config").Config;
 const theme_mod = @import("theme");
 const watcher_mod = @import("watcher");
 const FileWatcher = watcher_mod.FileWatcher;
+const mouse = @import("mouse");
+const layout_mod = @import("layout");
+const tree_ops = layout_mod.tree_ops;
+
+/// Check if the focused pane's terminal has SGR mouse forwarding active.
+/// Must be called without the terminal lock held.
+fn isMouseForwardingActive(pd: *PaneData) bool {
+    const snapshot = pd.termio.lockTerminal();
+    const tracking = @constCast(snapshot).isMouseTrackingEnabled();
+    const sgr = @constCast(snapshot).isMouseFormatSgr();
+    pd.termio.unlockTerminal();
+    return tracking and sgr;
+}
+
+/// Write an SGR mouse escape sequence to the focused pane's PTY.
+fn sendMouseEvent(pd: *PaneData, event: mouse.MouseEvent) void {
+    const sgr = mouse.encodeSgrMouse(event);
+    if (sgr.len == 0) return;
+    var buf: [35]u8 = undefined; // 3 prefix + 32 max params
+    buf[0] = 0x1b;
+    buf[1] = '[';
+    buf[2] = '<';
+    @memcpy(buf[3 .. 3 + sgr.len], sgr.buf[0..sgr.len]);
+    pd.termio.writeInput(buf[0 .. 3 + sgr.len]) catch {};
+}
+
+/// Convert pixel position to cell coordinates relative to the focused pane.
+/// Returns null if outside pane or metrics are zero.
+fn pixelToCell(app: *App, fb_x: i32, fb_y: i32) ?struct { col: u16, row: u16 } {
+    const active_tab = app.tab_manager.getActiveTab() orelse return null;
+    const leaf_node = tree_ops.findLeaf(active_tab.root, active_tab.focused_pane_id) orelse return null;
+    const bounds = leaf_node.leaf.bounds;
+    if (!bounds.contains(fb_x, fb_y)) return null;
+    const m = app.font_grid.getMetrics();
+    const cw: u32 = @intFromFloat(m.cell_width);
+    const ch: u32 = @intFromFloat(m.cell_height);
+    if (cw == 0 or ch == 0) return null;
+    const rel_x = fb_x - bounds.x;
+    const rel_y = fb_y - bounds.y;
+    if (rel_x < 0 or rel_y < 0) return null;
+    return .{
+        .col = @intCast(@min(@as(u32, @intCast(rel_x)) / cw, 65535)),
+        .row = @intCast(@min(@as(u32, @intCast(rel_y)) / ch, 65535)),
+    };
+}
 
 // Static state for config reload callback (FileWatcher callback has no context pointer).
 // Safe because there is exactly one App instance per process.
@@ -80,39 +125,89 @@ pub fn focusCallback(handle: *glfw.Window, focused: glfw.Bool) callconv(.c) void
 
 pub fn scrollCallback(handle: *glfw.Window, _: f64, yoffset: f64) callconv(.c) void {
     const app = Window.getUserPointer(App, handle) orelse return;
-    // Mouse wheel scrollback: scroll 3 lines per notch
-    if (yoffset != 0) {
-        if (app.getFocusedPaneData()) |pd| {
-            const lines: i32 = @intFromFloat(yoffset * 3.0);
-            if (lines > 0) {
-                // Scroll up (into history)
-                pd.scroll_offset +|= @intCast(lines);
-                // Clamp to available history
-                const snapshot = pd.termio.lockTerminal();
-                const screens = @constCast(snapshot).getScreens();
-                const screen = screens.active;
-                const total_rows = screen.pages.total_rows;
-                const active_rows = screen.pages.rows;
-                pd.termio.unlockTerminal();
-                const max_scroll: u32 = if (total_rows > active_rows) @intCast(total_rows - active_rows) else 0;
-                pd.scroll_offset = @min(pd.scroll_offset, max_scroll);
-            } else {
-                // Scroll down (toward live)
-                const down: u32 = @intCast(-lines);
-                if (down >= pd.scroll_offset) {
-                    pd.scroll_offset = 0;
-                } else {
-                    pd.scroll_offset -= down;
+    if (yoffset == 0) return;
+
+    if (app.getFocusedPaneData()) |pd| {
+        if (isMouseForwardingActive(pd)) {
+            const pos = app.window.handle.getCursorPos();
+            const fb_x: i32 = @intFromFloat(pos[0]);
+            const fb_y: i32 = @intFromFloat(pos[1]);
+            if (pixelToCell(app, fb_x, fb_y)) |cell| {
+                // Send one scroll event per notch (3 lines worth)
+                const notches: u32 = @intFromFloat(@abs(yoffset));
+                const btn: mouse.MouseButton = if (yoffset > 0) .scroll_up else .scroll_down;
+                for (0..notches) |_| {
+                    sendMouseEvent(pd, .{
+                        .button = btn,
+                        .action = .press,
+                        .col = cell.col + 1, // SGR is 1-based
+                        .row = cell.row + 1,
+                        .modifiers = .{},
+                    });
                 }
             }
-            pd.surface.scroll_offset = pd.scroll_offset;
+            app.requestFrame();
+            return;
         }
+
+        // Normal scrollback behavior
+        const lines: i32 = @intFromFloat(yoffset * 3.0);
+        if (lines > 0) {
+            pd.scroll_offset +|= @intCast(lines);
+            const snap2 = pd.termio.lockTerminal();
+            const screens = @constCast(snap2).getScreens();
+            const screen = screens.active;
+            const total_rows = screen.pages.total_rows;
+            const active_rows = screen.pages.rows;
+            pd.termio.unlockTerminal();
+            const max_scroll: u32 = if (total_rows > active_rows) @intCast(total_rows - active_rows) else 0;
+            pd.scroll_offset = @min(pd.scroll_offset, max_scroll);
+        } else {
+            const down: u32 = @intCast(-lines);
+            if (down >= pd.scroll_offset) {
+                pd.scroll_offset = 0;
+            } else {
+                pd.scroll_offset -= down;
+            }
+        }
+        pd.surface.scroll_offset = pd.scroll_offset;
     }
     app.requestFrame();
 }
 
 pub fn mouseButtonCallback(handle: *glfw.Window, button: glfw.MouseButton, action: glfw.Action, mods: glfw.Mods) callconv(.c) void {
     const app = Window.getUserPointer(App, handle) orelse return;
+
+    if (app.getFocusedPaneData()) |pd| {
+        if (isMouseForwardingActive(pd)) {
+            const pos = app.window.handle.getCursorPos();
+            const fb_x: i32 = @intFromFloat(pos[0]);
+            const fb_y: i32 = @intFromFloat(pos[1]);
+            if (pixelToCell(app, fb_x, fb_y)) |cell| {
+                const btn: mouse.MouseButton = switch (button) {
+                    .left => .left,
+                    .right => .right,
+                    .middle => .middle,
+                    else => .none,
+                };
+                const act: mouse.MouseAction = if (action == .release) .release else .press;
+                sendMouseEvent(pd, .{
+                    .button = btn,
+                    .action = act,
+                    .col = cell.col + 1,
+                    .row = cell.row + 1,
+                    .modifiers = .{
+                        .shift = mods.shift,
+                        .alt = mods.alt,
+                        .ctrl = mods.control,
+                    },
+                });
+                app.requestFrame();
+                return; // Don't pass to UI handlers
+            }
+        }
+    }
+
     app.handleMouseButton(button, action, mods);
 }
 

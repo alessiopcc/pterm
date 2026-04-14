@@ -462,8 +462,7 @@ pub const block_fragment_src =
     \\            else if(ai==1u) inQ=(uv.x<=cx&&uv.y>=cy);
     \\            else if(ai==2u) inQ=(uv.x<=cx&&uv.y<=cy);
     \\            else inQ=(uv.x>=cx&&uv.y<=cy);
-    \\            // Arc only — adjacent cells provide the straight connecting lines.
-    \\            // No straight segments needed; they caused a visible rectangle behind the arc.
+    \\            // Straight segments removed: they created a filled-rectangle artifact behind the arc.
     \\            float fcov=inQ?(1.0-smoothstep(-pxX,pxX,d)):0.0;
     \\            if(fcov<0.01) discard;
     \\            FragColor=vec4(vFgColor.rgb,vFgColor.a*fcov);return;

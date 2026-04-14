@@ -556,6 +556,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     app_mod.addImport("config", config_mod);
+    app_mod.addImport("mouse", mouse_mod);
     app_mod.addImport("surface", surface_mod);
     app_mod.addImport("termio", termio_mod);
     app_mod.addImport("pty", platform_pty_mod);

@@ -308,7 +308,7 @@ pub fn renderThreadMain(self: *App) void {
                             // Cursor visibility — hide when scrolled into history
                             const is_focused = info.pane_id == active_tab.focused_pane_id;
                             const blink_vis = if (self.config.cursor.blink) self.cursor_visible else true;
-                            rs.cursor.visible = blink_vis and self.focused and is_focused and pd.scroll_offset == 0;
+                            rs.cursor.visible = snap.cursor_visible and blink_vis and self.focused and is_focused and pd.scroll_offset == 0;
                             // Apply configured cursor style
                             rs.cursor.style = switch (self.config.cursor.style) {
                                 .block => .block,

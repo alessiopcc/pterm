@@ -88,6 +88,7 @@ pub fn snapshotCells(
     rows: u16,
     cursor_col: u16,
     cursor_row: u16,
+    cursor_visible: bool,
     in_scrollback: bool,
 } {
     const screens = @constCast(terminal).getScreens();
@@ -193,6 +194,7 @@ pub fn snapshotCells(
     }
 
     const cursor_pos = @constCast(terminal).getCursorPos();
+    const cursor_vis = @constCast(terminal).isCursorVisible();
 
     return .{
         .cells = cells,
@@ -200,6 +202,7 @@ pub fn snapshotCells(
         .rows = rows,
         .cursor_col = @intCast(cursor_pos.col),
         .cursor_row = @intCast(cursor_pos.row),
+        .cursor_visible = cursor_vis,
         .in_scrollback = clamped_offset > 0,
     };
 }
