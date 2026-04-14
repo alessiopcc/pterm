@@ -724,6 +724,8 @@ pub const App = struct {
         self.frame_arena.deinit();
         self.font_grid.deinit();
         self.allocator.destroy(self.font_grid);
+        // Free config arena (all heap strings from Config.load)
+        self.config.deinit();
         self.window.deinit();
     }
 

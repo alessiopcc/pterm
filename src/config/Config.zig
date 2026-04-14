@@ -44,6 +44,9 @@ pub const Config = struct {
     keybindings: []const KeybindingEntry = &.{},
     // [layout.*] — named layout presets parsed from TOML
     layouts: []LayoutPreset.LayoutPreset = &.{},
+    /// Arena that owns all heap allocations for this Config instance.
+    /// null for defaults()-created configs (no heap allocations).
+    config_arena: ?*std.heap.ArenaAllocator = null,
 
     /// Agent monitoring config.
     /// Controls pattern-based detection and optional idle detection.
@@ -207,16 +210,34 @@ pub const Config = struct {
         return .{};
     }
 
+    /// Free all heap allocations owned by this Config by destroying its arena.
+    /// Safe to call on defaults()-created configs (arena is null → no-op).
+    pub fn deinit(self: *const Config) void {
+        if (self.config_arena) |arena| {
+            const backing = arena.child_allocator;
+            arena.deinit();
+            backing.destroy(arena);
+        }
+    }
+
     /// Full four-tier loading pipeline.
     /// 1. defaults() -> 2. TOML file -> 3. env overrides -> 4. CLI overrides -> validate()
+    /// All heap allocations go through a per-Config arena so deinit() frees everything.
     pub fn load(allocator: std.mem.Allocator, cli_args: cli_mod.CliArgs) !Config {
+        // Create a per-Config arena for all string allocations
+        const arena = try allocator.create(std.heap.ArenaAllocator);
+        arena.* = std.heap.ArenaAllocator.init(allocator);
+        const arena_alloc = arena.allocator();
+
         var config = Config.defaults();
+        config.config_arena = arena;
 
         // Tier 2: Load TOML config file (if exists)
-        const config_path = cli_args.config_path orelse (defaults_mod.defaultConfigPathAlloc(allocator) catch null);
+        const config_path = cli_args.config_path orelse (defaults_mod.defaultConfigPathAlloc(arena_alloc) catch null);
         if (config_path) |path| {
-            if (loader.loadConfigFromPath(allocator, path)) |file_config| {
+            if (loader.loadConfigFromPath(arena_alloc, path)) |file_config| {
                 config = mergeFileIntoConfig(config, file_config);
+                config.config_arena = arena; // preserve arena after merge overwrites
             } else |err| {
                 switch (err) {
                     error.FileNotFound => {}, // Missing config = use defaults (zero-friction)
@@ -229,9 +250,11 @@ pub const Config = struct {
 
         // Tier 3: Environment variable overrides
         config = env_mod.applyOverrides(config);
+        config.config_arena = arena; // preserve arena after overrides
 
         // Tier 4: CLI flag overrides
         config = cli_mod.applyOverrides(config, cli_args);
+        config.config_arena = arena; // preserve arena after overrides
 
         // Validate and clamp
         config.validate();

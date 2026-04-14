@@ -185,6 +185,8 @@ pub fn configReloadCallback() void {
         new_config.agent.suppress_when_focused,
         new_config.agent.notification_sound,
     );
+    // Free old config's arena (all heap strings freed at once)
+    self.config.deinit();
     self.config = new_config;
     self.requestFrame();
     std.log.info("Config hot-reloaded", .{});
