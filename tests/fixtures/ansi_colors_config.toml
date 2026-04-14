@@ -1,0 +1,6 @@
+[colors.normal]
+red = "#FF0000"
+blue = "#0000FF"
+
+[colors.bright]
+green = "#00FF00"

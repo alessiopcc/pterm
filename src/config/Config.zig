@@ -38,6 +38,8 @@ pub const Config = struct {
     agent: Agent = .{},
     // [status_bar]
     status_bar: StatusBar = .{},
+    // theme = "..." top-level key (D-03: built-in theme selection)
+    theme: ?[]const u8 = null,
     // [keybindings] — raw action=combo pairs from TOML, passed to buildMap at runtime
     keybindings: []const KeybindingEntry = &.{},
     // [layout.*] — named layout presets parsed from TOML
@@ -99,7 +101,7 @@ pub const Config = struct {
 
     pub const Font = struct {
         family: ?[]const u8 = null, // null = platform default
-        size: f32 = 12.0,
+        size: f32 = 13.0,
         fallback: ?[]const []const u8 = null, // D-04: Additional fallback fonts
     };
 
@@ -136,6 +138,34 @@ pub const Config = struct {
         selection_bg: ?[]const u8 = null,
         selection_fg: ?[]const u8 = null,
         ui: UiColors = .{},
+        normal: AnsiNormal = .{},
+        bright: AnsiBright = .{},
+    };
+
+    /// Per D-01: Named ANSI color overrides for colors 0-7.
+    /// Each field is optional; null means use active theme default.
+    pub const AnsiNormal = struct {
+        black: ?[]const u8 = null,
+        red: ?[]const u8 = null,
+        green: ?[]const u8 = null,
+        yellow: ?[]const u8 = null,
+        blue: ?[]const u8 = null,
+        magenta: ?[]const u8 = null,
+        cyan: ?[]const u8 = null,
+        white: ?[]const u8 = null,
+    };
+
+    /// Per D-01: Named ANSI color overrides for bright colors 8-15.
+    /// Each field is optional; null means use active theme default.
+    pub const AnsiBright = struct {
+        black: ?[]const u8 = null,
+        red: ?[]const u8 = null,
+        green: ?[]const u8 = null,
+        yellow: ?[]const u8 = null,
+        blue: ?[]const u8 = null,
+        magenta: ?[]const u8 = null,
+        cyan: ?[]const u8 = null,
+        white: ?[]const u8 = null,
     };
 
     /// Per D-28: UI chrome colors for tab bar, panes, status bar, agent alerts.
@@ -159,7 +189,7 @@ pub const Config = struct {
     };
 
     /// Default config path constants.
-    pub const default_font_size: f32 = 12.0;
+    pub const default_font_size: f32 = 13.0;
     pub const default_cols: i64 = 200;
     pub const default_rows: i64 = 55;
     pub const default_padding: f32 = 4.0;
@@ -283,6 +313,29 @@ pub const Config = struct {
 
         // Status bar
         if (!file.status_bar.visible) result.status_bar.visible = file.status_bar.visible;
+
+        // Theme
+        if (file.theme) |v| result.theme = v;
+
+        // ANSI normal colors
+        if (file.colors.normal.black) |v| result.colors.normal.black = v;
+        if (file.colors.normal.red) |v| result.colors.normal.red = v;
+        if (file.colors.normal.green) |v| result.colors.normal.green = v;
+        if (file.colors.normal.yellow) |v| result.colors.normal.yellow = v;
+        if (file.colors.normal.blue) |v| result.colors.normal.blue = v;
+        if (file.colors.normal.magenta) |v| result.colors.normal.magenta = v;
+        if (file.colors.normal.cyan) |v| result.colors.normal.cyan = v;
+        if (file.colors.normal.white) |v| result.colors.normal.white = v;
+
+        // ANSI bright colors
+        if (file.colors.bright.black) |v| result.colors.bright.black = v;
+        if (file.colors.bright.red) |v| result.colors.bright.red = v;
+        if (file.colors.bright.green) |v| result.colors.bright.green = v;
+        if (file.colors.bright.yellow) |v| result.colors.bright.yellow = v;
+        if (file.colors.bright.blue) |v| result.colors.bright.blue = v;
+        if (file.colors.bright.magenta) |v| result.colors.bright.magenta = v;
+        if (file.colors.bright.cyan) |v| result.colors.bright.cyan = v;
+        if (file.colors.bright.white) |v| result.colors.bright.white = v;
 
         // Keybindings: file overrides completely replace base
         if (file.keybindings.len > 0) result.keybindings = file.keybindings;

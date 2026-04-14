@@ -47,7 +47,7 @@ const FileWindow = struct {
 
 const FileCursor = struct {
     style: ?[]const u8 = null,
-    blink: bool = true,
+    blink: bool = false,
 };
 
 const FileScrollback = struct {
@@ -85,6 +85,8 @@ const FileColors = struct {
     selection_bg: ?[]const u8 = null,
     selection_fg: ?[]const u8 = null,
     ui: ?FileUiColors = null,
+    normal: ?FileAnsiNormal = null,
+    bright: ?FileAnsiBright = null,
 };
 
 const FileSearch = struct {};
@@ -95,6 +97,45 @@ const FileUrl = struct {
 
 const FileBell = struct {
     mode: ?[]const u8 = null,
+};
+
+const FileAgent = struct {
+    enabled: bool = true,
+    preset: ?[]const u8 = null,
+    idle_detection: bool = false,
+    idle_timeout: i64 = 5,
+    scan_lines: i64 = 3,
+    custom_patterns: ?[]const []const u8 = null,
+    notifications: bool = true,
+    notification_sound: bool = true,
+    notification_cooldown: i64 = 30,
+    suppress_when_focused: bool = true,
+};
+
+const FileStatusBar = struct {
+    visible: bool = true,
+};
+
+const FileAnsiNormal = struct {
+    black: ?[]const u8 = null,
+    red: ?[]const u8 = null,
+    green: ?[]const u8 = null,
+    yellow: ?[]const u8 = null,
+    blue: ?[]const u8 = null,
+    magenta: ?[]const u8 = null,
+    cyan: ?[]const u8 = null,
+    white: ?[]const u8 = null,
+};
+
+const FileAnsiBright = struct {
+    black: ?[]const u8 = null,
+    red: ?[]const u8 = null,
+    green: ?[]const u8 = null,
+    yellow: ?[]const u8 = null,
+    blue: ?[]const u8 = null,
+    magenta: ?[]const u8 = null,
+    cyan: ?[]const u8 = null,
+    white: ?[]const u8 = null,
 };
 
 const FileConfig = struct {
@@ -108,6 +149,9 @@ const FileConfig = struct {
     search: ?FileSearch = null,
     url: ?FileUrl = null,
     bell: ?FileBell = null,
+    theme: ?[]const u8 = null,
+    agent: ?FileAgent = null,
+    status_bar: ?FileStatusBar = null,
 };
 
 /// Load a config file and resolve its import chain, returning a merged Config.
@@ -265,11 +309,45 @@ fn mergeConfigs(base: Config, over: Config) Config {
     if (over.colors.ui.bell_flash) |v| result.colors.ui.bell_flash = v;
     if (over.colors.ui.bell_badge) |v| result.colors.ui.bell_badge = v;
 
+    // Agent core fields (complement existing notification-only merge)
+    if (!over.agent.enabled) result.agent.enabled = over.agent.enabled;
+    if (!std.mem.eql(u8, over.agent.preset, "conservative")) result.agent.preset = over.agent.preset;
+    if (over.agent.idle_detection) result.agent.idle_detection = over.agent.idle_detection;
+    if (over.agent.idle_timeout != 5) result.agent.idle_timeout = over.agent.idle_timeout;
+    if (over.agent.scan_lines != 3) result.agent.scan_lines = over.agent.scan_lines;
+    if (over.agent.custom_patterns) |v| result.agent.custom_patterns = v;
+
     // Agent notification fields
     if (!over.agent.notifications) result.agent.notifications = over.agent.notifications;
     if (!over.agent.notification_sound) result.agent.notification_sound = over.agent.notification_sound;
     if (over.agent.notification_cooldown != 30) result.agent.notification_cooldown = over.agent.notification_cooldown;
     if (!over.agent.suppress_when_focused) result.agent.suppress_when_focused = over.agent.suppress_when_focused;
+
+    // Status bar
+    if (!over.status_bar.visible) result.status_bar.visible = over.status_bar.visible;
+
+    // Theme
+    if (over.theme) |v| result.theme = v;
+
+    // ANSI normal colors
+    if (over.colors.normal.black) |v| result.colors.normal.black = v;
+    if (over.colors.normal.red) |v| result.colors.normal.red = v;
+    if (over.colors.normal.green) |v| result.colors.normal.green = v;
+    if (over.colors.normal.yellow) |v| result.colors.normal.yellow = v;
+    if (over.colors.normal.blue) |v| result.colors.normal.blue = v;
+    if (over.colors.normal.magenta) |v| result.colors.normal.magenta = v;
+    if (over.colors.normal.cyan) |v| result.colors.normal.cyan = v;
+    if (over.colors.normal.white) |v| result.colors.normal.white = v;
+
+    // ANSI bright colors
+    if (over.colors.bright.black) |v| result.colors.bright.black = v;
+    if (over.colors.bright.red) |v| result.colors.bright.red = v;
+    if (over.colors.bright.green) |v| result.colors.bright.green = v;
+    if (over.colors.bright.yellow) |v| result.colors.bright.yellow = v;
+    if (over.colors.bright.blue) |v| result.colors.bright.blue = v;
+    if (over.colors.bright.magenta) |v| result.colors.bright.magenta = v;
+    if (over.colors.bright.cyan) |v| result.colors.bright.cyan = v;
+    if (over.colors.bright.white) |v| result.colors.bright.white = v;
 
     // Bell
     if (over.bell.mode != .visual) result.bell.mode = over.bell.mode;
@@ -317,7 +395,7 @@ fn applyFileConfig(allocator: std.mem.Allocator, base: Config, file: FileConfig)
                 std.log.warn("Unknown cursor style: {s}, using default", .{s});
             }
         }
-        if (!c.blink) result.cursor.blink = false;
+        result.cursor.blink = c.blink;
     }
 
     if (file.scrollback) |s| {
@@ -381,6 +459,58 @@ fn applyFileConfig(allocator: std.mem.Allocator, base: Config, file: FileConfig)
     // URL
     if (file.url) |u| {
         if (!u.enabled) result.url.enabled = false;
+    }
+
+    // Theme
+    if (file.theme) |v| result.theme = try allocator.dupe(u8, v);
+
+    // Agent
+    if (file.agent) |a| {
+        if (!a.enabled) result.agent.enabled = false;
+        if (a.preset) |v| result.agent.preset = try allocator.dupe(u8, v);
+        if (a.idle_detection) result.agent.idle_detection = true;
+        if (a.idle_timeout != 5) result.agent.idle_timeout = a.idle_timeout;
+        if (a.scan_lines != 3) result.agent.scan_lines = a.scan_lines;
+        if (a.custom_patterns) |v| {
+            const duped = try allocator.alloc([]const u8, v.len);
+            for (v, 0..) |pat, i| {
+                duped[i] = try allocator.dupe(u8, pat);
+            }
+            result.agent.custom_patterns = duped;
+        }
+        if (!a.notifications) result.agent.notifications = false;
+        if (!a.notification_sound) result.agent.notification_sound = false;
+        if (a.notification_cooldown != 30) result.agent.notification_cooldown = a.notification_cooldown;
+        if (!a.suppress_when_focused) result.agent.suppress_when_focused = false;
+    }
+
+    // Status bar
+    if (file.status_bar) |sb| {
+        if (!sb.visible) result.status_bar.visible = false;
+    }
+
+    // ANSI normal/bright colors
+    if (file.colors) |c| {
+        if (c.normal) |n| {
+            if (n.black) |v| result.colors.normal.black = try allocator.dupe(u8, v);
+            if (n.red) |v| result.colors.normal.red = try allocator.dupe(u8, v);
+            if (n.green) |v| result.colors.normal.green = try allocator.dupe(u8, v);
+            if (n.yellow) |v| result.colors.normal.yellow = try allocator.dupe(u8, v);
+            if (n.blue) |v| result.colors.normal.blue = try allocator.dupe(u8, v);
+            if (n.magenta) |v| result.colors.normal.magenta = try allocator.dupe(u8, v);
+            if (n.cyan) |v| result.colors.normal.cyan = try allocator.dupe(u8, v);
+            if (n.white) |v| result.colors.normal.white = try allocator.dupe(u8, v);
+        }
+        if (c.bright) |b| {
+            if (b.black) |v| result.colors.bright.black = try allocator.dupe(u8, v);
+            if (b.red) |v| result.colors.bright.red = try allocator.dupe(u8, v);
+            if (b.green) |v| result.colors.bright.green = try allocator.dupe(u8, v);
+            if (b.yellow) |v| result.colors.bright.yellow = try allocator.dupe(u8, v);
+            if (b.blue) |v| result.colors.bright.blue = try allocator.dupe(u8, v);
+            if (b.magenta) |v| result.colors.bright.magenta = try allocator.dupe(u8, v);
+            if (b.cyan) |v| result.colors.bright.cyan = try allocator.dupe(u8, v);
+            if (b.white) |v| result.colors.bright.white = try allocator.dupe(u8, v);
+        }
     }
 
     return result;
@@ -477,7 +607,14 @@ fn readFileContents(allocator: std.mem.Allocator, path: []const u8) ![]const u8 
     const file = std.fs.cwd().openFile(path, .{}) catch |err| {
         return switch (err) {
             error.FileNotFound => error.FileNotFound,
-            else => error.FileNotFound,
+            error.AccessDenied => {
+                std.log.warn("Permission denied reading config: {s}", .{path});
+                return error.FileNotFound;
+            },
+            else => {
+                std.log.warn("Cannot open config file {s}: {}", .{ path, err });
+                return error.FileNotFound;
+            },
         };
     };
     defer file.close();
@@ -485,7 +622,10 @@ fn readFileContents(allocator: std.mem.Allocator, path: []const u8) ![]const u8 
     const stat = file.stat() catch return error.FileNotFound;
     const size = stat.size;
     if (size == 0) return allocator.dupe(u8, "");
-    if (size > 10 * 1024 * 1024) return error.FileNotFound; // 10MB max
+    if (size > 10 * 1024 * 1024) {
+        std.log.warn("Config file too large ({d}MB > 10MB limit): {s}", .{ size / (1024 * 1024), path });
+        return error.FileNotFound;
+    }
 
     const buf = allocator.alloc(u8, size) catch return error.OutOfMemory;
     errdefer allocator.free(buf);

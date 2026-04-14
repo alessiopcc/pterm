@@ -149,7 +149,7 @@ pub const Surface = struct {
             .osc_title_len = std.atomic.Value(u32).init(0),
             .pending_font_change = std.atomic.Value(bool).init(false),
             .new_font_size = std.atomic.Value(u32).init(@intFromFloat(config.font_size_pt() * 100.0)),
-            .renderer_palette = theme_mod.buildRendererPaletteFromConfig(config.colors),
+            .renderer_palette = theme_mod.buildRendererPaletteFromConfig(config.colors, config.theme),
             .frame_count = 0,
             .selection = selection_mod.Selection.init(),
             .scroll_offset = 0,
@@ -799,7 +799,7 @@ pub const Surface = struct {
         self.config = effective;
 
         // Live-reloadable per D-15: colors — rebuild renderer palette from new config
-        self.renderer_palette = theme_mod.buildRendererPaletteFromConfig(effective.colors);
+        self.renderer_palette = theme_mod.buildRendererPaletteFromConfig(effective.colors, effective.theme);
 
         // Font size (live-reloadable, unlike font family)
         if (old.font_size_pt() != new_config.font_size_pt()) {

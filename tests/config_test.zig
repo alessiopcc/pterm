@@ -16,7 +16,7 @@ const env_mod = @import("env");
 
 test "Config.defaults returns expected default values" {
     const config = Config.defaults();
-    try testing.expectEqual(@as(f32, 12.0), config.font.size);
+    try testing.expectEqual(@as(f32, 13.0), config.font.size);
     try testing.expectEqual(@as(i64, 200), config.window.cols);
     try testing.expectEqual(@as(i64, 55), config.window.rows);
     try testing.expectEqual(@as(f32, 4.0), config.window.padding);
@@ -134,14 +134,14 @@ test "Config.validate resets invalid font_size to default" {
     var config = Config.defaults();
     config.font.size = 0.0;
     config.validate();
-    try testing.expectEqual(@as(f32, 12.0), config.font.size);
+    try testing.expectEqual(@as(f32, 13.0), config.font.size);
 }
 
 test "Config.validate resets negative font_size to default" {
     var config = Config.defaults();
     config.font.size = -5.0;
     config.validate();
-    try testing.expectEqual(@as(f32, 12.0), config.font.size);
+    try testing.expectEqual(@as(f32, 13.0), config.font.size);
 }
 
 test "Config.validate resets invalid cols to default" {
@@ -215,7 +215,7 @@ test "cli.applyOverrides preserves unset fields" {
     var config = Config.defaults();
     const cli_args = cli_mod.CliArgs{}; // all null
     config = cli_mod.applyOverrides(config, cli_args);
-    try testing.expectEqual(@as(f32, 12.0), config.font.size);
+    try testing.expectEqual(@as(f32, 13.0), config.font.size);
     try testing.expectEqual(@as(i64, 200), config.window.cols);
 }
 
@@ -227,7 +227,7 @@ test "Config backward-compatible accessors" {
     const config = Config.defaults();
     try testing.expectEqual(@as(u16, 200), config.cols());
     try testing.expectEqual(@as(u16, 55), config.rows());
-    try testing.expectEqual(@as(f32, 12.0), config.font_size_pt());
+    try testing.expectEqual(@as(f32, 13.0), config.font_size_pt());
     try testing.expectEqual(@as(f32, 4.0), config.grid_padding());
     try testing.expectEqual(@as(u32, 10_000), config.scrollback_lines());
     try testing.expectEqual(@as(?[]const u8, null), config.font_family());
@@ -260,7 +260,7 @@ test "env overrides apply to config" {
     const config = Config.defaults();
     const result = env_mod.applyOverrides(config);
     // Without PTERM_* env vars set, should return unchanged config
-    try testing.expectEqual(@as(f32, 12.0), result.font.size);
+    try testing.expectEqual(@as(f32, 13.0), result.font.size);
     try testing.expectEqual(@as(i64, 200), result.window.cols);
 }
 
@@ -269,7 +269,7 @@ test "Config.load returns defaults when no config file exists" {
     const cli_args = cli_mod.CliArgs{};
     // With no config file and no env/CLI overrides, should return defaults
     const config = try Config.load(allocator, cli_args);
-    try testing.expectEqual(@as(f32, 12.0), config.font.size);
+    try testing.expectEqual(@as(f32, 13.0), config.font.size);
     try testing.expectEqual(@as(i64, 200), config.window.cols);
     try testing.expectEqual(@as(i64, 55), config.window.rows);
 }
@@ -298,6 +298,82 @@ test "Config.load with --config and --font-size: CLI wins" {
 // ============================================================================
 // UiColors struct tests
 // ============================================================================
+
+// ============================================================================
+// Agent, status_bar, theme, and ANSI color config tests (Plan 999.2-03)
+// ============================================================================
+
+test "agent fields parsed from TOML" {
+    const allocator = std.heap.page_allocator;
+    const config = try loader.loadConfigFromPath(allocator, "tests/fixtures/agent_config.toml");
+    try testing.expectEqual(false, config.agent.enabled);
+    try testing.expectEqualStrings("broad", config.agent.preset);
+    try testing.expectEqual(true, config.agent.idle_detection);
+    try testing.expectEqual(@as(i64, 10), config.agent.idle_timeout);
+    try testing.expectEqual(@as(i64, 5), config.agent.scan_lines);
+    try testing.expectEqual(false, config.agent.notifications);
+    try testing.expectEqual(false, config.agent.notification_sound);
+    try testing.expectEqual(@as(i64, 60), config.agent.notification_cooldown);
+    try testing.expectEqual(false, config.agent.suppress_when_focused);
+    try testing.expectEqual(false, config.status_bar.visible);
+}
+
+test "theme key parsed from TOML" {
+    const allocator = std.heap.page_allocator;
+    const config = try loader.loadConfigFromPath(allocator, "tests/fixtures/theme_config.toml");
+    try testing.expect(config.theme != null);
+    try testing.expectEqualStrings("dracula", config.theme.?);
+    // Inline color override should also be present
+    try testing.expect(config.colors.foreground != null);
+    try testing.expectEqualStrings("#FFFFFF", config.colors.foreground.?);
+}
+
+test "ANSI color overrides parsed from TOML" {
+    const allocator = std.heap.page_allocator;
+    const config = try loader.loadConfigFromPath(allocator, "tests/fixtures/ansi_colors_config.toml");
+    // Set fields
+    try testing.expect(config.colors.normal.red != null);
+    try testing.expectEqualStrings("#FF0000", config.colors.normal.red.?);
+    try testing.expect(config.colors.normal.blue != null);
+    try testing.expectEqualStrings("#0000FF", config.colors.normal.blue.?);
+    try testing.expect(config.colors.bright.green != null);
+    try testing.expectEqualStrings("#00FF00", config.colors.bright.green.?);
+    // Unset fields remain null
+    try testing.expectEqual(@as(?[]const u8, null), config.colors.normal.black);
+    try testing.expectEqual(@as(?[]const u8, null), config.colors.normal.green);
+    try testing.expectEqual(@as(?[]const u8, null), config.colors.bright.red);
+}
+
+test "buildRendererPalette uses named theme colors" {
+    const theme_mod = @import("theme");
+    const builtin_themes = @import("builtin_themes");
+    // Get the Dracula theme palette and build a RendererPalette from it
+    const dracula_palette = builtin_themes.get("dracula").?;
+    const palette = try theme_mod.buildRendererPalette(dracula_palette);
+    // Dracula foreground is #F8F8F2 -> r=248, g=248, b=242
+    try testing.expectEqual(@as(u8, 248), palette.default_fg.r);
+    try testing.expectEqual(@as(u8, 248), palette.default_fg.g);
+    try testing.expectEqual(@as(u8, 242), palette.default_fg.b);
+}
+
+test "buildRendererPaletteFromConfig unknown theme falls back to default" {
+    const theme_mod = @import("theme");
+    const config = Config.defaults();
+    // Unknown theme name should fall back to default palette
+    const palette = theme_mod.buildRendererPaletteFromConfig(config.colors, "nonexistent-theme");
+    // Default theme foreground is #CDD6F4 -> r=205, g=214, b=244
+    try testing.expectEqual(@as(u8, 205), palette.default_fg.r);
+    try testing.expectEqual(@as(u8, 214), palette.default_fg.g);
+    try testing.expectEqual(@as(u8, 244), palette.default_fg.b);
+}
+
+test "Config.defaults has null theme and null ANSI overrides" {
+    const config = Config.defaults();
+    try testing.expectEqual(@as(?[]const u8, null), config.theme);
+    try testing.expectEqual(@as(?[]const u8, null), config.colors.normal.black);
+    try testing.expectEqual(@as(?[]const u8, null), config.colors.normal.red);
+    try testing.expectEqual(@as(?[]const u8, null), config.colors.bright.white);
+}
 
 test "UiColors defaults are all null" {
     const config = Config.defaults();

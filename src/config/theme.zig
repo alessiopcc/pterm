@@ -149,24 +149,162 @@ pub fn defaultRendererPalette() RendererPalette {
     return buildRendererPalette(default_palette) catch unreachable;
 }
 
-/// Build a RendererPalette from Config.Colors, using default theme values
-/// as fallback for any unset (null) fields.
-/// This bridges the optional Config.Colors fields to the required ColorPalette fields.
-pub fn buildRendererPaletteFromConfig(colors: anytype) RendererPalette {
-    const builtin_themes = @import("builtin_themes");
-    const defaults = builtin_themes.get("default").?;
+/// Parse "#RRGGBB" hex string to [3]u8 array. Returns null on invalid format.
+fn parseHexToU8Array(hex: []const u8) ?[3]u8 {
+    if (hex.len != 7 or hex[0] != '#') return null;
+    const r = std.fmt.parseInt(u8, hex[1..3], 16) catch return null;
+    const g = std.fmt.parseInt(u8, hex[3..5], 16) catch return null;
+    const b = std.fmt.parseInt(u8, hex[5..7], 16) catch return null;
+    return .{ r, g, b };
+}
 
-    // Build a ColorPalette by overlaying config values on defaults
+/// Overlay named ANSI color overrides onto a base [8][]const u8 array.
+/// Each non-null field in `overrides` replaces the corresponding index.
+/// Map: black=0, red=1, green=2, yellow=3, blue=4, magenta=5, cyan=6, white=7
+fn overlayAnsiColors(base: [8][]const u8, overrides: anytype) [8][]const u8 {
+    var result = base;
+    if (overrides.black) |v| {
+        result[0] = v;
+    }
+    if (overrides.red) |v| {
+        result[1] = v;
+    }
+    if (overrides.green) |v| {
+        result[2] = v;
+    }
+    if (overrides.yellow) |v| {
+        result[3] = v;
+    }
+    if (overrides.blue) |v| {
+        result[4] = v;
+    }
+    if (overrides.magenta) |v| {
+        result[5] = v;
+    }
+    if (overrides.cyan) |v| {
+        result[6] = v;
+    }
+    if (overrides.white) |v| {
+        result[7] = v;
+    }
+    return result;
+}
+
+/// Overlay config UI color hex strings onto a base UiColors struct.
+/// Each non-null hex string is parsed to [3]u8; invalid hex strings are ignored.
+fn overlayUiColors(base: UiColors, ui_config: anytype) UiColors {
+    var result = base;
+    if (ui_config.tab_bar_bg) |v| {
+        if (parseHexToU8Array(v)) |c| {
+            result.tab_bar_bg = c;
+        }
+    }
+    if (ui_config.tab_active) |v| {
+        if (parseHexToU8Array(v)) |c| {
+            result.tab_active = c;
+        }
+    }
+    if (ui_config.tab_inactive) |v| {
+        if (parseHexToU8Array(v)) |c| {
+            result.tab_inactive = c;
+        }
+    }
+    if (ui_config.pane_border) |v| {
+        if (parseHexToU8Array(v)) |c| {
+            result.pane_border = c;
+        }
+    }
+    if (ui_config.pane_border_active) |v| {
+        if (parseHexToU8Array(v)) |c| {
+            result.pane_border_active = c;
+        }
+    }
+    if (ui_config.status_bar_bg) |v| {
+        if (parseHexToU8Array(v)) |c| {
+            result.status_bar_bg = c;
+        }
+    }
+    if (ui_config.agent_alert) |v| {
+        if (parseHexToU8Array(v)) |c| {
+            result.agent_alert = c;
+        }
+    }
+    if (ui_config.search_bar_bg) |v| {
+        if (parseHexToU8Array(v)) |c| {
+            result.search_bar_bg = c;
+        }
+    }
+    if (ui_config.search_match) |v| {
+        if (parseHexToU8Array(v)) |c| {
+            result.search_match = c;
+        }
+    }
+    if (ui_config.search_current_match) |v| {
+        if (parseHexToU8Array(v)) |c| {
+            result.search_current_match = c;
+        }
+    }
+    if (ui_config.url_hover) |v| {
+        if (parseHexToU8Array(v)) |c| {
+            result.url_hover = c;
+        }
+    }
+    if (ui_config.bell_flash) |v| {
+        if (parseHexToU8Array(v)) |c| {
+            result.bell_flash = c;
+        }
+    }
+    if (ui_config.bell_badge) |v| {
+        if (parseHexToU8Array(v)) |c| {
+            result.bell_badge = c;
+        }
+    }
+    return result;
+}
+
+/// Format theme name list for warning output.
+fn formatThemeList(names: []const []const u8) []const u8 {
+    _ = names;
+    return "default, dracula, solarized-dark, solarized-light, gruvbox-dark, nord, catppuccin-mocha, one-dark";
+}
+
+/// Build a RendererPalette from Config.Colors + theme name, using the named theme
+/// as base and overlaying any non-null config color values on top.
+/// Per D-03: theme selects base palette. Per D-04: inline overrides win.
+/// Per D-05: unknown theme warns to stderr and falls back to "default".
+/// Per D-07: all 13 UI color fields wired through overlay.
+pub fn buildRendererPaletteFromConfig(colors: anytype, theme_name: ?[]const u8) RendererPalette {
+    const builtin_themes = @import("builtin_themes");
+
+    // D-03, D-05: Resolve theme by name, fallback to "default" on unknown
+    const base_palette = blk: {
+        if (theme_name) |name| {
+            if (builtin_themes.get(name)) |palette| {
+                break :blk palette;
+            }
+            // D-05: Unknown theme -- warn with available names, fall back to default
+            const available = builtin_themes.list();
+            std.log.warn("unknown theme '{s}'. Available themes: {s}. Falling back to 'default'.", .{
+                name,
+                formatThemeList(available),
+            });
+        }
+        break :blk builtin_themes.get("default").?;
+    };
+
+    // D-04: Overlay inline [colors] overrides on theme base
     const merged = ColorPalette{
-        .foreground = colors.foreground orelse defaults.foreground,
-        .background = colors.background orelse defaults.background,
-        .cursor = colors.cursor_color orelse defaults.cursor,
-        .cursor_text = colors.cursor_text orelse defaults.cursor_text,
-        .selection_bg = colors.selection_bg orelse defaults.selection_bg,
-        .selection_fg = colors.selection_fg orelse defaults.selection_fg,
-        .normal = defaults.normal, // ANSI colors not yet in Config.Colors; use defaults
-        .bright = defaults.bright,
-        .ui = defaults.ui,
+        .foreground = colors.foreground orelse base_palette.foreground,
+        .background = colors.background orelse base_palette.background,
+        .cursor = colors.cursor_color orelse base_palette.cursor,
+        .cursor_text = colors.cursor_text orelse base_palette.cursor_text,
+        .selection_bg = colors.selection_bg orelse base_palette.selection_bg,
+        .selection_fg = colors.selection_fg orelse base_palette.selection_fg,
+        // D-01: Overlay named ANSI color overrides on theme normals/brights
+        .normal = overlayAnsiColors(base_palette.normal, colors.normal),
+        .bright = overlayAnsiColors(base_palette.bright, colors.bright),
+        // D-07: Overlay config UI colors on theme UI colors
+        .ui = overlayUiColors(base_palette.ui, colors.ui),
     };
 
     return buildRendererPalette(merged) catch {

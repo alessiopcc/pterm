@@ -177,7 +177,7 @@ pub fn configReloadCallback() void {
         std.log.warn("Config reload failed: {}", .{err});
         return;
     };
-    self.renderer_palette = theme_mod.buildRendererPaletteFromConfig(new_config.colors);
+    self.renderer_palette = theme_mod.buildRendererPaletteFromConfig(new_config.colors, new_config.theme);
     // Update notification manager from new config (D-20 hot-reload)
     self.notification_manager.updateConfig(
         new_config.agent.notification_cooldown,

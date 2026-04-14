@@ -1,0 +1,13 @@
+[agent]
+enabled = false
+preset = "broad"
+idle_detection = true
+idle_timeout = 10
+scan_lines = 5
+notifications = false
+notification_sound = false
+notification_cooldown = 60
+suppress_when_focused = false
+
+[status_bar]
+visible = false

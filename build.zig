@@ -897,6 +897,11 @@ pub fn build(b: *std.Build) void {
     // Cross-reference: theme needs builtin_themes for defaultRendererPalette
     theme_mod.addImport("builtin_themes", builtin_themes_mod);
 
+    // Wire theme/builtin_themes into config_test_mod for palette tests
+    config_test_mod.addImport("theme", theme_mod);
+    config_test_mod.addImport("builtin_themes", builtin_themes_mod);
+    config_test_mod.addImport("renderer_types", renderer_types_mod);
+
     // Wire theme into render_state_mod (for RendererPalette parameter)
     render_state_mod.addImport("theme", theme_mod);
 
