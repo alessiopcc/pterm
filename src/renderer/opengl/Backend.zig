@@ -1,9 +1,10 @@
 /// OpenGL 3.3 rendering backend for the terminal grid (D-03, D-04).
 ///
-/// Implements instanced quad rendering with three passes:
+/// Implements instanced quad rendering with four passes:
 ///   Pass 1: Cell backgrounds (opaque)
 ///   Pass 2: Glyph text (alpha-blended from atlas)
-///   Pass 3: Cursor overlay (alpha-blended)
+///   Pass 3: Block elements (procedural GPU rendering, alpha-blended)
+///   Pass 4: Cursor overlay (alpha-blended)
 ///
 /// Driven by RenderState snapshots from the terminal double-buffer swap.
 const std = @import("std");
@@ -36,6 +37,7 @@ pub const OpenGLBackend = struct {
     // Shader programs (one per pass)
     bg_program: Program,
     text_program: Program,
+    block_program: ?Program,
     cursor_program: Program,
 
     // VAO/VBO
@@ -43,6 +45,7 @@ pub const OpenGLBackend = struct {
     quad_vbo: gl.uint,
     bg_instance_vbo: gl.uint,
     text_instance_vbo: gl.uint,
+    block_instance_vbo: gl.uint,
     cursor_instance_vbo: gl.uint,
 
     // Atlas textures (uploaded from GlyphAtlas pixel data)
@@ -93,6 +96,17 @@ pub const OpenGLBackend = struct {
             p.deinit();
         }
 
+        const block_program: ?Program = Program.init(shaders.block_vertex_src, shaders.block_fragment_src) catch |e| blk: {
+            std.log.err("Block shader failed ({}) — block elements will use text fallback", .{e});
+            break :blk null;
+        };
+        errdefer {
+            if (block_program) |p| {
+                var mp = p;
+                mp.deinit();
+            }
+        }
+
         const cursor_program = Program.init(shaders.cursor_vertex_src, shaders.cursor_fragment_src) catch |e| switch (e) {
             error.ShaderCompilation => return error.ShaderCompilation,
             error.ProgramLinking => return error.ProgramLinking,
@@ -126,14 +140,15 @@ pub const OpenGLBackend = struct {
         gl.VertexAttribPointer(0, 2, gl.FLOAT, gl.FALSE, 2 * @sizeOf(gl.float), 0);
 
         // Create instance VBOs
-        var instance_vbos: [3]gl.uint = .{ 0, 0, 0 };
-        gl.GenBuffers(3, &instance_vbos);
+        var instance_vbos: [4]gl.uint = .{ 0, 0, 0, 0 };
+        gl.GenBuffers(4, &instance_vbos);
 
         const bg_instance_vbo = instance_vbos[0];
         const text_instance_vbo = instance_vbos[1];
-        const cursor_instance_vbo = instance_vbos[2];
+        const block_instance_vbo = instance_vbos[2];
+        const cursor_instance_vbo = instance_vbos[3];
 
-        if (bg_instance_vbo == 0 or text_instance_vbo == 0 or cursor_instance_vbo == 0)
+        if (bg_instance_vbo == 0 or text_instance_vbo == 0 or block_instance_vbo == 0 or cursor_instance_vbo == 0)
             return error.GLResourceCreation;
 
         // Pre-allocate instance VBOs with DYNAMIC_DRAW
@@ -188,11 +203,13 @@ pub const OpenGLBackend = struct {
         return OpenGLBackend{
             .bg_program = bg_program,
             .text_program = text_program,
+            .block_program = block_program,
             .cursor_program = cursor_program,
             .quad_vao = quad_vao,
             .quad_vbo = quad_vbo,
             .bg_instance_vbo = bg_instance_vbo,
             .text_instance_vbo = text_instance_vbo,
+            .block_instance_vbo = block_instance_vbo,
             .cursor_instance_vbo = cursor_instance_vbo,
             .atlas_texture = atlas_texture,
             .atlas_size = 0,
@@ -211,6 +228,7 @@ pub const OpenGLBackend = struct {
     pub fn deinit(self: *OpenGLBackend) void {
         self.bg_program.deinit();
         self.text_program.deinit();
+        if (self.block_program) |*bp| bp.deinit();
         self.cursor_program.deinit();
 
         if (self.atlas_texture != 0) {
@@ -223,11 +241,12 @@ pub const OpenGLBackend = struct {
             self.color_atlas_texture = 0;
         }
 
-        var vbos = [_]gl.uint{ self.quad_vbo, self.bg_instance_vbo, self.text_instance_vbo, self.cursor_instance_vbo };
-        gl.DeleteBuffers(4, &vbos);
+        var vbos = [_]gl.uint{ self.quad_vbo, self.bg_instance_vbo, self.text_instance_vbo, self.block_instance_vbo, self.cursor_instance_vbo };
+        gl.DeleteBuffers(5, &vbos);
         self.quad_vbo = 0;
         self.bg_instance_vbo = 0;
         self.text_instance_vbo = 0;
+        self.block_instance_vbo = 0;
         self.cursor_instance_vbo = 0;
 
         if (self.quad_vao != 0) {
@@ -318,7 +337,7 @@ pub const OpenGLBackend = struct {
     }
 
     /// Draw a complete frame from a RenderState snapshot.
-    /// Three-pass pipeline: backgrounds, text, cursor (D-04).
+    /// Four-pass pipeline: backgrounds, text, block elements, cursor (D-04).
     /// Accepts an optional background color for clear; uses default palette if null.
     pub fn drawFrame(self: *OpenGLBackend, state: *const types.RenderState, bg_color: ?Color) void {
         const start_ns = std.time.nanoTimestamp();
@@ -413,7 +432,33 @@ pub const OpenGLBackend = struct {
             }
         }
 
-        // ---- Pass 3: Cursor Overlay (D-04) ----
+        // ---- Pass 3: Block Elements (D-01, D-02) ----
+        if (self.block_program) |bp| {
+            const block_count = state.block_cells.len;
+            if (block_count > 0) {
+                bp.use();
+                bp.setUniformMat4("uProjection", self.projection);
+                bp.setUniformVec2("uCellSize", state.cell_width, state.cell_height);
+                bp.setUniformVec2("uGridOffset", grid_offset_x, grid_offset_y);
+
+                // Alpha blending for block elements (same as text pass)
+                gl.Enable(gl.BLEND);
+                gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+                gl.BindBuffer(gl.ARRAY_BUFFER, self.block_instance_vbo);
+                gl.BufferSubData(
+                    gl.ARRAY_BUFFER,
+                    0,
+                    @intCast(block_count * @sizeOf(CellInstance)),
+                    @ptrCast(state.block_cells.ptr),
+                );
+                setupInstanceAttributes(self.block_instance_vbo);
+                gl.DrawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, @intCast(block_count));
+                self.diag.draw_calls += 1;
+            }
+        }
+
+        // ---- Pass 4: Cursor Overlay (D-04) ----
         if (state.cursor.visible) {
             self.cursor_program.use();
             self.cursor_program.setUniformMat4("uProjection", self.projection);
@@ -466,7 +511,7 @@ pub const OpenGLBackend = struct {
         // Recompute projection for this pane's dimensions
         self.projection = computeOrthoMatrix(0.0, @floatFromInt(rect.w), @floatFromInt(rect.h), 0.0, -1.0, 1.0);
 
-        // Delegate to existing drawFrame (clears within scissor, runs 3-pass pipeline)
+        // Delegate to existing drawFrame (clears within scissor, runs 4-pass pipeline)
         self.drawFrame(state, bg_color);
 
         gl.Disable(gl.SCISSOR_TEST);
@@ -700,7 +745,7 @@ pub const OpenGLBackend = struct {
         gl.VertexAttribDivisor(6, 1);
     }
 
-    /// Build a CellInstance from cursor state for Pass 3.
+    /// Build a CellInstance from cursor state for Pass 4.
     fn buildCursorInstance(cursor: CursorState) CellInstance {
         const style_flag: u16 = switch (cursor.style) {
             .block => 0,

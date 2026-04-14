@@ -47,6 +47,7 @@ const CachedRow = struct {
     hash: u64,
     text_cells: []CellInstance,
     bg_cells: []CellInstance,
+    block_cells: []CellInstance,
 };
 
 /// Persistent allocator for row cache data (NOT the frame arena).
@@ -65,6 +66,7 @@ pub const RowCache = struct {
             for (cache) |*entry| {
                 if (entry.text_cells.len > 0) cache_alloc.free(entry.text_cells);
                 if (entry.bg_cells.len > 0) cache_alloc.free(entry.bg_cells);
+                if (entry.block_cells.len > 0) cache_alloc.free(entry.block_cells);
             }
             cache_alloc.free(cache);
             self.rows = null;
@@ -229,7 +231,7 @@ pub fn buildFromSnapshot(
             rc.row_count = rows;
             rc.cursor_row = std.math.maxInt(u16);
             for (rc.rows.?) |*entry| {
-                entry.* = .{ .hash = 0, .text_cells = &.{}, .bg_cells = &.{} };
+                entry.* = .{ .hash = 0, .text_cells = &.{}, .bg_cells = &.{}, .block_cells = &.{} };
             }
         }
     }
@@ -243,6 +245,8 @@ pub fn buildFromSnapshot(
     var text_count: usize = 0;
     var bg_cells = try allocator.alloc(CellInstance, total);
     var bg_count: usize = 0;
+    var block_cells = try allocator.alloc(CellInstance, total);
+    var block_count: usize = 0;
 
     var row: u16 = 0;
     while (row < rows) : (row += 1) {
@@ -263,19 +267,26 @@ pub fn buildFromSnapshot(
                 bg_cells[bg_count] = ci;
                 bg_count += 1;
             }
+            for (cache.?[row].block_cells) |ci| {
+                block_cells[block_count] = ci;
+                block_count += 1;
+            }
         } else {
             const t_start = text_count;
             const b_start = bg_count;
+            const blk_start = block_count;
 
-            shapeRowInto(row_cells, row, cols, snap.cursor_col, cursor_on, font_grid, shaper, &metrics, text_cells, &text_count, bg_cells, &bg_count);
+            shapeRowInto(row_cells, row, cols, snap.cursor_col, cursor_on, font_grid, shaper, &metrics, text_cells, &text_count, bg_cells, &bg_count, block_cells, &block_count);
 
             // Persist this row's output in the per-pane cache (persistent allocator).
             if (cache) |c| {
                 const new_text = @constCast(cache_alloc.dupe(CellInstance, text_cells[t_start..text_count]) catch &.{});
                 const new_bg = @constCast(cache_alloc.dupe(CellInstance, bg_cells[b_start..bg_count]) catch &.{});
+                const new_block = @constCast(cache_alloc.dupe(CellInstance, block_cells[blk_start..block_count]) catch &.{});
                 if (c[row].text_cells.len > 0) cache_alloc.free(c[row].text_cells);
                 if (c[row].bg_cells.len > 0) cache_alloc.free(c[row].bg_cells);
-                c[row] = .{ .hash = row_hash, .text_cells = new_text, .bg_cells = new_bg };
+                if (c[row].block_cells.len > 0) cache_alloc.free(c[row].block_cells);
+                c[row] = .{ .hash = row_hash, .text_cells = new_text, .bg_cells = new_bg, .block_cells = new_block };
             }
         }
     }
@@ -285,6 +296,7 @@ pub fn buildFromSnapshot(
     return RenderState{
         .cells = text_cells[0..text_count],
         .bg_cells = bg_cells[0..bg_count],
+        .block_cells = block_cells[0..block_count],
         .cursor = CursorState{
             .col = snap.cursor_col,
             .row = snap.cursor_row,
@@ -316,6 +328,8 @@ fn shapeRowInto(
     text_count: *usize,
     bg_buf: []CellInstance,
     bg_count: *usize,
+    block_buf: []CellInstance,
+    block_count: *usize,
 ) void {
     var run_start: u16 = 0;
     while (run_start < cols) {
@@ -350,7 +364,8 @@ fn shapeRowInto(
         }
 
         // Find run end: contiguous cells with same style, breaking at wide chars,
-        // cursor, spacers, empty cells, and style changes.
+        // cursor, spacers, empty cells, style changes, and block/text boundaries.
+        const cell0_is_block = preferPrimaryFont(cell0.grapheme[0]) and cell0.grapheme[0] < 0xE0A0;
         var run_end: u16 = run_start + 1;
         if (!cell0.wide) {
             while (run_end < cols) {
@@ -361,6 +376,10 @@ fn shapeRowInto(
                     nc.inverse != cell0.inverse or
                     nc.style_id != cell0.style_id) break;
                 if (cursor_on_row and run_end == cursor_col) break;
+                // Break at block/text boundaries so block routing doesn't
+                // swallow regular text that shares the same style.
+                const nc_is_block = preferPrimaryFont(nc.grapheme[0]) and nc.grapheme[0] < 0xE0A0;
+                if (nc_is_block != cell0_is_block) break;
                 run_end += 1;
             }
         }
@@ -407,6 +426,41 @@ fn shapeRowInto(
         const first_cp = cell0.grapheme[0];
         const is_emoji = cell_mod.isEmojiCodepoint(first_cp);
         const is_wide_run = cell0.wide;
+
+        // Route block-drawing codepoints to block pass (D-04).
+        // Box Drawing, Block Elements, and Braille are diverted from the
+        // text pass for GPU procedural rendering. Powerline symbols
+        // (U+E0A0-E0D4) stay in the text pass — they need full-cell
+        // fg+bg rendering that fonts handle better.
+        if (preferPrimaryFont(first_cp) and first_cp < 0xE0A0 and !is_emoji and !is_wide_run) {
+            // Emit backgrounds for block cells (same as text and emoji paths).
+            for (run_start..run_end) |ci| {
+                emitBg(row_cells[ci], @intCast(ci), row, bg_buf, bg_count);
+            }
+            for (run_start..run_end) |ci| {
+                const c = row_cells[ci];
+                if (c.grapheme_len == 0 or c.grapheme[0] == 0) continue;
+                // Block pass only supports BMP codepoints (atlas_x is u16).
+                if (c.grapheme[0] > 0xFFFF) continue;
+                const cp: u16 = @intCast(c.grapheme[0]);
+                block_buf[block_count.*] = CellInstance{
+                    .grid_col = @intCast(ci),
+                    .grid_row = row,
+                    .atlas_x = cp, // codepoint for shader
+                    .atlas_y = 0,
+                    .atlas_w = 0,
+                    .atlas_h = 0,
+                    .bearing_x = 0,
+                    .bearing_y = 0,
+                    .fg_color = fg.toU32(),
+                    .bg_color = bg.toU32(),
+                    .flags = 0,
+                };
+                block_count.* += 1;
+            }
+            run_start = run_end;
+            continue;
+        }
 
         if (is_emoji or is_wide_run) {
             // Renderer-level emoji sequence detection.

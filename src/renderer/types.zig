@@ -117,6 +117,7 @@ pub const CellInstance = extern struct {
 pub const RenderState = struct {
     cells: []const CellInstance,
     bg_cells: []const CellInstance,
+    block_cells: []const CellInstance = &.{},
     cursor: CursorState,
     grid_cols: u16,
     grid_rows: u16,
@@ -235,4 +236,44 @@ test "FrameScheduler idle after threshold" {
     };
     // last_activity_ns is 0 (epoch), threshold is 1ns, current time is way past that
     try std.testing.expect(!scheduler.shouldRender());
+}
+
+test "RenderState has block_cells field" {
+    try std.testing.expect(@hasField(RenderState, "block_cells"));
+}
+
+test "CellInstance atlas_x fits Powerline codepoint" {
+    const cp: u16 = 0xE0B0; // Powerline right arrow
+    const ci = CellInstance{
+        .grid_col = 0,
+        .grid_row = 0,
+        .atlas_x = cp,
+        .atlas_y = 0,
+        .atlas_w = 0,
+        .atlas_h = 0,
+        .bearing_x = 0,
+        .bearing_y = 0,
+        .fg_color = 0,
+        .bg_color = 0,
+        .flags = 0,
+    };
+    try std.testing.expectEqual(@as(u16, 0xE0B0), ci.atlas_x);
+}
+
+test "CellInstance atlas_x fits box-drawing codepoint" {
+    const cp: u16 = 0x2502; // Box-drawing vertical line
+    const ci = CellInstance{
+        .grid_col = 0,
+        .grid_row = 0,
+        .atlas_x = cp,
+        .atlas_y = 0,
+        .atlas_w = 0,
+        .atlas_h = 0,
+        .bearing_x = 0,
+        .bearing_y = 0,
+        .fg_color = 0,
+        .bg_color = 0,
+        .flags = 0,
+    };
+    try std.testing.expectEqual(@as(u16, 0x2502), ci.atlas_x);
 }
