@@ -4,7 +4,7 @@
 ///   Pass 1: Cell backgrounds (bg_vertex_src / bg_fragment_src)
 ///   Pass 2: Glyph text (text_vertex_src / text_fragment_src)
 ///   Pass 3: Block elements (block_vertex_src / block_fragment_src)
-///           Procedural rendering of box-drawing, block elements, braille (D-01/D-02)
+///           Procedural rendering of box-drawing, block elements, braille
 ///   Pass 4: Cursor overlay (cursor_vertex_src / cursor_fragment_src)
 
 // ---------------------------------------------------------
@@ -229,7 +229,7 @@ pub const cursor_fragment_src =
 
 // ---------------------------------------------------------
 // Pass 4 (new): Block Elements (box-drawing, blocks, braille, Powerline)
-// Procedural rendering — no atlas texture sampling (D-02).
+// Procedural rendering — no atlas texture sampling.
 // Codepoint is passed via aAtlasRect.x from the instance buffer.
 // ---------------------------------------------------------
 

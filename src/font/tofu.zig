@@ -1,4 +1,4 @@
-/// Tofu box renderer for missing glyphs (D-06).
+/// Tofu box renderer for missing glyphs.
 ///
 /// Generates a CPU-rasterized grayscale bitmap showing a bordered
 /// rectangle with the glyph's hex codepoint inside. This is inserted

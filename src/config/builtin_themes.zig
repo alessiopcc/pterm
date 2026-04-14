@@ -1,6 +1,6 @@
-/// Built-in color themes (D-27): 8 popular themes embedded in binary.
+/// Built-in color themes: 8 popular themes embedded in binary.
 ///
-/// Each theme defines all color fields including UI chrome per D-28.
+/// Each theme defines all color fields including UI chrome.
 /// Theme files are loaded via the TOML import directive; these built-in
 /// themes provide immediate access without external files.
 const theme = @import("theme");

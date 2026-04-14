@@ -430,7 +430,7 @@ fn shapeRowInto(
         const is_emoji = cell_mod.isEmojiCodepoint(first_cp);
         const is_wide_run = cell0.wide;
 
-        // Route block-drawing codepoints to block pass (D-04).
+        // Route block-drawing codepoints to block pass.
         // Box Drawing, Block Elements, and Braille are diverted from the
         // text pass for GPU procedural rendering. Powerline symbols
         // (U+E0A0-E0D4) stay in the text pass — they need full-cell

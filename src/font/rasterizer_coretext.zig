@@ -1,4 +1,4 @@
-/// CoreText rasterization backend for macOS (D-07).
+/// CoreText rasterization backend for macOS.
 ///
 /// Uses macOS CoreText + CoreGraphics C APIs to rasterize glyphs
 /// and compute font metrics. This backend is selected at comptime

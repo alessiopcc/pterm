@@ -62,12 +62,16 @@ Download from the [latest release](https://github.com/alessiopcc/pterm/releases/
 | Fedora/RHEL | `.rpm` |
 | Linux (portable) | `.tar.gz` |
 
+> **Note:** PTerm is not code-signed. On **macOS**, right-click the app and
+> select "Open" on first launch, or run `xattr -cr /Applications/PTerm.app`.
+> On **Windows**, click "More info" then "Run anyway" if SmartScreen appears.
+
 ### Build from source
 
 Requires [Zig 0.15.2](https://ziglang.org/download/):
 
 ```sh
-zig build -Doptimize=ReleaseSafe
+zig build --release=safe
 ```
 
 Binary output: `zig-out/bin/pterm`

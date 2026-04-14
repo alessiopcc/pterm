@@ -7,10 +7,10 @@
 /// State transitions:
 ///   idle -> working  (on any terminal output via onOutput)
 ///   working -> waiting  (on pattern match or idle timeout via triggerWaiting)
-///   waiting -> working  (on terminal output via onOutput -- instant clear per D-04)
+///   waiting -> working  (on terminal output via onOutput -- instant clear
 ///   working -> idle  (via markIdle)
 ///
-/// Flash fires once on first entry to .waiting state (D-16).
+/// Flash fires once on first entry to .waiting state.
 /// Pulse animation runs continuously while in .waiting state.
 const std = @import("std");
 
@@ -30,7 +30,7 @@ pub const AgentState = struct {
         }
     };
 
-    /// Flash duration: 150ms per D-16 UI-SPEC.
+    /// Flash duration: 150ms UI-SPEC.
     pub const FLASH_DURATION_NS: i128 = 150_000_000;
 
     /// Current state, atomically updated for cross-thread reads.
@@ -44,7 +44,7 @@ pub const AgentState = struct {
     /// Tab badge: set when entering waiting, cleared on output.
     show_badge: bool = false,
 
-    /// Whether this tab is registered as an "agent tab" for enhanced alerts (D-10).
+    /// Whether this tab is registered as an "agent tab" for enhanced alerts.
     is_agent_tab: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     /// Timestamp when waiting state was entered (for pulse animation elapsed time).
@@ -73,7 +73,7 @@ pub const AgentState = struct {
         self.waiting_start_ns = now;
     }
 
-    /// Called when terminal output received. Instantly clears waiting state (D-04).
+    /// Called when terminal output received. Instantly clears waiting state.
     /// Transitions to .working regardless of previous state.
     pub fn onOutput(self: *AgentState) void {
         const current = self.state.load(.acquire);
@@ -130,7 +130,7 @@ pub const AgentState = struct {
         return @floatCast(0.4 + 0.6 * (0.5 + 0.5 * @sin(2.0 * std.math.pi * t)));
     }
 
-    /// Toggle whether this tab is an agent tab (D-10).
+    /// Toggle whether this tab is an agent tab.
     pub fn toggleAgentTab(self: *AgentState) void {
         const current = self.is_agent_tab.load(.acquire);
         self.is_agent_tab.store(!current, .release);
@@ -173,7 +173,7 @@ test "triggerWaiting does not re-flash if already waiting" {
     try std.testing.expectEqual(t1, state.waiting_start_ns);
 }
 
-test "onOutput clears waiting state immediately (D-04)" {
+test "onOutput clears waiting state immediately" {
     var state = AgentState{};
     state.triggerWaitingWithTimestamp(1_000_000_000);
     _ = state.consumeFlashWithTimestamp(1_000_000_000);
@@ -276,6 +276,6 @@ test "state transition cycle: idle -> working -> waiting -> working" {
     state.triggerWaitingWithTimestamp(1_000_000_000); // working -> waiting
     try std.testing.expectEqual(AgentState.State.waiting, state.state.load(.acquire));
 
-    state.onOutput(); // waiting -> working (D-04 instant clear)
+    state.onOutput(); // waiting -> working
     try std.testing.expectEqual(AgentState.State.working, state.state.load(.acquire));
 }

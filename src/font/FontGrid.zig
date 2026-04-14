@@ -1,4 +1,4 @@
-/// Font collection with ordered fallback chain (D-09).
+/// Font collection with ordered fallback chain.
 ///
 /// Manages multiple Rasterizer instances (one per font in the fallback chain)
 /// and a shared GlyphAtlas. Resolves any codepoint to an atlas region by
@@ -82,7 +82,7 @@ pub const FontGrid = struct {
             return error.NoMonospaceFont;
         }
 
-        // -- User-specified fallback fonts (D-05: before auto-discovered) --
+        // -- User-specified fallback fonts --
         if (config.fallback) |fallbacks| {
             for (fallbacks) |family| {
                 if (discovery.discoverFont(allocator, family)) |result| {
@@ -93,7 +93,7 @@ pub const FontGrid = struct {
             }
         }
 
-        // -- Auto-discover Nerd Font symbols (D-01, D-02: skip if primary covers PUA) --
+        // -- Auto-discover Nerd Font symbols --
         if (!hasPUACoverage(&fonts.items[0].rasterizer)) {
             if (discovery.discoverNerdFont(allocator)) |result| {
                 if (loadFont(allocator, result, config.size_pt, dpi)) |entry| {
@@ -183,7 +183,7 @@ pub const FontGrid = struct {
     }
 
     /// Resolve a codepoint to an atlas region through the fallback chain.
-    /// Tries each font in order; first one that has the glyph wins (D-09).
+    /// Tries each font in order; first one that has the glyph wins.
     pub fn getGlyph(self: *FontGrid, codepoint: u21) !GlyphResult {
         return self.getGlyphStartingAt(codepoint, 0);
     }
@@ -256,7 +256,7 @@ pub const FontGrid = struct {
             }
         }
 
-        // No font in the chain has this glyph -- render tofu box (D-06).
+        // No font in the chain has this glyph -- render tofu box.
         const tofu_bitmap = tofu.renderTofuBox(self.allocator, codepoint, self.metrics) catch {
             return error.GlyphNotFound;
         };
@@ -405,7 +405,7 @@ pub const FontGrid = struct {
 
     // -- internal helpers --
 
-    /// Check if a rasterizer's font covers key Nerd Font PUA codepoints (D-02).
+    /// Check if a rasterizer's font covers key Nerd Font PUA codepoints.
     /// Samples representative codepoints from major Nerd Font glyph sets.
     /// Returns true if the font covers 2+ samples (likely NF-patched).
     fn hasPUACoverage(rasterizer: *Rasterizer) bool {

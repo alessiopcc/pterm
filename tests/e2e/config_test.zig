@@ -1,4 +1,4 @@
-/// E2E tests: Config loading and hot-reload (D-37).
+/// E2E tests: Config loading and hot-reload.
 ///
 /// Tests the config system end-to-end:
 /// 1. Loading config from a custom path

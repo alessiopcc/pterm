@@ -8,7 +8,7 @@ pub const PtyConfig = struct {
     env: ?[*:null]const ?[*:0]const u8 = null,
 };
 
-/// Cross-platform PTY type selected at compile time (D-08).
+/// Cross-platform PTY type selected at compile time.
 /// Unix uses forkpty, Windows uses ConPTY.
 pub const Pty = switch (builtin.os.tag) {
     .linux, .macos => @import("posix_pty.zig").PosixPty,

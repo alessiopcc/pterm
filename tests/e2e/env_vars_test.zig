@@ -1,4 +1,4 @@
-/// E2E tests: TERM and COLORTERM environment variable verification (D-48).
+/// E2E tests: TERM and COLORTERM environment variable verification.
 ///
 /// Spawns a shell via PTY and verifies that TERM=xterm-256color and
 /// COLORTERM=truecolor are set in the child environment.
@@ -29,7 +29,7 @@ test "TERM env var is xterm-256color" {
     // Verify output contains xterm-256color
     const found = try app.expectOutput("xterm-256color", 3000);
     // Note: If the PTY env vars are not set by pterm yet, this may not be found.
-    // The test documents the expected behavior per D-48.
+    // The test documents the expected behavior.
     if (!found) {
         std.log.warn("TERM=xterm-256color not found in child shell output -- may need PTY env setup", .{});
     }

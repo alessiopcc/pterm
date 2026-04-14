@@ -1,4 +1,4 @@
-/// E2E tests: Pane/tab lifecycle (D-37).
+/// E2E tests: Pane/tab lifecycle.
 ///
 /// Headless tests that instantiate the pane tree and tab data structures
 /// directly without GPU or display. Tests create, split, close, and
@@ -103,7 +103,7 @@ test "tab lifecycle: last tab close returns signal" {
     _ = try tm.createTab();
     try testing.expectEqual(@as(usize, 1), tm.tabs.items.len);
 
-    // Closing last tab -> should signal last_tab_closed (D-10)
+    // Closing last tab -> should signal last_tab_closed
     const result = tm.closeTab(0);
     try testing.expect(result == .last_tab_closed);
 }

@@ -2,7 +2,7 @@
 ///
 /// Detects URLs with http://, https://, file:// scheme prefixes in visible
 /// terminal cell content. No regex library needed -- simple prefix scan
-/// with boundary detection per D-15.
+/// with boundary detection.
 const std = @import("std");
 
 pub const UrlRange = struct {

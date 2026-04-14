@@ -1,4 +1,4 @@
-/// Dynamic texture atlas with shelf packing (D-08).
+/// Dynamic texture atlas with shelf packing.
 ///
 /// Packs rasterized glyph bitmaps into a single flat pixel buffer using
 /// a shelf-based algorithm. The atlas grows on demand from an initial size

@@ -1,14 +1,14 @@
 /// Per-pane search state for scrollback search (CORE-08).
 ///
 /// Manages the lifecycle of a search session within a single pane:
-///   - Open/close with scroll position save/restore (D-08)
-///   - Query buffer with addChar/deleteChar (D-11)
-///   - Match list with navigation and wrap-around (D-05, D-06)
-///   - Query persists between open/close within same pane (D-10)
+///   - Open/close with scroll position save/restore
+///   - Query buffer with addChar/deleteChar
+///   - Match list with navigation and wrap-around
+///   - Query persists between open/close within same pane
 const std = @import("std");
 
 pub const SearchState = struct {
-    /// Saved viewport state for restore on search close (D-08).
+    /// Saved viewport state for restore on search close.
     /// Mirrors ghostty-vt PageList.Viewport to avoid direct dependency.
     pub const SavedViewport = union(enum) {
         active, // Viewport was following active area (bottom)
@@ -34,19 +34,19 @@ pub const SearchState = struct {
     query_dirty: bool = false,
     last_input_ns: i128 = 0,
 
-    /// Open search overlay, saving the current viewport state (D-08).
-    /// Does NOT clear query -- persists between open/close (D-10).
+    /// Open search overlay, saving the current viewport state.
+    /// Does NOT clear query -- persists between open/close.
     pub fn open(self: *SearchState, current_viewport: SavedViewport) void {
         self.is_open = true;
         self.saved_viewport = current_viewport;
     }
 
-    /// Close search overlay. Does NOT clear query (D-10).
+    /// Close search overlay. Does NOT clear query.
     pub fn close(self: *SearchState) void {
         self.is_open = false;
     }
 
-    /// Return saved viewport state for restore after search close (D-08).
+    /// Return saved viewport state for restore after search close.
     pub fn getSavedViewport(self: *const SearchState) SavedViewport {
         return self.saved_viewport;
     }
@@ -77,7 +77,7 @@ pub const SearchState = struct {
         return self.query[0..self.query_len];
     }
 
-    /// Navigate to the next match, wrapping from last to first (D-06).
+    /// Navigate to the next match, wrapping from last to first.
     pub fn navigateNext(self: *SearchState) void {
         if (self.total_matches == 0) return;
         if (self.current_match + 1 >= self.total_matches) {
@@ -87,7 +87,7 @@ pub const SearchState = struct {
         }
     }
 
-    /// Navigate to the previous match, wrapping from first to last (D-06).
+    /// Navigate to the previous match, wrapping from first to last.
     pub fn navigatePrev(self: *SearchState) void {
         if (self.total_matches == 0) return;
         if (self.current_match == 0) {
@@ -141,7 +141,7 @@ test "SearchState: open saves viewport and sets is_open" {
     try std.testing.expectEqual(SearchState.SavedViewport{ .row = 42 }, state.saved_viewport);
 }
 
-test "SearchState: getSavedViewport returns saved state (D-08)" {
+test "SearchState: getSavedViewport returns saved state" {
     var state = SearchState{};
     state.open(.active);
     try std.testing.expectEqual(SearchState.SavedViewport.active, state.getSavedViewport());
@@ -162,7 +162,7 @@ test "SearchState: close sets is_open=false" {
     try std.testing.expect(!state.is_open);
 }
 
-test "SearchState: query persists between open/close (D-10)" {
+test "SearchState: query persists between open/close" {
     var state = SearchState{};
     state.open(.active);
     state.addChar('h');
@@ -196,7 +196,7 @@ test "SearchState: addChar appends, deleteChar removes" {
     try std.testing.expectEqual(@as(u16, 0), state.query_len);
 }
 
-test "SearchState: navigateNext wraps from last to first (D-06)" {
+test "SearchState: navigateNext wraps from last to first" {
     var state = SearchState{};
     state.total_matches = 3;
     state.current_match = 0;
@@ -210,7 +210,7 @@ test "SearchState: navigateNext wraps from last to first (D-06)" {
     try std.testing.expectEqual(@as(u32, 0), state.current_match);
 }
 
-test "SearchState: navigatePrev wraps from first to last (D-06)" {
+test "SearchState: navigatePrev wraps from first to last" {
     var state = SearchState{};
     state.total_matches = 3;
     state.current_match = 0;

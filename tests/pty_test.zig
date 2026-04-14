@@ -137,7 +137,7 @@ test "pty write and read roundtrip" {
     p.deinit();
 }
 
-test "pty resize (D-10)" {
+test "pty resize" {
     var p = try Pty.init(testing.allocator, .{ .cols = 80, .rows = 24 });
 
     const shell_path: [*:0]const u8 = if (comptime builtin.os.tag == .windows)

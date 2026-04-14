@@ -260,7 +260,7 @@ pub const ConPty = struct {
         var cmd_line_buf: [2048]u16 = undefined;
         const shell_slice = std.mem.span(shell_path);
         var pos: usize = std.unicode.utf8ToUtf16Le(&cmd_line_buf, shell_slice) catch return ConPtyError.CreateProcessFailed;
-        // Append args if present (D-11: pass shell args in command line)
+        // Append args if present
         if (args) |arg_list| {
             var i: usize = 0;
             while (arg_list[i]) |arg| : (i += 1) {
@@ -304,13 +304,13 @@ pub const ConPty = struct {
             return ConPtyError.UpdateAttributeFailed;
         }
 
-        // Set TERM and COLORTERM for proper terminal capability detection (D-48).
+        // Set TERM and COLORTERM for proper terminal capability detection.
         // These are set in the parent process env and inherited by the child
         // via lpEnvironment=null in CreateProcessW.
         _ = SetEnvironmentVariableA("TERM", "xterm-256color");
         _ = SetEnvironmentVariableA("COLORTERM", "truecolor");
 
-        // Convert working directory from UTF-8 to UTF-16 if specified (D-23: per-pane CWD)
+        // Convert working directory from UTF-8 to UTF-16 if specified
         var wd_buf: [1024]u16 = undefined;
         const wd_ptr: ?[*:0]const u16 = if (working_dir) |wd| blk: {
             const wd_slice = std.mem.span(wd);
@@ -381,7 +381,7 @@ pub const ConPty = struct {
         return @intCast(bytes_written);
     }
 
-    /// Resize the pseudo-terminal (D-10).
+    /// Resize the pseudo-terminal.
     /// ConPTY handles sending the resize signal to the child process.
     pub fn resize(self: *ConPty, cols: u16, rows: u16) ConPtyError!void {
         const size = COORD{

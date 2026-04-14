@@ -8,8 +8,8 @@
 
     <MajorUpgrade DowngradeErrorMessage="A newer version of PTerm is already installed." />
 
-    <Launch Condition="Installed OR (VersionNT &gt;= 603 AND WindowsBuild &gt;= 18362)"
-            Message="PTerm requires Windows 10 version 1903 or later (needed for ConPTY support)." />
+    <Launch Condition="Installed OR VersionNT &gt;= 603"
+            Message="PTerm requires Windows 10 or later." />
 
     <MediaTemplate EmbedCab="yes" />
 
@@ -34,7 +34,8 @@
                     Name="PTerm"
                     Description="GPU-accelerated terminal emulator"
                     Target="[INSTALLFOLDER]pterm.exe"
-                    WorkingDirectory="INSTALLFOLDER" />
+                    WorkingDirectory="INSTALLFOLDER"
+                    Icon="PTermIcon.exe" />
           <RemoveFolder Id="RemovePTermMenuFolder" On="uninstall" />
           <RegistryValue Root="HKCU" Key="Software\PTerm" Name="installed" Type="integer" Value="1" KeyPath="yes" />
         </Component>
@@ -55,6 +56,8 @@
     <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
       <ComponentRef Id="PTermExeComponent" />
     </ComponentGroup>
+
+    <Icon Id="PTermIcon.exe" SourceFile="$(var.SourceDir)\pterm.exe" />
 
   </Package>
 </Wix>

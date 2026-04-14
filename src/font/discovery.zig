@@ -1,4 +1,4 @@
-/// Platform font discovery dispatcher (D-11).
+/// Platform font discovery dispatcher.
 ///
 /// Uses comptime platform dispatch to find system fonts by family name.
 /// Linux: fontconfig, macOS: CoreText, Windows: directory scanning.

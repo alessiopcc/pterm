@@ -1,11 +1,11 @@
-/// Search bar overlay UI for scrollback search (CORE-08, D-01, D-12).
+/// Search bar overlay UI for scrollback search (CORE-08).
 ///
 /// Renders a minimal search bar at the top of the active pane:
 ///   - Full pane width, 1 cell-row height
 ///   - Query text left-aligned with xs padding (2 cols from left)
-///   - Match counter right-aligned ("N of M" format, D-05)
+///   - Match counter right-aligned ("N of M" format)
 ///   - Blinking cursor at insertion point
-///   - No buttons or toggles (D-12)
+///   - No buttons or toggles
 ///
 /// Follows the callback-based rendering pattern from PresetPicker.zig.
 const std = @import("std");

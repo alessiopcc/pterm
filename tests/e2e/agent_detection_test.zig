@@ -1,4 +1,4 @@
-/// E2E tests: Agent detection pattern matching and idle detection (D-37).
+/// E2E tests: Agent detection pattern matching and idle detection.
 ///
 /// Headless tests that feed known patterns to the AgentDetector and verify
 /// state transitions. No GUI or PTY needed -- pure pattern matching.

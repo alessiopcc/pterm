@@ -1,4 +1,4 @@
-/// File watcher for config hot-reload (D-14).
+/// File watcher for config hot-reload.
 ///
 /// Implements polling-based file change detection with debouncing.
 /// Watches config.toml and all imported files. Fires callback when
@@ -54,7 +54,7 @@ pub const FileWatcher = struct {
             .mtimes = mtimes,
             .poll_interval_ns = 1_500_000_000, // 1.5 seconds
             .last_poll = now,
-            .debounce_ns = 200_000_000, // 200ms debounce per D-14 pitfall 6
+            .debounce_ns = 200_000_000, // 200ms debounce pitfall 6
             .last_change = 0,
             .callback = callback,
         };

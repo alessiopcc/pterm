@@ -1,4 +1,4 @@
-/// Windows font discovery using directory scanning (D-11).
+/// Windows font discovery using directory scanning.
 ///
 /// Scans standard Windows font directories for known monospace font files.
 /// A simple but reliable approach for v1. DirectWrite enumeration can be
@@ -121,7 +121,7 @@ pub fn discoverCJKFont(allocator: std.mem.Allocator) ?DiscoverResult {
     return null;
 }
 
-/// Discover a Nerd Font symbols-only font (D-01).
+/// Discover a Nerd Font symbols-only font.
 /// Scans system and user font directories for known Nerd Font filenames.
 pub fn discoverNerdFont(allocator: std.mem.Allocator) ?DiscoverResult {
     const nerd_fonts = [_][]const u8{

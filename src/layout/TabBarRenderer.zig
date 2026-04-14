@@ -30,7 +30,7 @@ pub const TabBarConfig = struct {
     /// Hovered control button (0=none, 1=minimize, 2=maximize, 3=close)
     hovered_control: u8 = 0,
 
-    /// Bell badge color (D-29: pink badge on tabs with bell, default #f38ba8).
+    /// Bell badge color.
     bell_badge_color: ColorU32 = 0xF38BA8FF,
 
     /// Per-tab bell badge flags. Slice length matches tab count.
@@ -269,7 +269,7 @@ pub const TabBarRenderer = struct {
                 }
             }
 
-            // Bell badge — pink filled circle on tabs with bell (D-29)
+            // Bell badge — pink filled circle on tabs with bell
             if (config.tab_bell_badges) |badges| {
                 if (idx < badges.len and badges[idx] and !is_active) {
                     const badge_r: i32 = @intFromFloat(config.cell_height * 0.12);

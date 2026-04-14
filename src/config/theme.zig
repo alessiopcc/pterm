@@ -7,7 +7,7 @@ const std = @import("std");
 const Color = @import("renderer_types").Color;
 
 /// Parse a #RRGGBB hex color string into a renderer Color.
-/// Returns error.InvalidColorFormat for malformed input (per D-31).
+/// Returns error.InvalidColorFormat for malformed input (.
 pub fn parseHexColor(hex: []const u8) !Color {
     if (hex.len != 7 or hex[0] != '#') return error.InvalidColorFormat;
     const r = std.fmt.parseInt(u8, hex[1..3], 16) catch return error.InvalidColorFormat;
@@ -21,7 +21,7 @@ pub fn colorFromU8Array(rgb: [3]u8) Color {
     return .{ .r = rgb[0], .g = rgb[1], .b = rgb[2], .a = 255 };
 }
 
-/// UI chrome colors (D-28: tab bar, pane borders, status bar, agent alert).
+/// UI chrome colors.
 pub const UiColors = struct {
     tab_bar_bg: [3]u8,
     tab_active: [3]u8,
@@ -68,7 +68,7 @@ pub const RendererPalette = struct {
     selection_fg: Color,
     ansi_normal: [8]Color,
     ansi_bright: [8]Color,
-    // D-28 UI chrome colors
+    //UI chrome colors
     ui_tab_bar_bg: Color,
     ui_tab_active: Color,
     ui_tab_inactive: Color,
@@ -270,19 +270,19 @@ fn formatThemeList(names: []const []const u8) []const u8 {
 
 /// Build a RendererPalette from Config.Colors + theme name, using the named theme
 /// as base and overlaying any non-null config color values on top.
-/// Per D-03: theme selects base palette. Per D-04: inline overrides win.
-/// Per D-05: unknown theme warns to stderr and falls back to "default".
-/// Per D-07: all 13 UI color fields wired through overlay.
+/// Per theme selects base palette. Per inline overrides win.
+/// Per unknown theme warns to stderr and falls back to "default".
+/// Per all 13 UI color fields wired through overlay.
 pub fn buildRendererPaletteFromConfig(colors: anytype, theme_name: ?[]const u8) RendererPalette {
     const builtin_themes = @import("builtin_themes");
 
-    // D-03, D-05: Resolve theme by name, fallback to "default" on unknown
+    // Resolve theme by name, fallback to "default" on unknown
     const base_palette = blk: {
         if (theme_name) |name| {
             if (builtin_themes.get(name)) |palette| {
                 break :blk palette;
             }
-            // D-05: Unknown theme -- warn with available names, fall back to default
+            // Unknown theme -- warn with available names, fall back to default
             const available = builtin_themes.list();
             std.log.warn("unknown theme '{s}'. Available themes: {s}. Falling back to 'default'.", .{
                 name,
@@ -292,7 +292,7 @@ pub fn buildRendererPaletteFromConfig(colors: anytype, theme_name: ?[]const u8) 
         break :blk builtin_themes.get("default").?;
     };
 
-    // D-04: Overlay inline [colors] overrides on theme base
+    // Overlay inline [colors] overrides on theme base
     const merged = ColorPalette{
         .foreground = colors.foreground orelse base_palette.foreground,
         .background = colors.background orelse base_palette.background,
@@ -300,10 +300,10 @@ pub fn buildRendererPaletteFromConfig(colors: anytype, theme_name: ?[]const u8) 
         .cursor_text = colors.cursor_text orelse base_palette.cursor_text,
         .selection_bg = colors.selection_bg orelse base_palette.selection_bg,
         .selection_fg = colors.selection_fg orelse base_palette.selection_fg,
-        // D-01: Overlay named ANSI color overrides on theme normals/brights
+        // Overlay named ANSI color overrides on theme normals/brights
         .normal = overlayAnsiColors(base_palette.normal, colors.normal),
         .bright = overlayAnsiColors(base_palette.bright, colors.bright),
-        // D-07: Overlay config UI colors on theme UI colors
+        // Overlay config UI colors on theme UI colors
         .ui = overlayUiColors(base_palette.ui, colors.ui),
     };
 

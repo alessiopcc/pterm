@@ -2,14 +2,14 @@
 ///
 /// Provides TestApp which wraps PTY open/spawn/read/write for platform tests
 /// without requiring GPU or display. Shell auto-detection with category-based
-/// failure handling (blocking vs warning-only per D-32, D-33, D-35).
+/// failure handling (blocking vs warning-only).
 const std = @import("std");
 const builtin = @import("builtin");
 const pty_mod = @import("pty");
 const Pty = pty_mod.Pty;
 const PtyConfig = pty_mod.PtyConfig;
 
-/// Shell failure category (D-35).
+/// Shell failure category.
 /// Blocking shells cause test failure; warning-only shells log and continue.
 pub const ShellCategory = enum {
     /// Default platform shells -- test failure = overall failure.
@@ -158,8 +158,8 @@ pub const TestApp = struct {
     }
 };
 
-/// Auto-detect available shells on the current system (D-32, D-33).
-/// Returns shells that exist, with category (blocking vs warning_only per D-35).
+/// Auto-detect available shells on the current system.
+/// Returns shells that exist, with category (blocking vs warning_only.
 pub fn availableShells(allocator: std.mem.Allocator) ![]ShellInfo {
     var shells: std.ArrayList(ShellInfo) = .empty;
     errdefer shells.deinit(allocator);

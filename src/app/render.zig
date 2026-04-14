@@ -954,17 +954,17 @@ pub fn processBellForPane(self: *App, pd: *PaneData, bounds: RendererRect, backe
 
     // Consume trigger from read thread (atomic)
     if (pd.bell_state.consumeTrigger()) {
-        // Window attention when not focused (D-31)
+        // Window attention when not focused
         if (!self.focused) {
             self.window.handle.requestAttention();
         }
-        // Sound (D-32)
+        // Sound
         if (wants_sound) {
             system_beep.beep();
         }
     }
 
-    // Update and render flash overlay (D-27: 120ms amber 15% alpha)
+    // Update and render flash overlay
     if (wants_visual) {
         pd.bell_state.updateFlash();
         if (pd.bell_state.flash_active) {
@@ -983,7 +983,7 @@ pub fn processBellForPane(self: *App, pd: *PaneData, bounds: RendererRect, backe
 }
 
 /// Process agent flash state for a pane during render: consume trigger, draw flash overlay.
-/// Mirrors processBellForPane pattern (D-16: 150ms amber flash at 15% alpha).
+/// Mirrors processBellForPane pattern.
 pub fn processAgentFlashForPane(self: *App, pd: *PaneData, bounds: RendererRect, backend: *OpenGLBackend) void {
     // Idle transition: if in .working and no output for 500ms, go back to .idle
     // Also clears resize suppress flag so normal detection resumes

@@ -77,7 +77,7 @@ test "selection clear" {
     try std.testing.expectEqual(@as(?selection_mod.SelectionRange, null), sel.range);
 }
 
-test "selection copy-on-select (D-14)" {
+test "selection copy-on-select" {
     const alloc = std.testing.allocator;
 
     // Simulate screen lines

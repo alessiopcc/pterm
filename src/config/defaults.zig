@@ -1,6 +1,6 @@
 /// Cross-platform config path detection and --dump-config formatting.
 ///
-/// Default config paths (D-11: cross-platform consistency):
+/// Default config paths:
 ///   All platforms: ~/.config/pterm/config.toml
 ///   Linux: Respects XDG_CONFIG_HOME if set
 ///   Windows: Uses %USERPROFILE%/.config/pterm/config.toml
@@ -14,14 +14,14 @@ pub fn defaultConfigPath() ?[]const u8 {
 }
 
 fn defaultConfigPathImpl() ?[]const u8 {
-    // D-11: All platforms use ~/.config/pterm/config.toml
+    // All platforms use ~/.config/pterm/config.toml
     // This non-allocator version cannot construct dynamic paths,
     // so it returns null. Callers should use defaultConfigPathAlloc().
     return null;
 }
 
 /// Return the default config path using an allocator for dynamic path construction.
-/// D-11: All platforms use ~/.config/pterm/config.toml for cross-platform consistency.
+/// All platforms use ~/.config/pterm/config.toml for cross-platform consistency.
 pub fn defaultConfigPathAlloc(allocator: std.mem.Allocator) !?[]const u8 {
     if (builtin.os.tag == .windows) {
         const home = std.process.getEnvVarOwned(allocator, "USERPROFILE") catch return null;
@@ -40,7 +40,7 @@ pub fn defaultConfigPathAlloc(allocator: std.mem.Allocator) !?[]const u8 {
 }
 
 /// Print the full default configuration as commented TOML to stdout.
-/// This implements --dump-config (D-04).
+/// This implements --dump-config.
 pub fn dumpConfig() void {
     const output =
         \\# PTerm Configuration

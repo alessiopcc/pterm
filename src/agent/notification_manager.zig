@@ -1,9 +1,9 @@
 /// Notification manager: per-pane cooldown tracking, focus suppression, and dispatch.
 ///
 /// Gates OS desktop notifications by:
-///   - Global enabled/disabled toggle (D-19 config)
-///   - Window focus suppression (D-05: skip when PTerm is focused)
-///   - Per-pane cooldown (D-02: default 30s between notifications per pane)
+///   - Global enabled/disabled toggle
+///   - Window focus suppression
+///   - Per-pane cooldown
 ///
 /// Uses AutoHashMapUnmanaged with allocator-per-call pattern.
 const std = @import("std");
@@ -14,11 +14,11 @@ pub const NotificationManager = struct {
     last_notify: std.AutoHashMapUnmanaged(u32, i128),
     /// Cooldown duration in nanoseconds.
     cooldown_ns: i128,
-    /// Whether notifications are enabled globally (D-19: agent.notifications).
+    /// Whether notifications are enabled globally.
     enabled: bool,
-    /// Whether to suppress notifications when window is focused (D-05).
+    /// Whether to suppress notifications when window is focused.
     suppress_when_focused: bool,
-    /// Whether to include sound in notifications (D-19: agent.notification_sound).
+    /// Whether to include sound in notifications.
     play_sound: bool,
 
     /// Initialize with config values.
@@ -74,7 +74,7 @@ pub const NotificationManager = struct {
         _ = self.last_notify.fetchRemove(pane_id);
     }
 
-    /// Update configuration fields (D-20 hot-reload).
+    /// Update configuration fields.
     pub fn updateConfig(self: *NotificationManager, cooldown_seconds: i64, enabled: bool, suppress_when_focused: bool, play_sound: bool) void {
         self.cooldown_ns = @as(i128, cooldown_seconds) * 1_000_000_000;
         self.enabled = enabled;

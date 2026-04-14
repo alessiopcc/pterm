@@ -228,7 +228,7 @@ pub fn bellCallback(ctx: ?*anyopaque) void {
 }
 
 /// Agent output callback: invoked from read thread on every raw output event.
-/// Context pointer points to PaneData. Clears waiting state (D-04),
+/// Context pointer points to PaneData. Clears waiting state,
 /// resets idle timer, and schedules scan for next render snapshot.
 pub fn agentOutputCallback(ctx: ?*anyopaque) void {
     if (ctx) |c| {
@@ -244,7 +244,7 @@ pub fn agentOutputCallback(ctx: ?*anyopaque) void {
     }
 }
 
-/// Per-pane screen change callback (D-13).
+/// Per-pane screen change callback.
 /// Context pointer is the PaneData that produced output.
 /// Only marks that pane's tab as having activity (not all tabs).
 pub fn screenChangeCallback(ctx: ?*anyopaque) void {
@@ -273,7 +273,7 @@ pub fn configReloadCallback() void {
         return;
     };
     self.renderer_palette = theme_mod.buildRendererPaletteFromConfig(new_config.colors, new_config.theme);
-    // Update notification manager from new config (D-20 hot-reload)
+    // Update notification manager from new config
     self.notification_manager.updateConfig(
         new_config.agent.notification_cooldown,
         new_config.agent.notifications,

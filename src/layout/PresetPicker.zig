@@ -1,4 +1,4 @@
-/// Overlay UI for selecting and activating layout presets (D-38).
+/// Overlay UI for selecting and activating layout presets.
 ///
 /// Renders a centered overlay list of available layout presets.
 /// Navigation via Up/Down arrows, Enter to activate, Escape to dismiss.

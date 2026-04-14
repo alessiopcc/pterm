@@ -1,6 +1,6 @@
-/// Tab: owns a PaneTree root and tracks the focused pane (D-14, D-24, D-26).
+/// Tab: owns a PaneTree root and tracks the focused pane.
 ///
-/// Each tab starts as a single pane (D-26). Splitting and closing operations
+/// Each tab starts as a single pane. Splitting and closing operations
 /// delegate to tree_ops. The tab tracks its own pane_id counter.
 const std = @import("std");
 const PaneTree = @import("PaneTree.zig");
@@ -20,7 +20,7 @@ pub const Tab = struct {
     is_zoomed: bool,
     zoom_saved_root: ?*PaneNode,
 
-    /// Create a new tab with a single root pane (D-26).
+    /// Create a new tab with a single root pane.
     pub fn init(allocator: std.mem.Allocator) !Tab {
         const root = try PaneTree.createLeaf(allocator, 0, null);
         return .{
@@ -44,7 +44,7 @@ pub const Tab = struct {
         }
     }
 
-    /// Split the focused pane in the given direction (D-19).
+    /// Split the focused pane in the given direction.
     /// Returns the new pane's id, or error if the focused pane cannot be found.
     pub fn splitFocused(self: *Tab, direction: SplitDirection) !u32 {
         const leaf = tree_ops.findLeaf(self.root, self.focused_pane_id) orelse
@@ -56,7 +56,7 @@ pub const Tab = struct {
         return new_id;
     }
 
-    /// Close the focused pane (D-20, D-27).
+    /// Close the focused pane.
     /// Returns the new focused pane_id, or null if this was the last pane in the tab.
     pub fn closeFocused(self: *Tab) ?u32 {
         const leaf = tree_ops.findLeaf(self.root, self.focused_pane_id) orelse return null;

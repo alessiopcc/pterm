@@ -1,4 +1,4 @@
-/// Renderer abstraction layer (D-06).
+/// Renderer abstraction layer.
 /// OpenGL implements this. Metal plugs in later.
 const types = @import("types");
 const OpenGLBackend = @import("opengl_backend").OpenGLBackend;
@@ -6,7 +6,7 @@ const RenderState = types.RenderState;
 const Diagnostics = types.Diagnostics;
 const Color = types.Color;
 
-/// Renderer abstraction layer (D-06).
+/// Renderer abstraction layer.
 /// OpenGL implements this. Metal plugs in later.
 pub const Renderer = union(enum) {
     opengl: *OpenGLBackend,

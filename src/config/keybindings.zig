@@ -1,5 +1,5 @@
 /// Keybinding system: action vocabulary, key combo parsing, runtime dispatch map,
-/// clipboard reservation, and default bindings (D-17 through D-25).
+/// clipboard reservation, and default bindings.
 ///
 /// The KeybindingMap provides O(1) lookup from KeyCombo -> Action for use in
 /// Surface key callbacks. Reserved clipboard keys (Ctrl+C/V, Cmd+C/V) are
@@ -8,7 +8,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 /// Terminal actions that can be bound to key combos.
-/// This is the fixed vocabulary of operations (D-17).
+/// This is the fixed vocabulary of operations.
 pub const Action = enum {
     // Reserved actions — not rebindable (handled by hardcoded key paths)
     copy,
@@ -98,7 +98,7 @@ pub const SpecialKey = enum {
     f12,
 };
 
-/// Key identifier: either a Unicode codepoint (logical character per D-21)
+/// Key identifier: either a Unicode codepoint (logical character
 /// or a special non-printable key.
 pub const KeyId = union(enum) {
     char: u21,
@@ -118,7 +118,7 @@ pub const KeyId = union(enum) {
     }
 };
 
-/// Modifier key state (D-24).
+/// Modifier key state.
 pub const Modifiers = packed struct {
     ctrl: bool = false,
     shift: bool = false,
@@ -251,7 +251,7 @@ pub const ParseError = error{
 };
 
 /// Parse a key combo string like "ctrl+c", "ctrl+shift+t", "shift+pageup".
-/// Returns error.InvalidKeyCombo for invalid input (D-17, D-24).
+/// Returns error.InvalidKeyCombo for invalid input.
 pub fn parseKeyCombo(combo_str: []const u8) ParseError!KeyCombo {
     if (combo_str.len == 0) return ParseError.InvalidKeyCombo;
 
@@ -313,7 +313,7 @@ pub fn parseKeyCombo(combo_str: []const u8) ParseError!KeyCombo {
         return KeyCombo{ .key = .{ .special = special }, .mods = mods };
     }
 
-    // Single character key (logical, D-21)
+    // Single character key (logical)
     if (key_str.len == 1) {
         const ch = key_str[0];
         // Accept printable ASCII as logical keys
@@ -337,7 +337,7 @@ pub fn isReservedAction(action: Action) bool {
 }
 
 /// Check if a key combo is a reserved clipboard key.
-/// Ctrl+C / Super+C for smart copy (D-17: copy if selection, SIGINT if not).
+/// Ctrl+C / Super+C for smart copy.
 /// Ctrl+V / Super+V for paste.
 pub fn isReservedClipboardKey(combo: KeyCombo) bool {
     const is_cv = switch (combo.key) {
@@ -436,9 +436,9 @@ pub fn actionName(action: Action) []const u8 {
 /// One combo per action. Last definition wins.
 ///
 /// Rules:
-///   - Reserved clipboard keys cannot be overridden (D-19)
-///   - combo_str = "none" unbinds the action (D-23)
-///   - Conflicts warn, last definition wins (D-25)
+///   - Reserved clipboard keys cannot be overridden
+///   - combo_str = "none" unbinds the action
+///   - Conflicts warn, last definition wins
 pub fn buildMap(
     allocator: Allocator,
     overrides: ?[]const UserBinding,
@@ -466,7 +466,7 @@ pub fn buildMap(
                 continue;
             }
 
-            // D-23: "none" as combo value means unbind
+            // "none" as combo value means unbind
             if (strEql(ub.combo_str, "none")) {
                 map.removeByAction(action);
                 continue;
@@ -477,7 +477,7 @@ pub fn buildMap(
                 continue;
             };
 
-            // D-19: reserved clipboard keys
+            // reserved clipboard keys
             if (isReservedClipboardKey(combo)) {
                 try map.addWarning("cannot rebind reserved clipboard key");
                 continue;
@@ -486,7 +486,7 @@ pub fn buildMap(
             // Remove old binding for this action, then add new one (1:1)
             map.removeByAction(action);
 
-            // D-25: conflict detection (combo already bound to different action)
+            // conflict detection (combo already bound to different action)
             if (map.get(combo)) |existing| {
                 if (existing != action) {
                     try map.addWarning("keybinding conflict: combo already bound to different action");
@@ -612,7 +612,7 @@ test "parseKeyCombo: invalid returns error" {
     try std.testing.expectError(ParseError.InvalidKeyCombo, parseKeyCombo("invalid"));
 }
 
-test "isReservedClipboardKey: ctrl+c IS reserved (D-17 smart copy/SIGINT)" {
+test "isReservedClipboardKey: ctrl+c IS reserved" {
     const combo = try parseKeyCombo("ctrl+c");
     try std.testing.expect(isReservedClipboardKey(combo));
 }
@@ -622,7 +622,7 @@ test "isReservedClipboardKey: ctrl+v IS reserved (paste)" {
     try std.testing.expect(isReservedClipboardKey(combo));
 }
 
-test "isReservedClipboardKey: super+c IS reserved (D-17 smart copy/SIGINT)" {
+test "isReservedClipboardKey: super+c IS reserved" {
     const combo = try parseKeyCombo("super+c");
     try std.testing.expect(isReservedClipboardKey(combo));
 }

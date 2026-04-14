@@ -167,10 +167,10 @@ test "resolve256 grayscale 255 = #eeeeee" {
 }
 
 // ---------------------------------------------------------------
-// Each built-in theme defines colors.ui fields per D-28
+// Each built-in theme defines colors.ui fields
 // ---------------------------------------------------------------
 
-test "all built-in themes define ui colors (D-28)" {
+test "all built-in themes define ui colors" {
     const names = builtin_themes.list();
     for (names) |name| {
         const palette = builtin_themes.get(name).?;

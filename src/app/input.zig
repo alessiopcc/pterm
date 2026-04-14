@@ -67,7 +67,7 @@ pub fn handleKeyInput(self: *App, key: glfw.Key, action: glfw.Action, mods: glfw
         return;
     }
 
-    // D-11: Full input capture when search is open
+    // Full input capture when search is open
     if (self.getFocusedPaneData()) |pd| {
         if (pd.search_state.is_open) {
             handleSearchKeyInput(self, pd, key, mods);
@@ -149,7 +149,7 @@ pub fn handleKeyInput(self: *App, key: glfw.Key, action: glfw.Action, mods: glfw
 pub fn handleCharInput(self: *App, codepoint: u32) void {
     const cp: u21 = if (codepoint <= 0x10FFFF) @intCast(codepoint) else return;
 
-    // D-11: When search is open, printable chars go to search query
+    // When search is open, printable chars go to search query
     if (self.getFocusedPaneData()) |pd| {
         if (pd.search_state.is_open) {
             if (cp >= 0x20 and cp < 0x7F) {
@@ -183,7 +183,7 @@ pub fn handleCharInput(self: *App, codepoint: u32) void {
     }
 }
 
-/// Handle mouse button: hit-test tab bar, pane borders, pane area (D-07, D-08, D-34).
+/// Handle mouse button: hit-test tab bar, pane borders, pane area.
 pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Action, mods: glfw.Mods) void {
     // Handle drag release
     if (action == .release and button == .left) {
@@ -206,7 +206,7 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
         if (self.border_drag_active) {
             self.border_drag_active = false;
             self.border_drag_branch = null;
-            // Snap to cell grid on release (D-29)
+            // Snap to cell grid on release
             self.resizeAllPanes();
             self.requestFrame();
         }
@@ -342,7 +342,7 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
 
     // Pane bounds are in framebuffer space (fb_x/fb_y already computed above)
 
-    // Check pane border grab zone (within 4px of border, D-21)
+    // Check pane border grab zone (within 4px of border)
     const active_tab = self.tab_manager.getActiveTab() orelse return;
     if (findBorderAtPoint(active_tab.root, fb_x, fb_y)) |border_info| {
         self.border_drag_active = true;
@@ -354,14 +354,14 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
     }
 
     // Ctrl+Click (Cmd+Click macOS) opens hovered URL
-    // Only when url.enabled=true (D-22: when disabled, Ctrl+Click passes through)
+    // Only when url.enabled=true
     if (self.config.url.enabled) {
         const is_url_click = if (builtin.os.tag == .macos) mods.super else mods.control;
         if (is_url_click) {
             if (self.getFocusedPaneData()) |pd| {
                 if (pd.url_state.getHoveredUrl()) |url| {
                     open_url.openUrl(url);
-                    return; // Consume click (D-16: no terminal selection)
+                    return; // Consume click
                 }
             }
         }
@@ -402,7 +402,7 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
         }
     }
 
-    // Check pane area: focus the clicked pane (D-34)
+    // Check pane area: focus the clicked pane
     const leaves = tree_ops.collectLeaves(active_tab.root, std.heap.page_allocator) catch return;
     defer std.heap.page_allocator.free(leaves);
 
@@ -836,7 +836,7 @@ pub fn handlePickerInput(self: *App, key: glfw.Key) void {
     }
 }
 
-/// Handle keyboard input while the shell picker overlay is visible (D-05).
+/// Handle keyboard input while the shell picker overlay is visible.
 pub fn handleShellPickerInput(self: *App, key: glfw.Key) void {
     switch (key) {
         .up => {

@@ -1,4 +1,4 @@
-/// E2E tests: CLI flags --version, --help, --init-config (D-37).
+/// E2E tests: CLI flags --version, --help, --init-config.
 ///
 /// Spawns the pterm binary with each flag and verifies output/behavior.
 /// These tests require the pterm binary to be built first.

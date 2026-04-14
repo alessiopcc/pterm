@@ -1,15 +1,15 @@
 /// Scrollback ring buffer manager for PTerm.
 ///
-/// Wraps terminal scrollback with a fixed-capacity ring buffer (D-12).
-/// When the buffer reaches capacity, the oldest line is evicted (D-15: default 10,000 lines).
+/// Wraps terminal scrollback with a fixed-capacity ring buffer.
+/// When the buffer reaches capacity, the oldest line is evicted.
 ///
-/// D-16 (Alternate screen): ghostty-vt provides separate primary/alternate screen
+///(Alternate screen): ghostty-vt provides separate primary/alternate screen
 /// buffers via its ScreenSet type. The ScrollbackBuffer ONLY manages the PRIMARY
 /// screen's scrollback. When alternate screen is active (vim, htop, less), no lines
 /// should be pushed to ScrollbackBuffer. The caller is responsible for checking the
 /// active screen before pushing lines.
 ///
-/// D-18 (Serialization): serialize/deserialize stubs are provided for future session
+///(Serialization): serialize/deserialize stubs are provided for future session
 /// persistence (v2). The API contract is established now; full implementation deferred.
 const std = @import("std");
 
@@ -28,7 +28,7 @@ pub const Line = struct {
     }
 };
 
-/// Ring buffer for scrollback storage (D-12).
+/// Ring buffer for scrollback storage.
 /// Fixed-size circular buffer with predictable memory usage.
 /// Old lines are discarded when capacity is reached.
 pub const ScrollbackBuffer = struct {
@@ -38,7 +38,7 @@ pub const ScrollbackBuffer = struct {
     line_count: u32,
     allocator: std.mem.Allocator,
 
-    /// Initialize a scrollback buffer with the given capacity (D-15: default 10,000).
+    /// Initialize a scrollback buffer with the given capacity.
     pub fn init(allocator: std.mem.Allocator, capacity: u32) !ScrollbackBuffer {
         const lines = try allocator.alloc(Line, capacity);
         for (lines) |*line| {
@@ -61,7 +61,7 @@ pub const ScrollbackBuffer = struct {
     }
 
     /// Append a line of codepoints to the ring buffer.
-    /// If at capacity, overwrites the oldest line (D-12 ring behavior).
+    /// If at capacity, overwrites the oldest line.
     pub fn pushLine(self: *ScrollbackBuffer, codepoints: []const u21) void {
         // Free old line data if we're overwriting
         var slot = &self.lines[self.write_pos];
@@ -110,7 +110,7 @@ pub const ScrollbackBuffer = struct {
         self.line_count = 0;
     }
 
-    /// Serialize the buffer contents to a writer (D-18 stub).
+    /// Serialize the buffer contents to a writer.
     /// Full implementation deferred to v2 session persistence.
     pub fn serialize(self: *const ScrollbackBuffer, writer: anytype) !void {
         // Write line count header
@@ -130,7 +130,7 @@ pub const ScrollbackBuffer = struct {
         }
     }
 
-    /// Deserialize a buffer from a reader (D-18 stub).
+    /// Deserialize a buffer from a reader.
     /// Full implementation deferred to v2 session persistence.
     pub fn deserialize(allocator: std.mem.Allocator, reader: anytype) !ScrollbackBuffer {
         const line_count = try reader.readInt(u32, .little);

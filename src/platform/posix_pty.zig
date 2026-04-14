@@ -1,8 +1,8 @@
-// Unix PTY Backend via forkpty (D-08)
+// Unix PTY Backend via forkpty
 //
 // This backend uses POSIX forkpty() to create a pseudo-terminal and spawn
 // a child process. Resize signaling uses ioctl(TIOCSWINSZ) which causes
-// the kernel to send SIGWINCH to the child process automatically (D-10).
+// the kernel to send SIGWINCH to the child process automatically.
 //
 // This file only compiles on Linux and macOS targets.
 
@@ -70,12 +70,12 @@ pub const PosixPty = struct {
             const default_args = [_:null]?[*:0]const u8{shell_path};
             const exec_args = if (args) |a| a else &default_args;
 
-            // Change to working directory if specified (D-23: per-pane CWD)
+            // Change to working directory if specified
             if (working_dir) |wd| {
                 _ = c.chdir(wd);
             }
 
-            // Set TERM and COLORTERM for proper terminal capability detection (D-48)
+            // Set TERM and COLORTERM for proper terminal capability detection
             _ = c.setenv("TERM", "xterm-256color", 1);
             _ = c.setenv("COLORTERM", "truecolor", 1);
 
@@ -126,7 +126,7 @@ pub const PosixPty = struct {
         return @intCast(result);
     }
 
-    /// Resize the pseudo-terminal (D-10).
+    /// Resize the pseudo-terminal.
     /// The kernel sends SIGWINCH to the child process automatically.
     pub fn resize(self: *PosixPty, cols: u16, rows: u16) PosixPtyError!void {
         var ws: c.struct_winsize = .{

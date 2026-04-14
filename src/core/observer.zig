@@ -1,4 +1,4 @@
-/// Observer hooks for agent monitor (D-06).
+/// Observer hooks for agent monitor.
 /// Agent Monitor uses these hooks to tap into terminal output
 /// without refactoring the parser.
 pub const Event = union(enum) {
@@ -27,7 +27,7 @@ pub const Observer = struct {
     bell_ctx: ?*anyopaque = null,
 
     /// Agent output callback. Fired on every raw output event.
-    /// Used to clear waiting state (D-04), reset idle timer, and schedule scan.
+    /// Used to clear waiting state, reset idle timer, and schedule scan.
     onAgentOutput: ?*const fn (ctx: ?*anyopaque) void = null,
     agent_ctx: ?*anyopaque = null,
 

@@ -1,4 +1,4 @@
-/// E2E tests: Platform-specific PTY verification (D-38).
+/// E2E tests: Platform-specific PTY verification.
 ///
 /// On Windows: verifies ConPTY creation and resize.
 /// On Unix: verifies posix PTY creation and resize.

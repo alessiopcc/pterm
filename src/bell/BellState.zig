@@ -5,8 +5,8 @@
 ///   - Render thread: calls `consumeTrigger()`, `updateFlash()`, reads `flash_active`, `show_badge`.
 ///
 /// Timing constants from UI-SPEC / CONTEXT decisions:
-///   - D-27: flash duration 120ms
-///   - D-30: rate limit 500ms
+///   - flash duration 120ms
+///   - rate limit 500ms
 const std = @import("std");
 
 pub const BellState = struct {
@@ -23,8 +23,8 @@ pub const BellState = struct {
     /// Tab badge (set on bell, cleared on tab focus).
     show_badge: bool = false,
 
-    pub const FLASH_DURATION_NS: i128 = 120_000_000; // 120ms per D-27/UI-SPEC
-    pub const RATE_LIMIT_NS: i128 = 500_000_000; // 500ms per D-30
+    pub const FLASH_DURATION_NS: i128 = 120_000_000; // 120ms
+    pub const RATE_LIMIT_NS: i128 = 500_000_000; // 500ms
 
     /// Called from read thread when BEL detected. Thread-safe via atomic.
     /// Returns true if bell was accepted (not rate-limited).

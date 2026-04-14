@@ -1,4 +1,4 @@
-/// Surface coordinator: wires TermIO + Renderer + FontGrid + Input (D-15 render thread).
+/// Surface coordinator: wires TermIO + Renderer + FontGrid + Input.
 ///
 /// Thread model:
 ///   Main thread:   GLFW events, input dispatch, OSC title updates
@@ -68,19 +68,19 @@ pub const Surface = struct {
     frame_arena: std.heap.ArenaAllocator,
     allocator: std.mem.Allocator,
 
-    // D-15: Render thread synchronization
+    // Render thread synchronization
     frame_requested: std.atomic.Value(bool),
     should_quit: std.atomic.Value(bool),
     render_thread: ?std.Thread,
 
-    // D-14: Resize state communicated to render thread
+    // Resize state communicated to render thread
     pending_resize: std.atomic.Value(bool),
     new_fb_width: std.atomic.Value(u32),
     new_fb_height: std.atomic.Value(u32),
     new_grid_cols: std.atomic.Value(u16),
     new_grid_rows: std.atomic.Value(u16),
 
-    // D-13: OSC title state communicated to main thread
+    // OSC title state communicated to main thread
     pending_title_update: std.atomic.Value(bool),
     osc_title: [256]u8,
     osc_title_len: std.atomic.Value(u32),
@@ -89,10 +89,10 @@ pub const Surface = struct {
     pending_font_change: std.atomic.Value(bool),
     new_font_size: std.atomic.Value(u32), // stored as size_pt * 100 (fixed point)
 
-    // D-30: Runtime color palette from config (bridges config hex -> renderer Color)
+    // Runtime color palette from config (bridges config hex -> renderer Color)
     renderer_palette: RendererPalette,
 
-    // Frame counter for periodic diagnostics logging (D-17)
+    // Frame counter for periodic diagnostics logging
     frame_count: u64,
 
     // Text selection state (clipboard integration)
@@ -181,7 +181,7 @@ pub const Surface = struct {
         self.allocator.destroy(self.font_grid);
     }
 
-    /// Spawn the render thread (D-15). Called after GL context detached from main thread.
+    /// Spawn the render thread. Called after GL context detached from main thread.
     pub fn startRenderThread(self: *Surface) !void {
         self.render_thread = try std.Thread.spawn(.{}, renderThreadMain, .{self});
     }
@@ -195,7 +195,7 @@ pub const Surface = struct {
         self.render_thread = null;
     }
 
-    /// Render thread entry point (D-15).
+    /// Render thread entry point.
     /// Owns the GL context for its entire lifetime.
     fn renderThreadMain(self: *Surface) void {
         // 1. Acquire GL context on this thread
@@ -239,7 +239,7 @@ pub const Surface = struct {
             self.font_grid.getAtlasMut().clearColorDirty();
         }
 
-        // 6. Open perf log file if --perf flag (D-17: observable latency measurement)
+        // 6. Open perf log file if --perf flag
         const perf_log = if (self.perf_logging)
             std.fs.cwd().createFile("pterm_perf.log", .{}) catch null
         else
@@ -364,7 +364,7 @@ pub const Surface = struct {
                 // Draw frame with config-driven background color
                 backend.drawFrame(&rs, self.renderer_palette.default_bg);
 
-                // Periodic diagnostics: log frame timing to pterm_perf.log (D-17)
+                // Periodic diagnostics: log frame timing to pterm_perf.log
                 self.frame_count += 1;
                 if (perf_log) |f| {
                     if (self.frame_count == 1 or self.frame_count % 60 == 0) {
@@ -420,7 +420,7 @@ pub const Surface = struct {
         // Only handle press and repeat events
         if (action != .press and action != .repeat) return;
 
-        // Store modifier state for charCallback (D-21: logical key detection)
+        // Store modifier state for charCallback
         self.last_mods = glfwModsToModifiers(mods);
 
         // --debug-keys: write each keystroke to pterm_debug.log (file opened once at init)
@@ -489,17 +489,17 @@ pub const Surface = struct {
     }
 
     /// Handle character input from GLFW callback (main thread).
-    /// Combines charCallback codepoint with stored modifier state for logical key lookup (D-21).
+    /// Combines charCallback codepoint with stored modifier state for logical key lookup.
     pub fn handleCharInput(self: *Surface, codepoint: u32) void {
         const cp: u21 = if (codepoint <= 0x10FFFF) @intCast(codepoint) else return;
 
-        // Build KeyCombo from logical character + stored modifier state (D-21)
+        // Build KeyCombo from logical character + stored modifier state
         const combo = keybindings.KeyCombo{
             .key = .{ .char = if (cp >= 'A' and cp <= 'Z') cp + 32 else cp },
             .mods = self.last_mods,
         };
 
-        // Check reserved clipboard keys first (D-19)
+        // Check reserved clipboard keys first
         if (keybindings.isReservedClipboardKey(combo)) {
             self.handleClipboardAction(combo);
             return;
@@ -557,15 +557,15 @@ pub const Surface = struct {
         }
     }
 
-    /// Handle clipboard action for reserved keys (D-19).
-    /// D-17: Smart Ctrl+C -- copies selection when active, sends SIGINT (0x03) when not.
+    /// Handle clipboard action for reserved keys.
+    /// Smart Ctrl+C -- copies selection when active, sends SIGINT (0x03) when not.
     pub fn handleClipboardAction(self: *Surface, combo: keybindings.KeyCombo) void {
         const is_c = switch (combo.key) {
             .char => |c| c == 'c',
             .special => false,
         };
         if (is_c) {
-            // D-17: Smart Ctrl+C -- copy if selection active, send SIGINT if not
+            // Smart Ctrl+C -- copy if selection active, send SIGINT if not
             if (self.selection.range != null) {
                 self.copySelection(self.scroll_offset);
                 // selection.clear() already called inside copySelection
@@ -578,7 +578,7 @@ pub const Surface = struct {
         }
     }
 
-    /// Copy current selection to clipboard (D-15: clipboard integration).
+    /// Copy current selection to clipboard.
     /// Extracts text from terminal screen buffer via Selection.getSelectedText
     /// and sets the GLFW system clipboard. Clears selection after copy.
     pub fn copySelection(self: *Surface, scroll_offset: u32) void {
@@ -743,12 +743,12 @@ pub const Surface = struct {
         self.requestFrame();
     }
 
-    /// Handle framebuffer resize from GLFW callback (main thread, D-14).
+    /// Handle framebuffer resize from GLFW callback (main thread).
     pub fn handleResize(self: *Surface, fb_width: u32, fb_height: u32) void {
         const metrics = self.font_grid.getMetrics();
         if (metrics.cell_width <= 0 or metrics.cell_height <= 0) return;
 
-        // Compute new grid dimensions (D-14: snap to cell grid)
+        // Compute new grid dimensions
         const padding = self.config.grid_padding();
         const usable_w: f32 = @as(f32, @floatFromInt(fb_width)) - 2.0 * padding;
         const usable_h: f32 = @as(f32, @floatFromInt(fb_height)) - 2.0 * padding;
@@ -788,8 +788,8 @@ pub const Surface = struct {
         self.requestFrame();
     }
 
-    /// Apply a new config after hot-reload (D-35).
-    /// Guards restart-required fields per D-16.
+    /// Apply a new config after hot-reload.
+    /// Guards restart-required fields.
     /// Currently guarded: font family (atlas rebuild).
     /// Structural guards for: keybindings (mid-session conflict avoidance),
     /// PTY/shell settings (requires process restart).
@@ -798,20 +798,20 @@ pub const Surface = struct {
     pub fn applyConfig(self: *Surface, new_config: Config) void {
         const old = self.config;
 
-        // D-16: Font family changes require restart (atlas rebuild)
+        // Font family changes require restart (atlas rebuild)
         const old_family = old.font_family() orelse "";
         const new_family = new_config.font_family() orelse "";
         if (!std.mem.eql(u8, old_family, new_family)) {
             std.log.warn("Font family change requires restart to apply (atlas rebuild). Skipping.", .{});
         }
 
-        // D-16: Keybinding changes require restart.
+        // Keybinding changes require restart.
         // keybinding_map is built once at init and never rebuilt on hot-reload.
         // When Config gains a keybindings field, compare here and warn on change.
         // For now, keybinding config changes on disk have no effect until restart,
-        // which is the correct D-16 behavior — this comment documents the intent.
+        // which is the correctbehavior — this comment documents the intent.
 
-        // D-16: Shell/PTY settings require restart
+        // Shell/PTY settings require restart
         // (Config currently uses hardcoded shell; guard is for future TOML shell config)
 
         // Apply config but preserve restart-required fields from old config
@@ -820,7 +820,7 @@ pub const Surface = struct {
 
         self.config = effective;
 
-        // Live-reloadable per D-15: colors — rebuild renderer palette from new config
+        // Live-reloadable colors — rebuild renderer palette from new config
         self.renderer_palette = theme_mod.buildRendererPaletteFromConfig(effective.colors, effective.theme);
 
         // Font size (live-reloadable, unlike font family)

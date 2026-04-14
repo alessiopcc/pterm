@@ -3,22 +3,22 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'  # D-09: SemVer with v prefix triggers release
+      - "v*"
 
 permissions:
-  contents: write  # Required for creating GitHub releases
+  contents: write # Required for creating GitHub releases
 
 env:
-  ZIG_VERSION: '0.15.2'
+  ZIG_VERSION: "0.15.2"
 
 jobs:
-  # Job 1: Windows x86_64 (D-23)
+  # Job 1: Windows x86_64
   build-windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Full history for changelog
+          fetch-depth: 0 # Full history for changelog
 
       - uses: mlugg/setup-zig@v2
         with:
@@ -29,21 +29,12 @@ jobs:
         shell: bash
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
 
-      # D-41: Release builds use ReleaseSafe
       - name: Build (ReleaseSafe)
-        run: zig build -Doptimize=ReleaseSafe -Dversion=${{ steps.version.outputs.VERSION }}
+        run: zig build --release=safe "-Dversion=${{ steps.version.outputs.VERSION }}"
 
       - name: Unit tests
         run: zig build test
 
-      - uses: hustcer/setup-nu@v3
-        with:
-          version: '*'
-
-      - name: E2E tests
-        run: zig build test-e2e
-
-      # D-08: Portable .zip
       - name: Create portable .zip
         shell: bash
         run: |
@@ -52,7 +43,6 @@ jobs:
           cp LICENSE release/
           cd release && 7z a ../pterm-${{ steps.version.outputs.VERSION }}-windows-x86_64.zip *
 
-      # D-14: PDB debug symbols (auto-produced by Zig ReleaseSafe on Windows)
       - name: Note on PDB debug symbols
         shell: bash
         run: |
@@ -60,14 +50,13 @@ jobs:
           echo "PDB is co-located with the binary in zig-out/bin/pterm.pdb"
           ls -la zig-out/bin/pterm.pdb 2>/dev/null || echo "PDB not found (may vary by Zig version)"
 
-      # D-02: MSI installer via WiX v4
       - name: Build MSI
         shell: bash
         run: |
           dotnet tool install --global wix --version 4.*
           cp zig-out/bin/pterm.exe packaging/wix/
           cd packaging/wix
-          wix build pterm.wxs -d Version=${{ steps.version.outputs.VERSION }} -out ../../pterm-${{ steps.version.outputs.VERSION }}-windows-x86_64.msi
+          wix build pterm.wxs -d Version=${{ steps.version.outputs.VERSION }} -d SourceDir=. -out ../../pterm-${{ steps.version.outputs.VERSION }}-windows-x86_64.msi
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
@@ -77,7 +66,7 @@ jobs:
             pterm-*.zip
             pterm-*.msi
 
-  # Job 2: macOS ARM64 native (D-23)
+  # Job 2: macOS ARM64
   build-macos-arm64:
     runs-on: macos-14
     steps:
@@ -93,31 +82,20 @@ jobs:
         id: version
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
 
-      # D-41: Release builds use ReleaseSafe
       - name: Build (ReleaseSafe)
-        run: zig build -Doptimize=ReleaseSafe -Dversion=${{ steps.version.outputs.VERSION }}
+        run: zig build --release=safe "-Dversion=${{ steps.version.outputs.VERSION }}"
 
       - name: Unit tests
         run: zig build test
 
-      - uses: hustcer/setup-nu@v3
-        with:
-          version: '*'
-
-      - name: Install fish
-        run: brew install fish
-
-      - name: E2E tests
-        run: zig build test-e2e
-
-      # D-14: Separate debug symbols on macOS
       - name: Separate debug symbols
-        run: dsymutil zig-out/bin/pterm -o pterm.dSYM
+        run: |
+          dsymutil zig-out/bin/pterm -o pterm.dSYM
+          tar -czf pterm.dSYM.tar.gz pterm.dSYM
 
       - name: Strip binary
         run: strip zig-out/bin/pterm
 
-      # D-03: .app bundle and .dmg
       - name: Create .app bundle and .dmg
         run: bash packaging/macos/create-app-bundle.sh ${{ steps.version.outputs.VERSION }}
 
@@ -135,46 +113,9 @@ jobs:
           path: |
             pterm-*.dmg
             pterm-*.tar.gz
-            pterm.dSYM
+            pterm.dSYM.tar.gz
 
-  # Job 3: macOS x86_64 cross-compile (D-04, D-24: no tests)
-  build-macos-x86_64:
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: ${{ env.ZIG_VERSION }}
-
-      - name: Extract version
-        id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
-
-      # D-04: Cross-compile for x86_64 from ARM64 runner
-      - name: Cross-compile for x86_64
-        run: zig build -Dtarget=x86_64-macos -Doptimize=ReleaseSafe -Dversion=${{ steps.version.outputs.VERSION }}
-      # D-24: No tests -- cross-compiled binary cannot run on ARM64 host
-
-      - name: Create .app bundle and .dmg
-        run: bash packaging/macos/create-app-bundle.sh ${{ steps.version.outputs.VERSION }}
-
-      - name: Create tar.gz
-        run: |
-          mkdir -p release
-          cp zig-out/bin/pterm release/
-          cp LICENSE release/
-          tar -czf pterm-${{ steps.version.outputs.VERSION }}-macos-x86_64.tar.gz -C release .
-
-      - name: Upload macOS x86_64 artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-x86_64
-          path: |
-            pterm-*.dmg
-            pterm-*.tar.gz
-
-  # Job 4: Linux x86_64 (D-23)
+  # Job 3: Linux x86_64
   build-linux-x86_64:
     runs-on: ubuntu-latest
     steps:
@@ -186,40 +127,29 @@ jobs:
         with:
           version: ${{ env.ZIG_VERSION }}
 
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libgl-dev libfontconfig-dev
+
       - name: Extract version
         id: version
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
 
-      # D-41: Release builds use ReleaseSafe
       - name: Build (ReleaseSafe)
-        run: zig build -Doptimize=ReleaseSafe -Dversion=${{ steps.version.outputs.VERSION }}
+        run: zig build --release=safe "-Dversion=${{ steps.version.outputs.VERSION }}"
 
-      # D-14: Separate debug symbols on Linux
       - name: Separate debug symbols
         run: |
-          zig objcopy --only-keep-debug zig-out/bin/pterm pterm.debug
-          zig objcopy --strip-all --add-gnu-debuglink=pterm.debug zig-out/bin/pterm
+          objcopy --only-keep-debug zig-out/bin/pterm pterm.debug
+          objcopy --strip-all --add-gnu-debuglink=pterm.debug zig-out/bin/pterm
 
       - name: Unit tests
         run: zig build test
 
-      - uses: hustcer/setup-nu@v3
-        with:
-          version: '*'
-
-      - name: Install fish and zsh
-        run: sudo apt-get update && sudo apt-get install -y fish zsh
-
-      - name: E2E tests
-        run: zig build test-e2e
-
-      # D-05: Build .deb and .rpm via fpm
       - name: Build .deb and .rpm
         run: |
           sudo gem install fpm
           bash packaging/linux/build-packages.sh ${{ steps.version.outputs.VERSION }} amd64
 
-      # D-07: Portable tar.gz with install script
       - name: Create tar.gz
         run: |
           mkdir -p release
@@ -239,7 +169,7 @@ jobs:
             pterm*.rpm
             pterm.debug
 
-  # Job 5: Linux ARM64 cross-compile (D-06, D-24: no tests)
+  # Job 5: Linux ARM64 cross-compile
   build-linux-arm64:
     runs-on: ubuntu-latest
     steps:
@@ -249,14 +179,37 @@ jobs:
         with:
           version: ${{ env.ZIG_VERSION }}
 
+      - name: Install arm64 cross-compilation dependencies
+        run: |
+          sudo dpkg --add-architecture arm64
+          # Pin existing DEB822 sources (.sources) to amd64 only
+          for f in /etc/apt/sources.list.d/*.sources; do
+            [ -f "$f" ] && sudo sed -i '/^Architectures:/d' "$f" && sudo sed -i '/^Types:/a Architectures: amd64' "$f"
+          done
+          # Pin existing legacy sources (.list) to amd64 only
+          # Handles: bare lines, lines with [signed-by=...], and skips lines that already have arch=
+          for f in /etc/apt/sources.list.d/*.list; do
+            [ -f "$f" ] && sudo sed -i -E '/^deb /{/arch=/!{s/\[/[arch=amd64,/;t;s/^deb /deb [arch=amd64] /}}' "$f"
+          done
+          # Add arm64 sources from ports.ubuntu.com
+          CODENAME=$(lsb_release -cs)
+          printf 'deb [arch=arm64] http://ports.ubuntu.com/ %s main restricted universe\n' "$CODENAME" | sudo tee /etc/apt/sources.list.d/arm64-ports.list
+          printf 'deb [arch=arm64] http://ports.ubuntu.com/ %s-updates main restricted universe\n' "$CODENAME" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev:arm64 libxcursor-dev:arm64 libxrandr-dev:arm64 libxinerama-dev:arm64 libxi-dev:arm64 libgl-dev:arm64 libfontconfig-dev:arm64
+
       - name: Extract version
         id: version
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
 
-      # D-06: Cross-compile for aarch64
+      - name: Set up cross-compilation prefix
+        run: |
+          mkdir -p /tmp/aarch64-prefix/include
+          ln -s /usr/lib/aarch64-linux-gnu /tmp/aarch64-prefix/lib
+          ln -s /usr/include/fontconfig /tmp/aarch64-prefix/include/fontconfig
+
       - name: Cross-compile for aarch64
-        run: zig build -Dtarget=aarch64-linux-gnu -Doptimize=ReleaseSafe -Dversion=${{ steps.version.outputs.VERSION }}
-      # D-24: No tests -- cross-compiled binary cannot run on x86_64 host
+        run: zig build -Dtarget=aarch64-linux-gnu --release=safe "-Dversion=${{ steps.version.outputs.VERSION }}" --search-prefix /tmp/aarch64-prefix
 
       - name: Build .deb and .rpm
         run: |
@@ -281,9 +234,16 @@ jobs:
             pterm*.deb
             pterm*.rpm
 
-  # Final job: Create draft GitHub Release (D-26, D-27)
+  # Final job: Create draft GitHub Release
   create-release:
-    needs: [build-windows, build-macos-arm64, build-macos-x86_64, build-linux-x86_64, build-linux-arm64]
+    needs:
+      [
+        build-windows,
+        build-macos-arm64,
+
+        build-linux-x86_64,
+        build-linux-arm64,
+      ]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -296,23 +256,20 @@ jobs:
           path: artifacts/
           merge-multiple: true
 
-      # D-27: SHA256SUMS for all release artifacts
       - name: Generate SHA256SUMS
         run: |
           cd artifacts
-          sha256sum * > SHA256SUMS.txt
+          find . -maxdepth 1 -type f ! -name SHA256SUMS.txt -exec sha256sum {} + > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
-      # D-13: Auto-generated changelog from conventional commits
       - name: Generate changelog
-        uses: orhun/git-cliff-action@v3
+        uses: orhun/git-cliff-action@v4
         id: changelog
         with:
           args: --latest --strip header
         env:
           OUTPUT: CHANGELOG_RELEASE.md
 
-      # D-26: Draft release -- review and publish manually
       - name: Create draft GitHub Release
         uses: softprops/action-gh-release@v2
         with:

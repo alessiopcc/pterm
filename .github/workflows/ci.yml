@@ -36,7 +36,6 @@ jobs:
         with:
           version: 0.15.2
 
-      # D-22: Cache Zig build artifacts
       - name: Cache Zig build artifacts
         uses: actions/cache@v4
         with:
@@ -54,16 +53,13 @@ jobs:
       - name: Build
         run: zig build
 
-      # D-21: Verify --version flag works
       - name: Verify --version
         run: ./zig-out/bin/pterm --version
         shell: bash
 
-      # D-41: Unit tests run in Debug mode (default optimize)
       - name: Unit tests
         run: zig build test
 
-      # D-34: Install additional shells for E2E tests
       - name: Install nushell
         uses: hustcer/setup-nu@v3
         with:
@@ -77,8 +73,6 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y fish zsh
 
-      # D-31: E2E tests (Linux only — macOS PTY tests exceed CI time limits,
-      # Windows ConPTY hangs in headless CI)
       - name: E2E tests
         if: runner.os == 'Linux'
         run: zig build test-e2e

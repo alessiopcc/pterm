@@ -21,7 +21,7 @@ pub fn main() !void {
     // Parse CLI args (string values duped into arena)
     const cli_args = try cli_mod.parse(arena_alloc);
 
-    // Handle --version (D-09, D-15)
+    // Handle --version
     if (cli_args.version) {
         const version_msg = "pterm " ++ build_options.version ++ "\n";
         const stdout_file = std.fs.File.stdout();
@@ -32,7 +32,7 @@ pub fn main() !void {
         std.process.exit(0);
     }
 
-    // Handle --init-config (D-10, D-11)
+    // Handle --init-config
     if (cli_args.init_config) {
         const default_config = @embedFile("config/default_config.toml");
         const home = std.process.getEnvVarOwned(arena_alloc, if (builtin.os.tag == .windows) "USERPROFILE" else "HOME") catch {
@@ -71,13 +71,13 @@ pub fn main() !void {
         std.process.exit(0);
     }
 
-    // Handle --dump-config (D-04)
+    // Handle --dump-config
     if (cli_args.dump_config) {
         defaults_mod.dumpConfig();
         return;
     }
 
-    // Handle --check-config (D-05)
+    // Handle --check-config
     if (cli_args.check_config) {
         const config = Config.load(arena_alloc, cli_args) catch |err| {
             std.log.err("Config error: {}", .{err});
@@ -88,7 +88,7 @@ pub fn main() !void {
         return;
     }
 
-    // Handle --set-keybindings: launch interactive TUI and exit (D-22)
+    // Handle --set-keybindings: launch interactive TUI and exit
     if (cli_args.set_keybindings) {
         const config_path = cli_args.config_path orelse (defaults_mod.defaultConfigPathAlloc(arena_alloc) catch null) orelse {
             std.log.err("Cannot determine config path. Use --config <path>.", .{});
@@ -107,7 +107,7 @@ pub fn main() !void {
     // Load full config pipeline: defaults -> TOML file -> env vars -> CLI flags
     const config = try Config.load(arena_alloc, cli_args);
 
-    // GPU check (D-49): verify OpenGL 3.3 before creating the real window.
+    // GPU check: verify OpenGL 3.3 before creating the real window.
     // This provides a clear error message instead of cryptic GL failures.
     {
         const glfw = @import("zglfw");

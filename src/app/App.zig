@@ -5,7 +5,7 @@
 /// Each pane has its own TermIO + PTY. The render thread uses Compositor
 /// to iterate visible panes and render each in its own viewport/scissor rect.
 ///
-/// Thread model (D-15):
+/// Thread model:
 ///   Main thread:   GLFW events, input dispatch, OSC title updates, pane operations
 ///   Render thread: GL context, Compositor.renderFrame, buffer swap
 ///
@@ -103,7 +103,7 @@ pub const PaneData = struct {
     pane_id: u32,
     tab_index: u32,
 
-    /// CWD tracked via OSC 7 or inherited from parent pane (D-03, D-23).
+    /// CWD tracked via OSC 7 or inherited from parent pane.
     cwd: [256]u8,
     cwd_len: std.atomic.Value(u32),
 
@@ -194,7 +194,7 @@ pub const App = struct {
     // Frame arena for per-frame allocations
     frame_arena: std.heap.ArenaAllocator,
 
-    /// Shared agent detector (one per app, patterns are global per D-03).
+    /// Shared agent detector (one per app, patterns are global.
     agent_detector: ?AgentDetector = null,
 
     /// Notification manager: per-pane cooldown, focus suppression, OS notification dispatch.
@@ -521,8 +521,8 @@ pub const App = struct {
         });
         errdefer pty.deinit();
 
-        // D-07: per-pane shell override > global config > auto-detect
-        // D-09: if per-pane shell not specified, inherit global [shell] config
+        // per-pane shell override > global config > auto-detect
+        // if per-pane shell not specified, inherit global [shell] config
         const effective_program = shell_override orelse self.config.shell.program;
         const effective_args = shell_args_override orelse self.config.shell.args;
         const shell_config = shell_mod.resolveShell(
@@ -532,7 +532,7 @@ pub const App = struct {
         );
         defer shell_config.deinit();
 
-        // D-23: pass working_dir to PTY spawn for per-pane CWD
+        // pass working_dir to PTY spawn for per-pane CWD
         var wd_buf: [1024]u8 = undefined;
         const wd_z: ?[*:0]const u8 = if (working_dir) |wd| blk: {
             if (wd.len < wd_buf.len) {
@@ -729,7 +729,7 @@ pub const App = struct {
         self.window.deinit();
     }
 
-    /// Main thread event loop (D-15: main thread does NOT do GL calls).
+    /// Main thread event loop.
     pub fn run(self: *App) !void {
         while (!self.window.shouldClose()) {
             // Apply pending OSC title from focused pane

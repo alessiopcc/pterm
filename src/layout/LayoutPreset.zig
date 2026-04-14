@@ -1,4 +1,4 @@
-/// Layout preset definitions and parser for TOML config (D-35 through D-40).
+/// Layout preset definitions and parser for TOML config.
 ///
 /// Named layout presets allow users to define workspace configurations
 /// in TOML with tabs, panes, working directories, and startup commands.
@@ -30,8 +30,8 @@ pub const PresetPane = struct {
     cmd: ?[]const u8 = null,
     split: ?SplitDirection = null, // null for the first pane (root)
     ratio: f32 = 0.5,
-    shell: ?[]const u8 = null, // D-07: per-pane shell override
-    shell_args: ?[]const []const u8 = null, // D-08: per-pane shell args
+    shell: ?[]const u8 = null, // per-pane shell override
+    shell_args: ?[]const []const u8 = null, // per-pane shell args
 };
 
 /// A tab in a preset, containing one or more panes.
@@ -272,7 +272,7 @@ fn parseInlineStringArray(allocator: std.mem.Allocator, value: []const u8) !?[]c
     return try items.toOwnedSlice(allocator);
 }
 
-/// Parse a split direction string (D-37).
+/// Parse a split direction string.
 /// "right" or "horizontal" -> .vertical (side by side)
 /// "bottom" or "vertical" -> .horizontal (stacked)
 /// "left" -> .vertical, "top" -> .horizontal

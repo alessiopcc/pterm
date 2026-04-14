@@ -1,4 +1,4 @@
-/// Selection tracking and text extraction (D-14: copy-on-select).
+/// Selection tracking and text extraction.
 ///
 /// Tracks mouse-based text selection ranges and extracts selected text
 /// from the terminal screen. Supports normal (click-drag), word (double-click),
@@ -74,7 +74,7 @@ pub const Selection = struct {
     }
 
     /// End the selection and return the final range.
-    /// Per D-14: this is when copy-on-select triggers.
+    /// Per this is when copy-on-select triggers.
     pub fn finish(self: *Selection) ?SelectionRange {
         self.active = false;
         if (self.range) |r| {

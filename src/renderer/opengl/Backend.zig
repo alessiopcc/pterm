@@ -1,4 +1,4 @@
-/// OpenGL 3.3 rendering backend for the terminal grid (D-03, D-04).
+/// OpenGL 3.3 rendering backend for the terminal grid.
 ///
 /// Implements instanced quad rendering with four passes:
 ///   Pass 1: Cell backgrounds (opaque)
@@ -65,7 +65,7 @@ pub const OpenGLBackend = struct {
     icon_texture: gl.uint,
     icon_size: u32,
 
-    // Diagnostics (D-17)
+    // Diagnostics
     diag: Diagnostics,
 
     pub const InitError = error{
@@ -337,7 +337,7 @@ pub const OpenGLBackend = struct {
     }
 
     /// Draw a complete frame from a RenderState snapshot.
-    /// Four-pass pipeline: backgrounds, text, block elements, cursor (D-04).
+    /// Four-pass pipeline: backgrounds, text, block elements, cursor.
     /// Accepts an optional background color for clear; uses default palette if null.
     pub fn drawFrame(self: *OpenGLBackend, state: *const types.RenderState, bg_color: ?Color) void {
         const start_ns = std.time.nanoTimestamp();
@@ -360,7 +360,7 @@ pub const OpenGLBackend = struct {
         const grid_offset_x = state.grid_padding;
         const grid_offset_y = state.grid_padding;
 
-        // ---- Pass 1: Cell Backgrounds (D-04) ----
+        // ---- Pass 1: Cell Backgrounds ----
         {
             self.bg_program.use();
             self.bg_program.setUniformMat4("uProjection", self.projection);
@@ -385,7 +385,7 @@ pub const OpenGLBackend = struct {
             }
         }
 
-        // ---- Pass 2: Text Glyphs (D-04) ----
+        // ---- Pass 2: Text Glyphs ----
         {
             self.text_program.use();
             self.text_program.setUniformMat4("uProjection", self.projection);
@@ -432,7 +432,7 @@ pub const OpenGLBackend = struct {
             }
         }
 
-        // ---- Pass 3: Block Elements (D-01, D-02) ----
+        // ---- Pass 3: Block Elements ----
         if (self.block_program) |bp| {
             const block_count = state.block_cells.len;
             if (block_count > 0) {
@@ -458,7 +458,7 @@ pub const OpenGLBackend = struct {
             }
         }
 
-        // ---- Pass 4: Cursor Overlay (D-04) ----
+        // ---- Pass 4: Cursor Overlay ----
         if (state.cursor.visible) {
             self.cursor_program.use();
             self.cursor_program.setUniformMat4("uProjection", self.projection);
@@ -484,7 +484,7 @@ pub const OpenGLBackend = struct {
 
         gl.BindVertexArray(0);
 
-        // Record frame timing (D-17)
+        // Record frame timing
         const end_ns = std.time.nanoTimestamp();
         const elapsed_ns = end_ns - start_ns;
         self.diag.frame_time_us = if (elapsed_ns > 0)
@@ -564,7 +564,7 @@ pub const OpenGLBackend = struct {
     }
 
     /// Draw a filled rectangle with alpha blending enabled.
-    /// Used for semi-transparent overlays (bell flash D-27).
+    /// Used for semi-transparent overlays (bell flash).
     pub fn drawFilledRectAlpha(self: *OpenGLBackend, rect: layout_types.Rect, color: Color) void {
         gl.Viewport(0, 0, @intCast(self.viewport_width), @intCast(self.viewport_height));
         const gl_y: i32 = @as(i32, @intCast(self.viewport_height)) - rect.y - @as(i32, @intCast(rect.h));

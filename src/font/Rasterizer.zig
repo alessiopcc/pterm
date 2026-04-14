@@ -1,4 +1,4 @@
-/// Platform-dispatched glyph rasterizer (D-07).
+/// Platform-dispatched glyph rasterizer.
 ///
 /// FreeType on Linux/Windows, CoreText on macOS.
 /// Both backends implement an identical interface for glyph rasterization

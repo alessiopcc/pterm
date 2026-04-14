@@ -1,4 +1,4 @@
-/// E2E tests: Stability and stress testing (D-39).
+/// E2E tests: Stability and stress testing.
 ///
 /// Tests rapid PTY create/close cycles, fast terminal output,
 /// and multiple simultaneous shells.

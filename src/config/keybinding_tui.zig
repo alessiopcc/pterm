@@ -1,4 +1,4 @@
-/// Interactive TUI for keybinding configuration (D-22).
+/// Interactive TUI for keybinding configuration.
 ///
 /// `pterm --set-keybindings` launches this mode. Shows all actions with their
 /// current bindings, lets user type new combos as strings (e.g. "ctrl+n"),

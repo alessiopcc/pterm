@@ -1,7 +1,7 @@
 /// Keybinding system tests.
 ///
-/// Tests parseKeyCombo, isReservedClipboardKey, buildMap (with D-18 multi-combo),
-/// conflict detection (D-25), unbind via none (D-23), and formatKeyCombo.
+/// Tests parseKeyCombo, isReservedClipboardKey, buildMap (withmulti-combo),
+/// conflict detection, unbind via none, and formatKeyCombo.
 const std = @import("std");
 const kb = @import("keybindings");
 
@@ -67,7 +67,7 @@ test "parse empty string returns error" {
 // isReservedClipboardKey tests
 // -------------------------------------------------------
 
-test "reserved: ctrl+c (D-17 smart copy/SIGINT)" {
+test "reserved: ctrl+c" {
     const combo = try kb.parseKeyCombo("ctrl+c");
     try std.testing.expect(kb.isReservedClipboardKey(combo));
 }
@@ -77,7 +77,7 @@ test "reserved: ctrl+v" {
     try std.testing.expect(kb.isReservedClipboardKey(combo));
 }
 
-test "reserved: super+c (D-17 smart copy/SIGINT on macOS)" {
+test "reserved: super+c" {
     const combo = try kb.parseKeyCombo("super+c");
     try std.testing.expect(kb.isReservedClipboardKey(combo));
 }
@@ -170,7 +170,7 @@ test "buildMap: copy is reserved and cannot be rebound" {
     try std.testing.expect(map.get(csc) == null);
 }
 
-test "buildMap: unbind scroll_page_up with none (D-23)" {
+test "buildMap: unbind scroll_page_up with none" {
     const overrides = [_]UserBinding{
         .{ .action_name = "scroll_page_up", .combo_str = "none" },
     };
@@ -181,7 +181,7 @@ test "buildMap: unbind scroll_page_up with none (D-23)" {
     try std.testing.expect(map.get(spu) == null);
 }
 
-test "buildMap: conflict detection warns, last wins (D-25)" {
+test "buildMap: conflict detection warns, last wins" {
     const overrides = [_]UserBinding{
         .{ .action_name = "search", .combo_str = "ctrl+shift+t" },
     };

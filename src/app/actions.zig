@@ -124,7 +124,7 @@ pub fn dispatchAction(self: *App, action: keybindings.Action) void {
             self.requestFrame();
         },
 
-        // Zoom (D-24)
+        // Zoom
         .zoom_pane => actionZoomPane(self),
         .equalize_panes => {
             if (self.tab_manager.getActiveTab()) |tab| {
@@ -135,19 +135,19 @@ pub fn dispatchAction(self: *App, action: keybindings.Action) void {
         },
         .rotate_split => actionRotateSplit(self),
 
-        // Pane resize (keyboard, 1 cell per press, D-29)
+        // Pane resize (keyboard, 1 cell per press)
         .resize_pane_up => actionResizePane(self, .up),
         .resize_pane_down => actionResizePane(self, .down),
         .resize_pane_left => actionResizePane(self, .left),
         .resize_pane_right => actionResizePane(self, .right),
 
-        // Swap pane (D-30)
+        // Swap pane
         .swap_pane_up => actionSwapDirectional(self, .up),
         .swap_pane_down => actionSwapDirectional(self, .down),
         .swap_pane_left => actionSwapDirectional(self, .left),
         .swap_pane_right => actionSwapDirectional(self, .right),
 
-        // Break out pane to new tab (D-32)
+        // Break out pane to new tab
         .break_out_pane => actionBreakOut(self),
 
         .open_layout_picker => {
@@ -170,7 +170,7 @@ pub fn dispatchAction(self: *App, action: keybindings.Action) void {
             // Toggle search overlay on focused pane (viewport save/restore)
             if (getFocusedPaneData(self)) |pd| {
                 if (pd.search_state.is_open) {
-                    // Close search and restore viewport (D-08)
+                    // Close search and restore viewport
                     const saved = pd.search_state.getSavedViewport();
                     pd.search_state.close();
                     // Restore viewport position
@@ -183,7 +183,7 @@ pub fn dispatchAction(self: *App, action: keybindings.Action) void {
                         .row => |r| scr.active.pages.scroll(.{ .row = r }),
                     }
                 } else {
-                    // Open search, saving current viewport (D-08)
+                    // Open search, saving current viewport
                     const snap = pd.termio.lockTerminal();
                     defer pd.termio.unlockTerminal();
                     const scr = @constCast(snap).getScreens();
@@ -203,7 +203,7 @@ pub fn dispatchAction(self: *App, action: keybindings.Action) void {
     }
 }
 
-/// Create a new tab with a single pane (D-13).
+/// Create a new tab with a single pane.
 pub fn actionNewTab(self: *App) void {
     const tab = self.tab_manager.createTab() catch return;
     const pane_id = self.createPane(null, null, null) catch return;
@@ -254,7 +254,7 @@ pub fn actionCloseTab(self: *App) void {
     self.requestFrame();
 }
 
-/// Switch to a tab by index, clearing activity indicator (D-13).
+/// Switch to a tab by index, clearing activity indicator.
 pub fn switchToTab(self: *App, idx: usize) void {
     // Close overlays on tab switch (Pitfall 3: prevent acting on wrong pane)
     closeShellPicker(self);
@@ -262,7 +262,7 @@ pub fn switchToTab(self: *App, idx: usize) void {
     // Clear activity on the now-active tab
     if (self.tab_manager.getActiveTab()) |tab| {
         tab.has_activity = false;
-        // Clear bell badges on the now-active tab's panes (D-29)
+        // Clear bell badges on the now-active tab's panes
         const leaf_infos = tree_ops.collectLeafInfos(tab.root, self.allocator) catch &.{};
         defer if (leaf_infos.len > 0) self.allocator.free(leaf_infos);
         for (leaf_infos) |info| {
@@ -322,7 +322,7 @@ pub fn actionSplit(self: *App, direction: PaneTree.SplitDirection) void {
     self.requestFrame();
 }
 
-/// Close the focused pane (D-20, D-27).
+/// Close the focused pane.
 pub fn actionClosePane(self: *App) void {
     self.pane_mutex.lock();
     defer self.pane_mutex.unlock();
@@ -339,7 +339,7 @@ pub fn actionClosePane(self: *App) void {
         updateTabTitles(self);
         self.requestFrame();
     } else {
-        // Was last pane in tab (D-27) - close the tab
+        // Was last pane in tab - close the tab
         const idx = self.tab_manager.active_idx;
         const close_result = self.tab_manager.closeTab(idx);
         if (close_result == .last_tab_closed) {
@@ -351,7 +351,7 @@ pub fn actionClosePane(self: *App) void {
     }
 }
 
-/// Toggle zoom on the focused pane (D-24).
+/// Toggle zoom on the focused pane.
 pub fn actionZoomPane(self: *App) void {
     const tab = self.tab_manager.getActiveTab() orelse return;
 
@@ -373,7 +373,7 @@ pub fn actionZoomPane(self: *App) void {
     self.requestFrame();
 }
 
-/// Resize the focused pane by 1 cell in the given direction (D-29).
+/// Resize the focused pane by 1 cell in the given direction.
 pub fn actionResizePane(self: *App, direction: PaneTree.FocusDirection) void {
     const tab = self.tab_manager.getActiveTab() orelse return;
     const leaf = tree_ops.findLeaf(tab.root, tab.focused_pane_id) orelse return;
@@ -412,7 +412,7 @@ pub fn actionResizePane(self: *App, direction: PaneTree.FocusDirection) void {
     self.requestFrame();
 }
 
-/// Swap focused pane with neighbor in the given direction (D-30).
+/// Swap focused pane with neighbor in the given direction.
 pub fn actionSwapDirectional(self: *App, direction: PaneTree.FocusDirection) void {
     const tab = self.tab_manager.getActiveTab() orelse return;
     const leaf = tree_ops.findLeaf(tab.root, tab.focused_pane_id) orelse return;
@@ -423,7 +423,7 @@ pub fn actionSwapDirectional(self: *App, direction: PaneTree.FocusDirection) voi
     self.requestFrame();
 }
 
-/// Rotate the split direction of the focused pane's parent branch (D-33).
+/// Rotate the split direction of the focused pane's parent branch.
 pub fn actionRotateSplit(self: *App) void {
     const tab = self.tab_manager.getActiveTab() orelse return;
     const leaf = tree_ops.findLeaf(tab.root, tab.focused_pane_id) orelse return;
@@ -434,7 +434,7 @@ pub fn actionRotateSplit(self: *App) void {
     }
 }
 
-/// Break the focused pane out into a new tab (D-32).
+/// Break the focused pane out into a new tab.
 pub fn actionBreakOut(self: *App) void {
     const tab = self.tab_manager.getActiveTab() orelse return;
     const pane_id = tab.focused_pane_id;
@@ -506,7 +506,7 @@ pub fn resizeAllPanes(self: *App) void {
     }
 }
 
-/// Update tab titles from focused pane CWD and process name (D-03, D-04).
+/// Update tab titles from focused pane CWD and process name.
 /// Format: "N: basename: process [count] [Z]"
 /// Called periodically from the render loop.
 pub fn updateTabTitles(self: *App) void {
@@ -537,14 +537,14 @@ pub fn updateTabTitles(self: *App) void {
             }
         }
 
-        // Pane count badge "[N]" if >1 pane (D-03)
+        // Pane count badge "[N]" if >1 pane
         const pcount = tab.paneCount();
         if (pcount > 1) {
             const badge = std.fmt.bufPrint(title_buf[offset..], " [{d}]", .{pcount}) catch "";
             offset += badge.len;
         }
 
-        // Zoom badge "[Z]" (D-24)
+        // Zoom badge "[Z]"
         if (tab.is_zoomed) {
             if (offset + 4 <= title_buf.len) {
                 @memcpy(title_buf[offset .. offset + 4], " [Z]");
@@ -557,7 +557,7 @@ pub fn updateTabTitles(self: *App) void {
     }
 }
 
-/// Open the shell picker overlay (D-10: single action opens picker).
+/// Open the shell picker overlay.
 pub fn actionOpenShellPicker(self: *App) void {
     // Get the currently active pane's shell name for marking
     const current_shell_name: []const u8 = if (getFocusedPaneData(self)) |pd|
@@ -565,7 +565,7 @@ pub fn actionOpenShellPicker(self: *App) void {
     else
         "";
 
-    // Filter available shells (D-11, D-12, D-13)
+    // Filter available shells
     const result = shell_mod.filterAvailableShells(
         self.allocator,
         self.config.shell.program,
@@ -621,8 +621,8 @@ pub fn closeShellPicker(self: *App) void {
     }
 }
 
-/// Kill current PTY and respawn with a new shell, preserving pane position (D-01, D-03).
-/// Content is lost (D-02). Follows destroyPane ordering for teardown, createPane for spawn.
+/// Kill current PTY and respawn with a new shell, preserving pane position.
+/// Content is lost. Follows destroyPane ordering for teardown, createPane for spawn.
 pub fn respawnShell(self: *App, pd: *PaneData, shell_name: []const u8) !void {
     // Compute actual pane dimensions from bounds (not default config)
     const metrics = self.font_grid.getMetrics();
@@ -697,7 +697,7 @@ pub fn respawnShell(self: *App, pd: *PaneData, shell_name: []const u8) !void {
         pd.process_name_len = @intCast(copy_len);
     }
 
-    // Reset transient pane state (D-02: content lost)
+    // Reset transient pane state
     pd.scroll_offset = 0;
     pd.surface.scroll_offset = 0;
     pd.search_state = .{};
@@ -722,7 +722,7 @@ pub fn respawnShell(self: *App, pd: *PaneData, shell_name: []const u8) !void {
 }
 
 /// Activate a layout preset: create new tabs with the preset's pane tree.
-/// Non-destructive: opens in new tab(s), preserving existing tabs (D-39).
+/// Non-destructive: opens in new tab(s), preserving existing tabs.
 pub fn activatePreset(self: *App, preset: *const LayoutPreset.LayoutPreset) void {
     var first_new_tab_idx: ?usize = null;
 
@@ -775,7 +775,7 @@ pub fn activatePreset(self: *App, preset: *const LayoutPreset.LayoutPreset) void
                 tab.focused_pane_id = actual_id;
             }
 
-            // Execute startup command if specified (D-40)
+            // Execute startup command if specified
             if (i < tab_def.panes.len) {
                 if (tab_def.panes[i].cmd) |cmd| {
                     if (self.pane_data.get(actual_id)) |pd| {
@@ -842,7 +842,7 @@ pub fn resetFontSize(self: *App) void {
     self.requestFrame();
 }
 
-/// Run search matching for a pane's current query against scrollback history + visible screen (D-07).
+/// Run search matching for a pane's current query against scrollback history + visible screen.
 /// Extracts history rows from ghostty-vt PageList using .screen coordinates, then scans
 /// visible screen lines via .active coordinates.
 pub fn runSearchForPane(pd: *PaneData) void {
@@ -862,7 +862,7 @@ pub fn runSearchForPane(pd: *PaneData) void {
     const cols: u16 = @intCast(screen.pages.cols);
     const rows: u16 = @intCast(screen.pages.rows);
 
-    // --- Extract scrollback (history) lines from ghostty-vt PageList (D-07) ---
+    // --- Extract scrollback (history) lines from ghostty-vt PageList ---
     const total_rows = screen.pages.total_rows;
     const active_rows = screen.pages.rows;
     const history_rows: u32 = if (total_rows > active_rows) @intCast(total_rows - active_rows) else 0;

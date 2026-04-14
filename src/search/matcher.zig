@@ -1,16 +1,16 @@
 /// Smartcase string matching and scrollback+screen scanning (CORE-08).
 ///
 /// Provides:
-///   - isSmartcaseSensitive: Vim-style smartcase detection (D-02)
+///   - isSmartcaseSensitive: Vim-style smartcase detection
 ///   - matchLine: find all occurrences of query in a line of codepoints
 ///   - findMatches: scan scrollback buffer + screen lines for all matches
 ///
-/// Plain text search only (D-03). ASCII case folding sufficient for v1 (A2).
+/// Plain text search only. ASCII case folding sufficient for v1 (A2).
 /// Linear scan is O(n) and bounded by scrollback capacity (T-06-01).
 const std = @import("std");
 const SearchState = @import("SearchState.zig").SearchState;
 
-/// Returns true if the query contains any uppercase ASCII letter (D-02 smartcase).
+/// Returns true if the query contains any uppercase ASCII letter.
 /// Empty query returns false (case-insensitive).
 pub fn isSmartcaseSensitive(query: []const u8) bool {
     for (query) |c| {
@@ -82,7 +82,7 @@ pub fn matchLine(
     return results.toOwnedSlice(allocator);
 }
 
-/// Scan scrollback buffer + screen lines for all matches (D-07).
+/// Scan scrollback buffer + screen lines for all matches.
 /// Scrollback lines accessed via getLine(0..lineCount), then screen lines.
 /// Returns allocated slice of all Match structs (caller owns memory).
 pub fn findMatches(

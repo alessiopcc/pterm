@@ -38,7 +38,7 @@ pub const Config = struct {
     agent: Agent = .{},
     // [status_bar]
     status_bar: StatusBar = .{},
-    // theme = "..." top-level key (D-03: built-in theme selection)
+    // theme = "..." top-level key
     theme: ?[]const u8 = null,
     // [keybindings] — raw action=combo pairs from TOML, passed to buildMap at runtime
     keybindings: []const KeybindingEntry = &.{},
@@ -51,34 +51,34 @@ pub const Config = struct {
     /// Agent monitoring config.
     /// Controls pattern-based detection and optional idle detection.
     pub const Agent = struct {
-        /// Whether agent monitoring is active. D-29: enabled by default.
+        /// Whether agent monitoring is active. enabled by default.
         enabled: bool = true,
-        /// Pattern preset name: "conservative" or "broad". D-05: conservative default.
+        /// Pattern preset name: "conservative" or "broad". conservative default.
         preset: []const u8 = "conservative",
-        /// Whether idle detection is enabled. D-09: off by default.
+        /// Whether idle detection is enabled. off by default.
         idle_detection: bool = false,
-        /// Idle timeout in seconds. D-09: 5 seconds default.
+        /// Idle timeout in seconds. 5 seconds default.
         idle_timeout: i64 = 5,
-        /// Number of terminal lines to scan from the end. D-06: 3 lines default.
+        /// Number of terminal lines to scan from the end. 3 lines default.
         scan_lines: i64 = 3,
-        /// Custom regex/literal patterns appended to preset patterns. D-26.
+        /// Custom regex/literal patterns appended to preset patterns..
         custom_patterns: ?[]const []const u8 = null,
 
         // Notification fields
-        /// Whether OS desktop notifications are enabled. D-19: enabled by default.
+        /// Whether OS desktop notifications are enabled. enabled by default.
         notifications: bool = true,
-        /// Whether to include sound in notification. D-19: enabled by default.
+        /// Whether to include sound in notification. enabled by default.
         notification_sound: bool = true,
-        /// Per-pane cooldown in seconds between notifications. D-02: 30s default.
+        /// Per-pane cooldown in seconds between notifications. 30s default.
         notification_cooldown: i64 = 30,
-        /// Whether to suppress notification when PTerm window is focused. D-05: true by default.
+        /// Whether to suppress notification when PTerm window is focused. true by default.
         suppress_when_focused: bool = true,
     };
 
     /// Status bar config.
     /// Controls the persistent status bar at the bottom of the window.
     pub const StatusBar = struct {
-        /// Whether the status bar is visible. D-27: visible by default.
+        /// Whether the status bar is visible. visible by default.
         visible: bool = true,
     };
 
@@ -105,7 +105,7 @@ pub const Config = struct {
     pub const Font = struct {
         family: ?[]const u8 = null, // null = platform default
         size: f32 = 13.0,
-        fallback: ?[]const []const u8 = null, // D-04: Additional fallback fonts
+        fallback: ?[]const []const u8 = null, // Additional fallback fonts
     };
 
     pub const Window = struct {
@@ -130,7 +130,7 @@ pub const Config = struct {
     pub const Shell = struct {
         program: ?[]const u8 = null, // null = auto-detect
         working_dir: ?[]const u8 = null,
-        args: ?[]const []const u8 = null, // D-02: raw args appended after shell binary
+        args: ?[]const []const u8 = null, // raw args appended after shell binary
     };
 
     pub const Colors = struct {
@@ -145,7 +145,7 @@ pub const Config = struct {
         bright: AnsiBright = .{},
     };
 
-    /// Per D-01: Named ANSI color overrides for colors 0-7.
+    /// Per Named ANSI color overrides for colors 0-7.
     /// Each field is optional; null means use active theme default.
     pub const AnsiNormal = struct {
         black: ?[]const u8 = null,
@@ -158,7 +158,7 @@ pub const Config = struct {
         white: ?[]const u8 = null,
     };
 
-    /// Per D-01: Named ANSI color overrides for bright colors 8-15.
+    /// Per Named ANSI color overrides for bright colors 8-15.
     /// Each field is optional; null means use active theme default.
     pub const AnsiBright = struct {
         black: ?[]const u8 = null,
@@ -171,7 +171,7 @@ pub const Config = struct {
         white: ?[]const u8 = null,
     };
 
-    /// Per D-28: UI chrome colors for tab bar, panes, status bar, agent alerts.
+    /// Per UI chrome colors for tab bar, panes, status bar, agent alerts.
     /// Fields are schema stubs with sensible Catppuccin Mocha defaults.
     /// MUST be present in schema now so config files and themes can define them.
     pub const UiColors = struct {

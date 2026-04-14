@@ -11,7 +11,7 @@ const SplitDirection = PaneTree.SplitDirection;
 const FocusDirection = PaneTree.FocusDirection;
 const Rect = @import("Rect.zig").Rect;
 
-/// Split a leaf node into a branch with two leaf children (D-19: 50/50 split).
+/// Split a leaf node into a branch with two leaf children.
 /// The original leaf's pane_id stays in the first child.
 /// Returns a pointer to the new leaf node (second child).
 pub fn split(
@@ -33,7 +33,7 @@ pub fn split(
     leaf_node.* = .{
         .branch = .{
             .direction = direction,
-            .ratio = 0.5, // D-19: always 50/50
+            .ratio = 0.5, // always 50/50
             .first = first_leaf,
             .second = second_leaf,
             .parent = parent,
@@ -47,7 +47,7 @@ pub fn split(
     return second_leaf;
 }
 
-/// Close a leaf node, promoting its sibling to the parent position (D-20).
+/// Close a leaf node, promoting its sibling to the parent position.
 /// Returns the sibling's focused pane_id, or null if this was the root.
 pub fn close(allocator: std.mem.Allocator, leaf_node: *PaneNode) ?u32 {
     const parent_ptr = leaf_node.leaf.parent orelse {
@@ -89,7 +89,7 @@ pub fn close(allocator: std.mem.Allocator, leaf_node: *PaneNode) ?u32 {
     return sibling_pane_id;
 }
 
-/// Compute bounds recursively for all nodes in the tree (D-21: 1px borders).
+/// Compute bounds recursively for all nodes in the tree.
 /// Branches split the available Rect by direction+ratio, subtracting border_px
 /// between children. Leaves store their computed Rect, snapped to cell grid.
 pub fn computeBounds(node: *PaneNode, available: Rect, cell_w: f32, cell_h: f32, border_px: u32) void {
@@ -147,7 +147,7 @@ pub fn computeBounds(node: *PaneNode, available: Rect, cell_w: f32, cell_h: f32,
     }
 }
 
-/// Find the nearest neighbor leaf in a given direction (D-28: no wrap-around).
+/// Find the nearest neighbor leaf in a given direction.
 /// Returns the pane_id of the neighbor, or null if no neighbor exists.
 pub fn focusDirectional(current_leaf: *PaneNode, direction: FocusDirection) ?u32 {
     const bounds = current_leaf.leaf.bounds;
@@ -200,14 +200,14 @@ pub fn focusPrev(root: *PaneNode, current_pane_id: u32) ?u32 {
     return leaves_buf[count - 1].pane_id;
 }
 
-/// Swap two leaf nodes' pane_ids (D-30).
+/// Swap two leaf nodes' pane_ids.
 pub fn swap(leaf_a: *PaneNode, leaf_b: *PaneNode) void {
     const tmp = leaf_a.leaf.pane_id;
     leaf_a.leaf.pane_id = leaf_b.leaf.pane_id;
     leaf_b.leaf.pane_id = tmp;
 }
 
-/// Flip a branch's direction: horizontal <-> vertical (D-33).
+/// Flip a branch's direction: horizontal <-> vertical.
 pub fn rotate(branch_node: *PaneNode) void {
     switch (branch_node.*) {
         .branch => |*b| {
@@ -220,7 +220,7 @@ pub fn rotate(branch_node: *PaneNode) void {
     }
 }
 
-/// Recursively set all branch ratios to 0.5 (D-25).
+/// Recursively set all branch ratios to 0.5.
 pub fn equalize(node: *PaneNode) void {
     switch (node.*) {
         .branch => |*b| {
@@ -449,7 +449,7 @@ fn setParent(node: *PaneNode, parent: *PaneNode) void {
 // Inline Tests
 // -------------------------------------------------------
 
-test "split creates branch with two leaves (D-19)" {
+test "split creates branch with two leaves" {
     const alloc = std.testing.allocator;
     const root = try PaneTree.createLeaf(alloc, 0, null);
 
@@ -474,7 +474,7 @@ test "split twice creates 3 leaves" {
     PaneTree.destroyNode(alloc, root);
 }
 
-test "close promotes sibling (D-20)" {
+test "close promotes sibling" {
     const alloc = std.testing.allocator;
     const root = try PaneTree.createLeaf(alloc, 0, null);
     _ = try split(alloc, root, .vertical, 1);
@@ -508,7 +508,7 @@ test "computeBounds produces non-overlapping rects" {
     PaneTree.destroyNode(alloc, root);
 }
 
-test "focusDirectional finds correct neighbor (D-28)" {
+test "focusDirectional finds correct neighbor" {
     const alloc = std.testing.allocator;
     const root = try PaneTree.createLeaf(alloc, 0, null);
     _ = try split(alloc, root, .vertical, 1);
@@ -524,7 +524,7 @@ test "focusDirectional finds correct neighbor (D-28)" {
     const left_neighbor = focusDirectional(root.branch.second, .left);
     try std.testing.expectEqual(@as(?u32, 0), left_neighbor);
 
-    // From left pane (0), left should find nothing (no wrap, D-28)
+    // From left pane (0), left should find nothing (no wrap)
     const no_neighbor = focusDirectional(root.branch.first, .left);
     try std.testing.expect(no_neighbor == null);
 
@@ -548,7 +548,7 @@ test "focusNext/focusPrev cycle through leaves" {
     PaneTree.destroyNode(alloc, root);
 }
 
-test "swap exchanges pane_ids (D-30)" {
+test "swap exchanges pane_ids" {
     const alloc = std.testing.allocator;
     const root = try PaneTree.createLeaf(alloc, 0, null);
     _ = try split(alloc, root, .vertical, 1);
@@ -560,7 +560,7 @@ test "swap exchanges pane_ids (D-30)" {
     PaneTree.destroyNode(alloc, root);
 }
 
-test "rotate flips direction (D-33)" {
+test "rotate flips direction" {
     const alloc = std.testing.allocator;
     const root = try PaneTree.createLeaf(alloc, 0, null);
     _ = try split(alloc, root, .vertical, 1);
@@ -574,7 +574,7 @@ test "rotate flips direction (D-33)" {
     PaneTree.destroyNode(alloc, root);
 }
 
-test "equalize sets all ratios to 0.5 (D-25)" {
+test "equalize sets all ratios to 0.5" {
     const alloc = std.testing.allocator;
     const root = try PaneTree.createLeaf(alloc, 0, null);
     _ = try split(alloc, root, .vertical, 1);

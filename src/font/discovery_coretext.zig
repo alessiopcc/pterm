@@ -1,4 +1,4 @@
-/// macOS font discovery using CoreText (D-11).
+/// macOS font discovery using CoreText.
 ///
 /// Finds font files by family name using the CoreText API.
 /// NOTE: This handles font DISCOVERY only. Rasterization is in rasterizer_coretext.zig.
@@ -70,7 +70,7 @@ pub fn discoverEmojiFont(allocator: std.mem.Allocator) ?DiscoverResult {
     return discover(allocator, "Apple Color Emoji");
 }
 
-/// Discover a Nerd Font symbols-only font (D-01).
+/// Discover a Nerd Font symbols-only font.
 /// Queries CoreText for known Nerd Font family names.
 pub fn discoverNerdFont(allocator: std.mem.Allocator) ?DiscoverResult {
     const nerd_families = [_][]const u8{

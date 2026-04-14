@@ -1,4 +1,4 @@
-/// Tab list management: create, close, switch, reorder (D-06, D-10, D-14, D-26).
+/// Tab list management: create, close, switch, reorder.
 ///
 /// Manages a list of Tabs with an active tab index. Supports all tab lifecycle
 /// operations needed by the multi-pane terminal.
@@ -9,7 +9,7 @@ const Tab = @import("Tab.zig").Tab;
 pub const CloseResult = enum {
     /// Tab closed, another tab exists and is now active.
     closed,
-    /// Last tab closed — application should exit (D-10).
+    /// Last tab closed — application should exit.
     last_tab_closed,
 };
 
@@ -33,7 +33,7 @@ pub const TabManager = struct {
         self.tabs.deinit(self.allocator);
     }
 
-    /// Create a new tab (D-26: single pane) and make it active.
+    /// Create a new tab and make it active.
     /// Returns a pointer to the newly created tab.
     pub fn createTab(self: *TabManager) !*Tab {
         const tab = try Tab.init(self.allocator);
@@ -42,7 +42,7 @@ pub const TabManager = struct {
         return &self.tabs.items[self.active_idx];
     }
 
-    /// Close a tab at the given index (D-10: last tab returns special signal).
+    /// Close a tab at the given index.
     pub fn closeTab(self: *TabManager, idx: usize) CloseResult {
         if (idx >= self.tabs.items.len) return .closed;
 
@@ -65,14 +65,14 @@ pub const TabManager = struct {
         return .closed;
     }
 
-    /// Switch to a tab at the given index (D-14: restores focused pane).
+    /// Switch to a tab at the given index.
     pub fn switchTab(self: *TabManager, idx: usize) void {
         if (idx < self.tabs.items.len) {
             self.active_idx = idx;
         }
     }
 
-    /// Move the active tab one position to the left (D-06: wraps).
+    /// Move the active tab one position to the left.
     pub fn moveTabLeft(self: *TabManager) void {
         if (self.tabs.items.len <= 1) return;
         const new_idx = if (self.active_idx == 0)
@@ -83,7 +83,7 @@ pub const TabManager = struct {
         self.active_idx = new_idx;
     }
 
-    /// Move the active tab one position to the right (D-06: wraps).
+    /// Move the active tab one position to the right.
     pub fn moveTabRight(self: *TabManager) void {
         if (self.tabs.items.len <= 1) return;
         const new_idx = if (self.active_idx == self.tabs.items.len - 1)
@@ -163,7 +163,7 @@ test "TabManager close middle tab" {
     try std.testing.expectEqual(@as(usize, 0), tm.active_idx); // unchanged
 }
 
-test "TabManager close last tab returns last_tab_closed (D-10)" {
+test "TabManager close last tab returns last_tab_closed" {
     const alloc = std.testing.allocator;
     var tm = TabManager.init(alloc);
     defer tm.deinit();
@@ -174,7 +174,7 @@ test "TabManager close last tab returns last_tab_closed (D-10)" {
     try std.testing.expectEqual(@as(usize, 0), tm.tabCount());
 }
 
-test "TabManager moveTabLeft wraps (D-06)" {
+test "TabManager moveTabLeft wraps" {
     const alloc = std.testing.allocator;
     var tm = TabManager.init(alloc);
     defer tm.deinit();
@@ -188,7 +188,7 @@ test "TabManager moveTabLeft wraps (D-06)" {
     try std.testing.expectEqual(@as(usize, 2), tm.active_idx);
 }
 
-test "TabManager moveTabRight wraps (D-06)" {
+test "TabManager moveTabRight wraps" {
     const alloc = std.testing.allocator;
     var tm = TabManager.init(alloc);
     defer tm.deinit();

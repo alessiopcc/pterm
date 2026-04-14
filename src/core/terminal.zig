@@ -46,10 +46,10 @@ pub const PTermTerminal = struct {
     /// Feed raw bytes to the terminal via the VT stream parser.
     /// This processes escape sequences (CSI, OSC, DEC modes, SGR, etc.)
     /// unlike printString which only handles display text.
-    /// Notifies observer before and after parsing (D-06).
-    /// Per D-11, only UTF-8 is accepted.
+    /// Notifies observer before and after parsing.
+    /// Per only UTF-8 is accepted.
     pub fn feedBytes(self: *PTermTerminal, bytes: []const u8) !void {
-        // Notify observer before parsing (D-06)
+        // Notify observer before parsing
         self.observer.notify(.{ .output = bytes });
 
         // Lazily create the persistent stream on first call.
@@ -75,7 +75,7 @@ pub const PTermTerminal = struct {
         return try self.terminal.plainString(self.allocator);
     }
 
-    /// Resize the terminal (D-10: PTY resize support from day one).
+    /// Resize the terminal.
     pub fn resize(self: *PTermTerminal, cols: u16, rows: u16) !void {
         try self.terminal.resize(self.allocator, cols, rows);
         self.config.cols = cols;

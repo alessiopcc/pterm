@@ -95,7 +95,7 @@ pub const CellFlags = struct {
     pub const COLOR_GLYPH: u16 = 0x0010;
 };
 
-/// Per-cell instance data for GPU instanced rendering (D-03).
+/// Per-cell instance data for GPU instanced rendering.
 /// 32 bytes, aligned for GPU buffer upload.
 pub const CellInstance = extern struct {
     grid_col: u16,
@@ -139,7 +139,7 @@ pub const CursorState = struct {
 
 pub const CursorStyle = enum { block, hollow, ibeam, underline };
 
-/// Adaptive frame scheduler (D-16).
+/// Adaptive frame scheduler.
 pub const FrameScheduler = struct {
     last_activity_ns: i128 = 0,
     idle_threshold_ns: i128 = 100_000_000, // 100ms
@@ -154,7 +154,7 @@ pub const FrameScheduler = struct {
     }
 };
 
-/// Renderer diagnostics for latency measurement (D-17).
+/// Renderer diagnostics for latency measurement.
 pub const Diagnostics = struct {
     frame_time_us: u64 = 0,
     instance_build_us: u64 = 0,

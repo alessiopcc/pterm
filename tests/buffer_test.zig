@@ -25,7 +25,7 @@ test "scrollback push and get" {
     }
 }
 
-test "scrollback ring eviction (D-12)" {
+test "scrollback ring eviction" {
     const alloc = std.testing.allocator;
     // Use a small capacity for testing
     const capacity: u32 = 100;
@@ -83,7 +83,7 @@ test "scrollback clear" {
     try std.testing.expectEqual(@as(?[]const u21, null), buf.getLine(0));
 }
 
-test "scrollback capacity configurable (D-15)" {
+test "scrollback capacity configurable" {
     const alloc = std.testing.allocator;
     var buf = try ScrollbackBuffer.init(alloc, 100);
     defer buf.deinit();
@@ -106,7 +106,7 @@ test "scrollback capacity configurable (D-15)" {
     try std.testing.expectEqual(@as(u21, 199), newest[0]);
 }
 
-test "serialize stub (D-18)" {
+test "serialize stub" {
     const alloc = std.testing.allocator;
     var buf = try ScrollbackBuffer.init(alloc, 100);
     defer buf.deinit();

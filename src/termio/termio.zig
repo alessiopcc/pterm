@@ -1,4 +1,4 @@
-/// Terminal I/O coordinator with single-buffer mutex (D-17).
+/// Terminal I/O coordinator with single-buffer mutex.
 ///
 /// Orchestrates the full terminal pipeline:
 ///   PTY -> reader -> mailbox -> parser -> terminal (mutex-protected)
@@ -140,7 +140,7 @@ pub const TermIO = struct {
         return self.terminal;
     }
 
-    /// Resize terminal and PTY (D-10).
+    /// Resize terminal and PTY.
     /// Acquires mutex to safely resize the single terminal buffer.
     pub fn resize(self: *TermIO, cols: u16, rows: u16) !void {
         self.mutex.lock();

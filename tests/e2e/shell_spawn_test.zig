@@ -1,4 +1,4 @@
-/// E2E tests: Shell spawn and I/O for all platform shells (D-32, D-33, D-35).
+/// E2E tests: Shell spawn and I/O for all platform shells.
 ///
 /// For each available shell:
 /// - Spawn via TestApp

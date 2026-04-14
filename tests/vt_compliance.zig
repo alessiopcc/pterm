@@ -184,7 +184,7 @@ test "SGR 256 color" {
     }
 }
 
-// --- Observer hooks (D-06) ---
+// --- Observer hooks ---
 
 var observer_called: bool = false;
 var observer_bytes_len: usize = 0;
@@ -226,7 +226,7 @@ test "observer screen change fires after feedBytes" {
     try testing.expect(screen_change_called);
 }
 
-// --- Resize (D-10) ---
+// --- Resize ---
 
 test "terminal resize" {
     var t = try createTestTerminal();

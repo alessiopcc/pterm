@@ -7,7 +7,7 @@
 /// queried from the render thread (isIdle). Fields are not atomic because
 /// one stale frame (16ms) is acceptable for idle detection.
 ///
-/// Per D-09: idle detection is optional, off by default, with 5-second default timeout.
+/// Per idle detection is optional, off by default, with 5-second default timeout.
 const std = @import("std");
 
 pub const IdleTracker = struct {

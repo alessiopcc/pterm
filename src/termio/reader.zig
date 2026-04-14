@@ -1,4 +1,4 @@
-/// PTY Reader Thread (D-07: PTY read on dedicated thread)
+/// PTY Reader Thread
 ///
 /// Continuously reads bytes from the PTY master fd and pushes them into
 /// the SPSC mailbox for consumption by the parse thread. This separation

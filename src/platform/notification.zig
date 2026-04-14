@@ -4,14 +4,14 @@
 /// process, never interpolated into a shell command string on macOS/Linux.
 /// On Windows, PowerShell script embeds sanitized values (quotes stripped).
 ///
-/// Platform commands (D-08 through D-12):
+/// Platform commands:
 ///   Windows: PowerShell toast notification via WinRT
 ///   macOS:   osascript display notification
 ///   Linux:   notify-send (libnotify)
 const builtin = @import("builtin");
 const std = @import("std");
 
-/// Default notification title (D-03).
+/// Default notification title.
 pub const TITLE = "PTerm -- Agent waiting";
 
 /// Formatted body result: fixed buffer + length.
@@ -54,9 +54,9 @@ pub fn formatBody(pane_identity: []const u8, matched_text: ?[]const u8) Formatte
 /// Send an OS desktop notification. Fire and forget.
 ///
 /// Platform-specific implementation:
-///   Windows (D-09): PowerShell toast notification via WinRT API
-///   macOS (D-10):   osascript display notification
-///   Linux (D-11):   notify-send with PTerm app name
+///   Windows: PowerShell toast notification via WinRT API
+///   macOS:   osascript display notification
+///   Linux:   notify-send with PTerm app name
 pub fn sendNotification(title: []const u8, body: []const u8, play_sound: bool) void {
     switch (builtin.os.tag) {
         .windows => sendWindows(title, body, play_sound),
@@ -68,7 +68,7 @@ pub fn sendNotification(title: []const u8, body: []const u8, play_sound: bool) v
 /// PowerShell AppUserModelID for toast notifications (registered system app).
 const PS_AUMID = "{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe";
 
-/// Windows: PowerShell toast notification via WinRT (D-09).
+/// Windows: PowerShell toast notification via WinRT.
 fn sendWindows(title: []const u8, body: []const u8, play_sound: bool) void {
     const sound_attr = if (play_sound) "src=\"ms-winsoundevent:Notification.Default\"" else "silent=\"true\"";
 
@@ -106,7 +106,7 @@ fn sendWindows(title: []const u8, body: []const u8, play_sound: bool) void {
     // Fire and forget
 }
 
-/// macOS: osascript display notification (D-10).
+/// macOS: osascript display notification.
 fn sendMacOS(title: []const u8, body: []const u8, play_sound: bool) void {
     var script_buf: [512]u8 = undefined;
     var script_stream = std.io.fixedBufferStream(&script_buf);
@@ -131,7 +131,7 @@ fn sendMacOS(title: []const u8, body: []const u8, play_sound: bool) void {
     // Fire and forget
 }
 
-/// Linux: notify-send (D-11).
+/// Linux: notify-send.
 fn sendLinux(title: []const u8, body: []const u8, play_sound: bool) void {
     var argv_buf: [8][]const u8 = undefined;
     var argc: usize = 0;

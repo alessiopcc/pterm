@@ -1,4 +1,4 @@
-// Shell Detection and Spawn Configuration (D-09)
+// Shell Detection and Spawn Configuration
 //
 // Detects the user's default shell on Unix (via $SHELL) and Windows
 // (via $COMSPEC, with PowerShell/cmd.exe fallbacks).
@@ -87,7 +87,7 @@ fn extractShellName(path: []const u8) []const u8 {
     return path;
 }
 
-/// Resolve shell from config, with fallback to auto-detection (D-04, D-05).
+/// Resolve shell from config, with fallback to auto-detection.
 /// If config_program is non-null, attempt to use it. If the binary is not
 /// found (PATH lookup fails or absolute path missing), log warning and
 /// fall back to detectShell().
@@ -98,10 +98,10 @@ pub fn resolveShell(
     config_args: ?[]const []const u8,
 ) ShellConfig {
     if (config_program) |program| {
-        // D-03: bare name resolved via PATH, absolute path used directly
+        // bare name resolved via PATH, absolute path used directly
         if (findExecutable(allocator, program)) |found_path| {
             const name = extractShellName(program);
-            // Build args array if provided (D-02)
+            // Build args array if provided
             const args = if (config_args) |ca|
                 buildArgsArray(allocator, found_path, ca)
             else
@@ -114,7 +114,7 @@ pub fn resolveShell(
                 .allocator = allocator,
             };
         } else {
-            std.log.warn("Configured shell '{s}' not found, falling back to auto-detect (D-05)", .{program});
+            std.log.warn("Configured shell '{s}' not found, falling back to auto-detect", .{program});
             return detectShell();
         }
     }
@@ -192,7 +192,7 @@ fn buildArgsArray(
     return argv;
 }
 
-/// Known shells for testing across platforms (D-09).
+/// Known shells for testing across platforms.
 pub const known_shells = if (builtin.os.tag == .windows)
     [_]ShellConfig{
         .{ .path = "pwsh.exe", .args = null, .name = "pwsh" },
@@ -221,7 +221,7 @@ pub const ShellInfo = struct {
     path_alloc: ?[*:0]const u8 = null,
 };
 
-/// Filter known_shells to only those available on PATH, plus the configured shell (D-11, D-12, D-13).
+/// Filter known_shells to only those available on PATH, plus the configured shell.
 /// Returns a heap-allocated slice of ShellInfo. Caller must free `.items` when done.
 pub fn filterAvailableShells(
     allocator: std.mem.Allocator,
@@ -230,7 +230,7 @@ pub fn filterAvailableShells(
     var result_buf: [16]ShellInfo = undefined;
     var count: usize = 0;
 
-    // 1. Check config_program first (D-13: always include if set)
+    // 1. Check config_program first
     if (config_program) |program| {
         if (findExecutable(allocator, program)) |found_path| {
             const path_slice = std.mem.span(found_path);
@@ -243,7 +243,7 @@ pub fn filterAvailableShells(
         }
     }
 
-    // 2. Filter known_shells by PATH availability (D-11)
+    // 2. Filter known_shells by PATH availability
     for (&known_shells) |ks| {
         if (count >= 16) break;
         const ks_name = ks.name;

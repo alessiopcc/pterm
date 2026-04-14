@@ -16,7 +16,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // Build options: version string injected at compile time (D-09, D-15)
+    // Build options: version string injected at compile time
     const options = b.addOptions();
     options.addOption([]const u8, "version", b.option([]const u8, "version", "Version string") orelse "0.1.0-dev");
     exe_mod.addOptions("build_options", options);
@@ -29,6 +29,10 @@ pub fn build(b: *std.Build) void {
         .name = "pterm",
         .root_module = exe_mod,
     });
+    if (target.result.os.tag == .windows) {
+        exe.subsystem = .Windows;
+        exe.addWin32ResourceFile(.{ .file = b.path("assets/pterm.rc") });
+    }
     b.installArtifact(exe);
 
     // Run step
@@ -71,14 +75,14 @@ pub fn build(b: *std.Build) void {
     }
     terminal_mod.addImport("observer.zig", observer_mod);
 
-    // Core buffer module (scrollback ring buffer, D-12)
+    // Core buffer module (scrollback ring buffer)
     const buffer_mod = b.createModule(.{
         .root_source_file = b.path("src/core/buffer.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    // Core selection module (D-14 copy-on-select)
+    // Core selection module
     const selection_mod = b.createModule(.{
         .root_source_file = b.path("src/core/selection.zig"),
         .target = target,
@@ -99,7 +103,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // TermIO parser module (D-07 dedicated parse thread)
+    // TermIO parser module
     const parser_mod = b.createModule(.{
         .root_source_file = b.path("src/termio/parser.zig"),
         .target = target,
@@ -111,7 +115,7 @@ pub fn build(b: *std.Build) void {
     parser_mod.addImport("terminal", terminal_mod);
     parser_mod.addImport("mailbox", mailbox_mod);
 
-    // TermIO coordinator module (D-17 double-buffer swap)
+    // TermIO coordinator module
     const termio_mod = b.createModule(.{
         .root_source_file = b.path("src/termio/termio.zig"),
         .target = target,
@@ -353,7 +357,7 @@ pub fn build(b: *std.Build) void {
     discovery_fontconfig_mod.addImport("discovery.zig", discovery_mod);
     discovery_coretext_mod.addImport("discovery.zig", discovery_mod);
 
-    // Tofu box renderer module (D-06: missing glyph visualization)
+    // Tofu box renderer module
     const tofu_mod = b.createModule(.{
         .root_source_file = b.path("src/font/tofu.zig"),
         .target = target,
@@ -424,7 +428,7 @@ pub fn build(b: *std.Build) void {
     // Integration modules (Window, Input, Surface, App)
     // -------------------------------------------------------
 
-    // GLFW window wrapper (D-14 resize snap, D-15 context detach)
+    // GLFW window wrapper
     const window_mod = b.createModule(.{
         .root_source_file = b.path("src/platform/window.zig"),
         .target = target,
@@ -603,7 +607,7 @@ pub fn build(b: *std.Build) void {
     exe_mod.addImport("cli", config_cli_mod);
     exe_mod.addImport("defaults", config_defaults_mod);
 
-    // Wire zglfw into exe_mod for GPU probe in main.zig (D-49)
+    // Wire zglfw into exe_mod for GPU probe in main.zig
     if (zglfw_dep) |dep| {
         exe_mod.addImport("zglfw", dep.module("root"));
         exe_mod.linkLibrary(dep.artifact("glfw"));
@@ -636,7 +640,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // Keybinding TUI (interactive configurator, D-22)
+    // Keybinding TUI (interactive configurator)
     const keybinding_tui_mod = b.createModule(.{
         .root_source_file = b.path("src/config/keybinding_tui.zig"),
         .target = target,
@@ -922,7 +926,7 @@ pub fn build(b: *std.Build) void {
     // Wire theme into render_state_mod (for RendererPalette parameter)
     render_state_mod.addImport("theme", theme_mod);
 
-    // File watcher module (config hot-reload, D-14)
+    // File watcher module (config hot-reload)
     const watcher_mod = b.createModule(.{
         .root_source_file = b.path("src/config/watcher.zig"),
         .target = target,
@@ -1280,7 +1284,7 @@ pub fn build(b: *std.Build) void {
     const run_agent_detection = b.addRunArtifact(agent_detection_tests);
     e2e_test_step.dependOn(&run_agent_detection.step);
 
-    // Config loading + hot-reload tests (D-37)
+    // Config loading + hot-reload tests
     const config_e2e_test_mod = b.createModule(.{
         .root_source_file = b.path("tests/e2e/config_test.zig"),
         .target = target,

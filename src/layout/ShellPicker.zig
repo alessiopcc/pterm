@@ -1,8 +1,8 @@
-/// Overlay UI for selecting and switching the active pane's shell (D-04, D-05, D-06).
+/// Overlay UI for selecting and switching the active pane's shell.
 ///
 /// Renders a centered overlay list of available system shells.
 /// Navigation via Up/Down arrows, Enter to select, Escape to dismiss.
-/// Uses the same callback-based GPU rendering as PresetPicker (D-07).
+/// Uses the same callback-based GPU rendering as PresetPicker.
 ///
 /// Per UI-SPEC:
 ///   - Width: max(44 columns, longest display string + 4 columns)
@@ -11,8 +11,8 @@
 ///   - Border: 1px pane_border color
 ///   - Selected row: tab_active color highlight
 ///   - Header: "Select Shell:"
-///   - Entry format: "name -- path" (D-06)
-///   - Active shell marker: "* name -- path" with accent color (D-06)
+///   - Entry format: "name -- path"
+///   - Active shell marker: "* name -- path" with accent color
 ///   - Empty state: "No shells detected." / "Check PATH or set shell.program in config."
 const std = @import("std");
 
@@ -150,7 +150,7 @@ pub const ShellPicker = struct {
                 draw_rect_fn(m.x + 1, row_y, m.w - 2, m.row_height, colors.selected, ctx);
             }
 
-            // Active shell marker: use accent color for the asterisk-prefixed entry (D-06)
+            // Active shell marker: use accent color for the asterisk-prefixed entry
             const text_color = if (i == self.active_shell_idx) colors.active_marker else colors.fg;
             draw_text_fn(name, m.x + @as(i32, @intCast(m.col_width * 2)), row_y, text_color, ctx);
         }
@@ -164,7 +164,7 @@ pub const ShellPickerColors = struct {
     selected: u32, // tab_active
     fg: u32, // foreground text
     overlay_bg: u32, // semi-transparent dark overlay
-    active_marker: u32, // D-06: accent color for currently active shell
+    active_marker: u32, // accent color for currently active shell
 };
 
 // -------------------------------------------------------

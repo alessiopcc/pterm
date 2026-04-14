@@ -1,7 +1,7 @@
-/// Binary tree data structure for pane layout (D-17).
+/// Binary tree data structure for pane layout.
 ///
 /// Each split creates a BranchNode with two children (left/right or top/bottom).
-/// Leaf nodes represent individual panes. Arbitrary nesting supported (D-18).
+/// Leaf nodes represent individual panes. Arbitrary nesting supported.
 const std = @import("std");
 const Rect = @import("Rect.zig").Rect;
 

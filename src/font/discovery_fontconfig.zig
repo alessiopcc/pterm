@@ -1,4 +1,4 @@
-/// Linux font discovery using fontconfig (D-11).
+/// Linux font discovery using fontconfig.
 ///
 /// Finds font files by family name via the fontconfig C API.
 const std = @import("std");
@@ -95,7 +95,7 @@ pub fn discoverCJKFont(allocator: std.mem.Allocator) ?DiscoverResult {
     return null;
 }
 
-/// Discover a Nerd Font symbols-only font (D-01).
+/// Discover a Nerd Font symbols-only font.
 /// Queries fontconfig for known Nerd Font family names.
 pub fn discoverNerdFont(allocator: std.mem.Allocator) ?DiscoverResult {
     const nerd_families = [_][]const u8{

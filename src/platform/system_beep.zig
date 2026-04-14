@@ -1,4 +1,4 @@
-/// Cross-platform system beep (D-32: system default beep sound).
+/// Cross-platform system beep.
 ///
 /// Windows: MessageBeep via Win32 API.
 /// macOS/Linux: Write BEL byte to /dev/tty.

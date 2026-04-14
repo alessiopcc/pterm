@@ -1,9 +1,9 @@
-/// GLFW window wrapper with cell-grid resize and GL context detach (D-14, D-15).
+/// GLFW window wrapper with cell-grid resize and GL context detach.
 ///
 /// Provides a thin abstraction over GLFW for:
 ///   - Window creation with OpenGL 3.3 core profile hints
 ///   - DPI-aware pixel size computation from cell grid dimensions
-///   - GL context attach/detach for render thread handoff (D-15)
+///   - GL context attach/detach for render thread handoff
 ///   - Callback registration for input, resize, and focus events
 const std = @import("std");
 const builtin = @import("builtin");
@@ -137,7 +137,7 @@ pub const Window = struct {
         glfw.makeContextCurrent(self.handle);
     }
 
-    /// Release the GL context from the current thread (D-15 context handoff).
+    /// Release the GL context from the current thread.
     pub fn detachContext() void {
         glfw.makeContextCurrent(null);
     }
@@ -204,7 +204,7 @@ pub const Window = struct {
         glfw.pollEvents();
     }
 
-    /// Wait for events with timeout (main thread only, D-16 idle savings).
+    /// Wait for events with timeout (main thread only,idle savings).
     pub fn waitEventsTimeout(timeout: f64) void {
         glfw.waitEventsTimeout(timeout);
     }
