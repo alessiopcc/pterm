@@ -23,7 +23,7 @@ test "cli flag --version prints version and exits 0" {
 
     try child.spawn();
 
-    const stdout = child.stdout.?.reader().readAllAlloc(allocator, 16 * 1024) catch "";
+    const stdout = child.stdout.?.readToEndAlloc(allocator, 16 * 1024) catch "";
     defer if (stdout.len > 0) allocator.free(stdout);
 
     const result = try child.wait();
@@ -55,11 +55,11 @@ test "cli flag --help prints usage and exits 0" {
 
     try child.spawn();
 
-    const stdout = child.stdout.?.reader().readAllAlloc(allocator, 16 * 1024) catch "";
+    const stdout = child.stdout.?.readToEndAlloc(allocator, 16 * 1024) catch "";
     defer if (stdout.len > 0) allocator.free(stdout);
 
     // stderr may contain usage info on some programs
-    const stderr = child.stderr.?.reader().readAllAlloc(allocator, 16 * 1024) catch "";
+    const stderr = child.stderr.?.readToEndAlloc(allocator, 16 * 1024) catch "";
     defer if (stderr.len > 0) allocator.free(stderr);
 
     const result = try child.wait();

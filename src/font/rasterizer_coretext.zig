@@ -13,6 +13,8 @@ const c = @cImport({
     @cInclude("CoreText/CoreText.h");
     @cInclude("CoreGraphics/CoreGraphics.h");
     @cInclude("CoreFoundation/CoreFoundation.h");
+    @cInclude("ft2build.h");
+    @cInclude("freetype/freetype.h");
 });
 
 pub const CoreTextRasterizer = struct {
@@ -24,6 +26,12 @@ pub const CoreTextRasterizer = struct {
     data_provider: ?c.CGDataProviderRef,
     /// Retained CGFont for memory-loaded fonts.
     cg_font: ?c.CGFontRef,
+    /// FreeType library handle (kept alive for HarfBuzz shaping via hb-ft).
+    ft_library: c.FT_Library,
+    /// FreeType face (kept alive for HarfBuzz shaping via hb-ft).
+    ft_face: c.FT_Face,
+    /// Retained copy of font data for FT_New_Memory_Face (must outlive face).
+    ft_retained_data: ?[]const u8,
 
     /// Initialize from a font file path.
     pub fn init(allocator: std.mem.Allocator, font_path: [*:0]const u8, size_pt: f32, dpi: u32) !CoreTextRasterizer {
@@ -34,7 +42,7 @@ pub const CoreTextRasterizer = struct {
         if (path_cfstr == null) return error.FontLoadFailed;
         defer c.CFRelease(path_cfstr);
 
-        const url = c.CFURLCreateWithFileSystemPath(null, path_cfstr, c.kCFURLPOSIXPathStyle, false);
+        const url = c.CFURLCreateWithFileSystemPath(null, path_cfstr, c.kCFURLPOSIXPathStyle, @as(c.Boolean, 0));
         if (url == null) return error.FontLoadFailed;
         defer c.CFRelease(url);
 
@@ -49,6 +57,18 @@ pub const CoreTextRasterizer = struct {
         const ct_font = c.CTFontCreateWithFontDescriptor(desc, @as(c.CGFloat, scaled_size), null);
         if (ct_font == null) return error.FontLoadFailed;
 
+        // Also create a FreeType face for HarfBuzz shaping (hb-ft bridge).
+        var ft_library: c.FT_Library = null;
+        if (c.FT_Init_FreeType(&ft_library) != 0) return error.FontLoadFailed;
+        errdefer _ = c.FT_Done_FreeType(ft_library);
+
+        var ft_face: c.FT_Face = null;
+        if (c.FT_New_Face(ft_library, font_path, 0, &ft_face) != 0) return error.FontLoadFailed;
+        errdefer _ = c.FT_Done_Face(ft_face);
+
+        const ft_size = @as(c_long, @intFromFloat(@round(scaled_size * 64.0)));
+        if (c.FT_Set_Char_Size(ft_face, 0, ft_size, dpi, dpi) != 0) return error.FontLoadFailed;
+
         return CoreTextRasterizer{
             .font = ct_font,
             .allocator = allocator,
@@ -56,6 +76,9 @@ pub const CoreTextRasterizer = struct {
             .dpi = dpi,
             .data_provider = null,
             .cg_font = null,
+            .ft_library = ft_library,
+            .ft_face = ft_face,
+            .ft_retained_data = null,
         };
     }
 
@@ -74,6 +97,22 @@ pub const CoreTextRasterizer = struct {
         const ct_font = c.CTFontCreateWithGraphicsFont(cg_font, @as(c.CGFloat, scaled_size), null, null);
         if (ct_font == null) return error.FontLoadFailed;
 
+        // Also create a FreeType face for HarfBuzz shaping (hb-ft bridge).
+        var ft_library: c.FT_Library = null;
+        if (c.FT_Init_FreeType(&ft_library) != 0) return error.FontLoadFailed;
+        errdefer _ = c.FT_Done_FreeType(ft_library);
+
+        // Copy data so it outlives the FT_Face.
+        const ft_data = try allocator.dupe(u8, data);
+        errdefer allocator.free(ft_data);
+
+        var ft_face: c.FT_Face = null;
+        if (c.FT_New_Memory_Face(ft_library, ft_data.ptr, @intCast(ft_data.len), 0, &ft_face) != 0) return error.FontLoadFailed;
+        errdefer _ = c.FT_Done_Face(ft_face);
+
+        const ft_size = @as(c_long, @intFromFloat(@round(scaled_size * 64.0)));
+        if (c.FT_Set_Char_Size(ft_face, 0, ft_size, dpi, dpi) != 0) return error.FontLoadFailed;
+
         return CoreTextRasterizer{
             .font = ct_font,
             .allocator = allocator,
@@ -81,15 +120,26 @@ pub const CoreTextRasterizer = struct {
             .dpi = dpi,
             .data_provider = provider,
             .cg_font = cg_font,
+            .ft_library = ft_library,
+            .ft_face = ft_face,
+            .ft_retained_data = ft_data,
         };
     }
 
-    /// Release all CoreText/CoreGraphics resources.
+    /// Release all CoreText/CoreGraphics/FreeType resources.
     pub fn deinit(self: *CoreTextRasterizer) void {
+        _ = c.FT_Done_Face(self.ft_face);
+        _ = c.FT_Done_FreeType(self.ft_library);
+        if (self.ft_retained_data) |d| self.allocator.free(d);
         c.CFRelease(self.font);
         if (self.cg_font) |cg| c.CGFontRelease(cg);
         if (self.data_provider) |dp| c.CGDataProviderRelease(dp);
         self.* = undefined;
+    }
+
+    /// Return the underlying FreeType face for HarfBuzz font creation.
+    pub fn getFace(self: *CoreTextRasterizer) c.FT_Face {
+        return self.ft_face;
     }
 
     /// Rasterize a single glyph for the given codepoint.
@@ -109,7 +159,7 @@ pub const CoreTextRasterizer = struct {
             char_count = 2;
         }
 
-        if (!c.CTFontGetGlyphsForCharacters(self.font, &chars, &glyphs, @intCast(char_count))) {
+        if (c.CTFontGetGlyphsForCharacters(self.font, &chars, &glyphs, @intCast(char_count)) == 0) {
             return error.GlyphNotFound;
         }
 
@@ -194,7 +244,7 @@ pub const CoreTextRasterizer = struct {
             const cp: u21 = @intCast(cp_usize);
             var ch: [1]u16 = .{@intCast(cp)};
             var glyph: [1]c.CGGlyph = undefined;
-            if (c.CTFontGetGlyphsForCharacters(self.font, &ch, &glyph, 1)) {
+            if (c.CTFontGetGlyphsForCharacters(self.font, &ch, &glyph, 1) != 0) {
                 var adv: c.CGSize = undefined;
                 _ = c.CTFontGetAdvancesForGlyphs(self.font, c.kCTFontOrientationDefault, &glyph, &adv, 1);
                 const advance_f: f32 = @floatCast(adv.width);
@@ -230,6 +280,10 @@ pub const CoreTextRasterizer = struct {
         self.font = new_font;
         self.size_pt = size_pt;
         self.dpi = dpi;
+
+        // Keep FreeType face in sync for HarfBuzz shaping.
+        const ft_size = @as(c_long, @intFromFloat(@round(scaled_size * 64.0)));
+        if (c.FT_Set_Char_Size(self.ft_face, 0, ft_size, dpi, dpi) != 0) return error.SetSizeFailed;
     }
 
     /// Check whether the font contains a glyph for the given codepoint.
@@ -241,6 +295,6 @@ pub const CoreTextRasterizer = struct {
         } else {
             return false; // Simplified -- surrogate pair check would be needed for non-BMP
         }
-        return c.CTFontGetGlyphsForCharacters(self.font, &ch, &glyph, 1);
+        return c.CTFontGetGlyphsForCharacters(self.font, &ch, &glyph, 1) != 0;
     }
 };

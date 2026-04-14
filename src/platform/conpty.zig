@@ -435,14 +435,23 @@ pub const ConPty = struct {
             break :blk null;
         };
 
-        // 4. Drain output pipe on main thread (blocking ReadFile loop).
+        // 4. Drain output pipe with timeout (PeekNamedPipe + ReadFile).
         //    When ClosePseudoConsole completes, it breaks the pipe, and
         //    ReadFile returns with error 109 (ERROR_BROKEN_PIPE).
+        //    Use PeekNamedPipe to avoid blocking forever if the pipe isn't broken in time.
         if (self.output_read != INVALID_HANDLE_VALUE) {
             var drain_buf: [4096]u8 = undefined;
             var bytes_read: DWORD = 0;
-            while (ReadFile(self.output_read, &drain_buf, drain_buf.len, &bytes_read, null) != 0) {
-                if (bytes_read == 0) break;
+            const drain_deadline = std.time.milliTimestamp() + 5000;
+            while (std.time.milliTimestamp() < drain_deadline) {
+                var avail: DWORD = 0;
+                if (PeekNamedPipe(self.output_read, null, 0, null, &avail, null) == 0) break; // pipe broken
+                if (avail > 0) {
+                    if (ReadFile(self.output_read, &drain_buf, drain_buf.len, &bytes_read, null) == 0) break;
+                    if (bytes_read == 0) break;
+                } else {
+                    std.Thread.sleep(10 * std.time.ns_per_ms);
+                }
             }
             _ = CloseHandle(self.output_read);
             self.output_read = INVALID_HANDLE_VALUE;

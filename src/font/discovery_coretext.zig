@@ -38,7 +38,7 @@ pub fn discover(allocator: std.mem.Allocator, family: []const u8) ?DiscoverResul
     if (path_cfstr == null) return null;
     defer c.CFRelease(path_cfstr);
 
-    if (!c.CFStringGetCString(path_cfstr, &path_buf, path_buf.len, c.kCFStringEncodingUTF8)) {
+    if (c.CFStringGetCString(path_cfstr, &path_buf, path_buf.len, c.kCFStringEncodingUTF8) == 0) {
         return null;
     }
 

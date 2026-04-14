@@ -16,7 +16,7 @@ const ShellCategory = harness.ShellCategory;
 
 const MARKER = "PTERM_E2E_MARKER_7f3a";
 
-/// Test all available shells on this platform.
+// Test all available shells on this platform.
 test "shell spawn and echo marker for all available shells" {
     const allocator = testing.allocator;
     const shells = try harness.availableShells(allocator);
@@ -73,7 +73,7 @@ fn testShellEcho(allocator: std.mem.Allocator, shell: harness.ShellInfo) !void {
     if (!found) return error.MarkerNotFound;
 }
 
-/// Test default shell specifically.
+// Test default shell specifically.
 test "default shell spawn and basic I/O" {
     const allocator = testing.allocator;
     const default_path = harness.defaultShellPath();

@@ -66,15 +66,30 @@ test "PTY read produces output after spawn" {
 
     while (std.time.milliTimestamp() < deadline and total == 0) {
         if (comptime builtin.os.tag == .windows) {
-            // Windows: use PeekNamedPipe pattern from pty_test
-            const n = p.read(buf[total..]) catch |err| {
-                if (err == error.ReadFailed) {
-                    std.Thread.sleep(100 * std.time.ns_per_ms);
-                    continue;
-                }
-                return err;
-            };
-            total += n;
+            // Windows: PeekNamedPipe before ReadFile to avoid blocking forever
+            const PeekNamedPipe = @extern(*const fn (
+                std.os.windows.HANDLE,
+                ?[*]u8,
+                std.os.windows.DWORD,
+                ?*std.os.windows.DWORD,
+                ?*std.os.windows.DWORD,
+                ?*std.os.windows.DWORD,
+            ) callconv(.c) std.os.windows.BOOL, .{ .name = "PeekNamedPipe", .library_name = "kernel32" });
+
+            var avail: std.os.windows.DWORD = 0;
+            const peek_ok = PeekNamedPipe(p.output_read, null, 0, null, &avail, null);
+            if (peek_ok != 0 and avail > 0) {
+                const n = p.read(buf[total..]) catch |err| {
+                    if (err == error.ReadFailed) {
+                        std.Thread.sleep(100 * std.time.ns_per_ms);
+                        continue;
+                    }
+                    return err;
+                };
+                total += n;
+            } else {
+                std.Thread.sleep(100 * std.time.ns_per_ms);
+            }
         } else {
             const n = p.read(buf[total..]) catch |err| {
                 if (err == error.ReadFailed) {

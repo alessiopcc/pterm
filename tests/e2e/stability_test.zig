@@ -8,7 +8,7 @@ const testing = std.testing;
 const harness = @import("e2e_harness");
 const TestApp = harness.TestApp;
 
-/// Rapid PTY create/close: 50 iterations to check for resource leaks.
+// Rapid PTY create/close: 50 iterations to check for resource leaks.
 test "rapid pty create close (50 iterations)" {
     const allocator = testing.allocator;
     const shell_path = harness.defaultShellPath();
@@ -27,7 +27,7 @@ test "rapid pty create close (50 iterations)" {
     }
 }
 
-/// Fast terminal output: pipe a large amount of output and verify no crash/hang.
+// Fast terminal output: pipe a large amount of output and verify no crash/hang.
 test "fast output stress" {
     const allocator = testing.allocator;
     const shell_path = harness.defaultShellPath();
@@ -52,7 +52,7 @@ test "fast output stress" {
     try testing.expect(found);
 }
 
-/// Multiple shells simultaneously: 3 concurrent PTYs.
+// Multiple shells simultaneously: 3 concurrent PTYs.
 test "multiple shells simultaneously" {
     const allocator = testing.allocator;
     const shell_path = harness.defaultShellPath();

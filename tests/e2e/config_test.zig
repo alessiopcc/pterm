@@ -11,9 +11,9 @@ const std = @import("std");
 const testing = std.testing;
 const builtin = @import("builtin");
 
-/// Test that config loading from a custom path works.
-/// Creates a temp config, spawns pterm with --config --dump-config,
-/// and verifies the custom value appears in output.
+// Test that config loading from a custom path works.
+// Creates a temp config, spawns pterm with --config --dump-config,
+// and verifies the custom value appears in output.
 test "config loading from custom path via CLI" {
     const allocator = testing.allocator;
 
@@ -56,7 +56,7 @@ test "config loading from custom path via CLI" {
     try child.spawn();
 
     // Read stdout with timeout
-    const stdout = child.stdout.?.reader().readAllAlloc(allocator, 64 * 1024) catch "";
+    const stdout = child.stdout.?.readToEndAlloc(allocator, 64 * 1024) catch "";
     defer if (stdout.len > 0) allocator.free(stdout);
 
     const result = child.wait() catch {
@@ -76,7 +76,7 @@ test "config loading from custom path via CLI" {
     }
 }
 
-/// Test that a missing config file uses defaults (no crash).
+// Test that a missing config file uses defaults (no crash).
 test "missing config file uses defaults" {
     const allocator = testing.allocator;
 
@@ -96,7 +96,7 @@ test "missing config file uses defaults" {
 
     try child.spawn();
 
-    const stdout = child.stdout.?.reader().readAllAlloc(allocator, 64 * 1024) catch "";
+    const stdout = child.stdout.?.readToEndAlloc(allocator, 64 * 1024) catch "";
     defer if (stdout.len > 0) allocator.free(stdout);
 
     const result = child.wait() catch {
@@ -112,9 +112,9 @@ test "missing config file uses defaults" {
     }
 }
 
-/// Test config hot-reload mechanism at file-watcher level.
-/// Creates a config file, initializes the watcher, modifies the file,
-/// and verifies the watcher detects the change.
+// Test config hot-reload mechanism at file-watcher level.
+// Creates a config file, initializes the watcher, modifies the file,
+// and verifies the watcher detects the change.
 test "config hot-reload detects file changes" {
     const allocator = testing.allocator;
 

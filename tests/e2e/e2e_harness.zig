@@ -161,44 +161,40 @@ pub const TestApp = struct {
 /// Auto-detect available shells on the current system (D-32, D-33).
 /// Returns shells that exist, with category (blocking vs warning_only per D-35).
 pub fn availableShells(allocator: std.mem.Allocator) ![]ShellInfo {
-    var shells = std.ArrayList(ShellInfo).init(allocator);
-    errdefer shells.deinit();
+    var shells: std.ArrayList(ShellInfo) = .empty;
+    errdefer shells.deinit(allocator);
 
     if (comptime builtin.os.tag == .windows) {
-        tryAddShell(&shells, "powershell", "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", .blocking, "-NoProfile");
-        tryAddShell(&shells, "cmd", "C:\\Windows\\System32\\cmd.exe", .blocking, null);
+        tryAddShell(&shells, allocator, "powershell", "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", .blocking, "-NoProfile");
+        tryAddShell(&shells, allocator, "cmd", "C:\\Windows\\System32\\cmd.exe", .blocking, null);
         tryAddShellFromPath(&shells, allocator, "nu", .warning_only, null);
     } else if (comptime builtin.os.tag == .macos) {
-        tryAddShell(&shells, "zsh", "/bin/zsh", .blocking, "--no-rcs");
-        tryAddShell(&shells, "bash", "/bin/bash", .blocking, "--norc");
+        tryAddShell(&shells, allocator, "zsh", "/bin/zsh", .blocking, "--no-rcs");
+        tryAddShell(&shells, allocator, "bash", "/bin/bash", .blocking, "--norc");
         tryAddShellFromPath(&shells, allocator, "nu", .warning_only, null);
         tryAddShellFromPath(&shells, allocator, "fish", .warning_only, "--no-config");
     } else {
         // Linux
-        tryAddShell(&shells, "bash", "/bin/bash", .blocking, "--norc");
-        tryAddShell(&shells, "zsh", "/usr/bin/zsh", .blocking, "--no-rcs");
+        tryAddShell(&shells, allocator, "bash", "/bin/bash", .blocking, "--norc");
+        tryAddShell(&shells, allocator, "zsh", "/usr/bin/zsh", .blocking, "--no-rcs");
         tryAddShellFromPath(&shells, allocator, "nu", .warning_only, null);
         tryAddShellFromPath(&shells, allocator, "fish", .warning_only, "--no-config");
     }
 
-    return shells.toOwnedSlice();
+    return shells.toOwnedSlice(allocator);
 }
 
 /// Check if shell exists at a fixed path and add to list.
 fn tryAddShell(
     shells: *std.ArrayList(ShellInfo),
+    allocator: std.mem.Allocator,
     name: []const u8,
     path: []const u8,
     category: ShellCategory,
     norc_flag: ?[]const u8,
 ) void {
-    if (comptime builtin.os.tag == .windows) {
-        // On Windows, check if file exists via std.fs
-        std.fs.cwd().access(path, .{}) catch return;
-    } else {
-        std.fs.cwd().access(path, .{}) catch return;
-    }
-    shells.append(.{
+    std.fs.cwd().access(path, .{}) catch return;
+    shells.append(allocator, .{
         .name = name,
         .path = path,
         .category = category,
@@ -226,17 +222,21 @@ fn tryAddShellFromPath(
             std.fmt.allocPrint(allocator, "{s}\\{s}.exe", .{ dir, name }) catch continue
         else
             std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir, name }) catch continue;
-        defer allocator.free(exe_name);
 
-        std.fs.cwd().access(exe_name, .{}) catch continue;
+        std.fs.cwd().access(exe_name, .{}) catch {
+            allocator.free(exe_name);
+            continue;
+        };
 
-        // Found it -- store the path (need to dupe since exe_name is deferred)
-        shells.append(.{
+        // Found it -- exe_name is heap-allocated, ownership transfers to the list
+        shells.append(allocator, .{
             .name = name,
-            .path = dir, // Caller uses name to reconstruct full path
+            .path = exe_name,
             .category = category,
             .norc_flag = norc_flag,
-        }) catch {};
+        }) catch {
+            allocator.free(exe_name);
+        };
         return;
     }
 }

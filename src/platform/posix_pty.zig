@@ -9,8 +9,15 @@
 const std = @import("std");
 const posix = std.posix;
 
+const builtin = @import("builtin");
+
 const c = @cImport({
-    @cInclude("pty.h"); // forkpty
+    // forkpty lives in <util.h> on macOS, <pty.h> on Linux.
+    if (builtin.os.tag == .macos) {
+        @cInclude("util.h");
+    } else {
+        @cInclude("pty.h");
+    }
     @cInclude("unistd.h"); // execvp, close, read, write
     @cInclude("stdlib.h"); // setenv
     @cInclude("sys/ioctl.h"); // ioctl, TIOCSWINSZ
