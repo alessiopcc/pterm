@@ -221,7 +221,10 @@ fn findTestFont() ?[*:0]const u8 {
     };
     for (candidates) |path| {
         // Check if file exists by attempting to open.
-        const file = std.fs.openFileAbsoluteZ(path, .{}) catch continue;
+        // Use cwd().openFileZ instead of openFileAbsoluteZ to avoid
+        // assert panic when encountering non-native path formats
+        // (e.g. Windows paths on macOS/Linux).
+        const file = std.fs.cwd().openFileZ(path, .{}) catch continue;
         file.close();
         return path;
     }

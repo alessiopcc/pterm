@@ -23,6 +23,7 @@ const c = @cImport({
     @cInclude("sys/ioctl.h"); // ioctl, TIOCSWINSZ
     @cInclude("sys/wait.h"); // waitpid, WNOHANG
     @cInclude("signal.h"); // kill
+    @cInclude("fcntl.h"); // fcntl, O_NONBLOCK
 });
 
 pub const PosixPtyError = error{
@@ -92,6 +93,13 @@ pub const PosixPty = struct {
         // Parent process
         self.master_fd = master_fd;
         self.child_pid = pid;
+
+        // Set master fd to non-blocking so read() returns EAGAIN (0)
+        // instead of blocking indefinitely when no data is available.
+        const flags = c.fcntl(master_fd, c.F_GETFL, @as(c_int, 0));
+        if (flags >= 0) {
+            _ = c.fcntl(master_fd, c.F_SETFL, flags | c.O_NONBLOCK);
+        }
     }
 
     /// Read bytes from the child process output.
@@ -152,7 +160,7 @@ pub const PosixPty = struct {
             if (waited == 0) {
                 // Child still running, send SIGTERM and wait briefly
                 _ = c.kill(self.child_pid, c.SIGTERM);
-                _ = c.usleep(200_000); // 200ms grace period
+                _ = c.usleep(50_000); // 50ms grace period
                 const still_running = c.waitpid(self.child_pid, &status, c.WNOHANG);
                 if (still_running == 0) {
                     // Child ignored SIGTERM, force kill

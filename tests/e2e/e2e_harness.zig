@@ -194,12 +194,15 @@ fn tryAddShell(
     norc_flag: ?[]const u8,
 ) void {
     std.fs.cwd().access(path, .{}) catch return;
+    const owned_path = allocator.dupe(u8, path) catch return;
     shells.append(allocator, .{
         .name = name,
-        .path = path,
+        .path = owned_path,
         .category = category,
         .norc_flag = norc_flag,
-    }) catch {};
+    }) catch {
+        allocator.free(owned_path);
+    };
 }
 
 /// Find shell by name in PATH and add to list.

@@ -62,7 +62,7 @@ test "PTY read produces output after spawn" {
     // Read some output (shell prompt, VT sequences)
     var buf: [4096]u8 = undefined;
     var total: usize = 0;
-    const deadline = std.time.milliTimestamp() + 5000;
+    const deadline = std.time.milliTimestamp() + 3000;
 
     while (std.time.milliTimestamp() < deadline and total == 0) {
         if (comptime builtin.os.tag == .windows) {

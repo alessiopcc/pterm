@@ -36,11 +36,19 @@ const BellState = bell_state_mod.BellState;
 const AgentState = @import("agent_state").AgentState;
 const glfw = @import("zglfw");
 
+/// Wrapper around glfw.getProcAddress that aligns the returned pointer
+/// for zigglgen compatibility (macOS returns `?*const anyopaque` but
+/// zigglgen expects `?*align(4) const anyopaque`).
+fn glProcLoader(name: [*:0]const u8) ?*align(4) const anyopaque {
+    const ptr = glfw.getProcAddress(name) orelse return null;
+    return @alignCast(ptr);
+}
+
 pub fn renderThreadMain(self: *App) void {
     // Acquire GL context
     self.window.makeContextCurrent();
 
-    if (!self.gl_procs.init(glfw.getProcAddress)) {
+    if (!self.gl_procs.init(glProcLoader)) {
         std.log.err("Failed to initialize OpenGL procedure table", .{});
         return;
     }

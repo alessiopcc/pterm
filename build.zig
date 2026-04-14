@@ -130,6 +130,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/platform/pty.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
 
     const platform_shell_mod = b.createModule(.{
@@ -283,6 +284,14 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     rasterizer_coretext_mod.addImport("font_types", font_types_mod);
+    if (freetype_dep) |dep| {
+        rasterizer_coretext_mod.linkLibrary(dep.artifact("freetype"));
+    }
+    if (target.result.os.tag == .macos) {
+        rasterizer_coretext_mod.linkFramework("CoreText", .{});
+        rasterizer_coretext_mod.linkFramework("CoreGraphics", .{});
+        rasterizer_coretext_mod.linkFramework("CoreFoundation", .{});
+    }
 
     // Platform-dispatched rasterizer (comptime selects backend)
     const rasterizer_mod = b.createModule(.{
@@ -314,6 +323,9 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    if (target.result.os.tag == .linux) {
+        discovery_fontconfig_mod.linkSystemLibrary("fontconfig", .{});
+    }
 
     // CoreText font discovery module (macOS)
     const discovery_coretext_mod = b.createModule(.{
@@ -321,6 +333,10 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    if (target.result.os.tag == .macos) {
+        discovery_coretext_mod.linkFramework("CoreText", .{});
+        discovery_coretext_mod.linkFramework("CoreFoundation", .{});
+    }
 
     // Platform-dispatched font discovery
     const discovery_mod = b.createModule(.{
@@ -1180,6 +1196,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("tests/e2e/e2e_harness.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
     e2e_harness_mod.addImport("pty", platform_pty_mod);
 

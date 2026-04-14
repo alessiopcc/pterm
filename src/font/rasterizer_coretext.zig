@@ -159,7 +159,7 @@ pub const CoreTextRasterizer = struct {
             char_count = 2;
         }
 
-        if (c.CTFontGetGlyphsForCharacters(self.font, &chars, &glyphs, @intCast(char_count)) == 0) {
+        if (!c.CTFontGetGlyphsForCharacters(self.font, &chars, &glyphs, @intCast(char_count))) {
             return error.GlyphNotFound;
         }
 
@@ -230,6 +230,73 @@ pub const CoreTextRasterizer = struct {
         };
     }
 
+    /// Rasterize a single glyph with color (emoji) support.
+    /// CoreText always renders in grayscale via CGBitmapContext, so this
+    /// delegates to the standard rasterizeGlyph path.
+    pub fn rasterizeGlyphColor(self: *CoreTextRasterizer, allocator: std.mem.Allocator, codepoint: u21) !GlyphBitmap {
+        return self.rasterizeGlyph(allocator, codepoint);
+    }
+
+    /// Rasterize a glyph by its CoreText glyph index (not codepoint).
+    /// When `color` is true, attempts color rendering (currently same path).
+    pub fn rasterizeGlyphByID(self: *CoreTextRasterizer, allocator: std.mem.Allocator, glyph_id: u32, color: bool) !GlyphBitmap {
+        _ = color;
+        const glyph: c.CGGlyph = @intCast(glyph_id);
+
+        // Get bounding box.
+        var bounding_rect: c.CGRect = undefined;
+        _ = c.CTFontGetBoundingRectsForGlyphs(self.font, c.kCTFontOrientationDefault, &glyph, &bounding_rect, 1);
+
+        const width: u32 = @intFromFloat(@ceil(bounding_rect.size.width));
+        const height: u32 = @intFromFloat(@ceil(bounding_rect.size.height));
+
+        if (width == 0 or height == 0) {
+            var advance: c.CGSize = undefined;
+            _ = c.CTFontGetAdvancesForGlyphs(self.font, c.kCTFontOrientationDefault, &glyph, &advance, 1);
+            return GlyphBitmap{
+                .data = &.{},
+                .width = 0,
+                .height = 0,
+                .bearing_x = 0,
+                .bearing_y = 0,
+                .advance = @intFromFloat(@round(advance.width)),
+            };
+        }
+
+        const buf = try allocator.alloc(u8, @as(usize, width) * @as(usize, height));
+        @memset(buf, 0);
+
+        const colorspace = c.CGColorSpaceCreateDeviceGray();
+        defer c.CGColorSpaceRelease(colorspace);
+
+        const ctx = c.CGBitmapContextCreate(buf.ptr, width, height, 8, width, colorspace, c.kCGImageAlphaNone);
+        if (ctx == null) {
+            allocator.free(buf);
+            return error.GlyphRenderFailed;
+        }
+        defer c.CGContextRelease(ctx);
+
+        c.CGContextSetGrayFillColor(ctx, 1.0, 1.0);
+
+        const origin_x: c.CGFloat = -bounding_rect.origin.x;
+        const origin_y: c.CGFloat = -bounding_rect.origin.y;
+        var position = c.CGPoint{ .x = origin_x, .y = origin_y };
+
+        c.CTFontDrawGlyphs(self.font, &glyph, &position, 1, ctx);
+
+        var advance: c.CGSize = undefined;
+        _ = c.CTFontGetAdvancesForGlyphs(self.font, c.kCTFontOrientationDefault, &glyph, &advance, 1);
+
+        return GlyphBitmap{
+            .data = buf,
+            .width = width,
+            .height = height,
+            .bearing_x = @intFromFloat(@round(bounding_rect.origin.x)),
+            .bearing_y = @intFromFloat(@round(bounding_rect.origin.y + bounding_rect.size.height)),
+            .advance = @intFromFloat(@round(advance.width)),
+        };
+    }
+
     /// Compute font metrics from the CoreText font.
     pub fn getMetrics(self: *CoreTextRasterizer) FontMetrics {
         const ascent: f32 = @floatCast(c.CTFontGetAscent(self.font));
@@ -244,7 +311,7 @@ pub const CoreTextRasterizer = struct {
             const cp: u21 = @intCast(cp_usize);
             var ch: [1]u16 = .{@intCast(cp)};
             var glyph: [1]c.CGGlyph = undefined;
-            if (c.CTFontGetGlyphsForCharacters(self.font, &ch, &glyph, 1) != 0) {
+            if (c.CTFontGetGlyphsForCharacters(self.font, &ch, &glyph, 1)) {
                 var adv: c.CGSize = undefined;
                 _ = c.CTFontGetAdvancesForGlyphs(self.font, c.kCTFontOrientationDefault, &glyph, &adv, 1);
                 const advance_f: f32 = @floatCast(adv.width);
@@ -295,6 +362,6 @@ pub const CoreTextRasterizer = struct {
         } else {
             return false; // Simplified -- surrogate pair check would be needed for non-BMP
         }
-        return c.CTFontGetGlyphsForCharacters(self.font, &ch, &glyph, 1) != 0;
+        return c.CTFontGetGlyphsForCharacters(self.font, &ch, &glyph, 1);
     }
 };

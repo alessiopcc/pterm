@@ -16,7 +16,7 @@ test "TERM env var is xterm-256color" {
     defer app.deinit();
 
     // Wait for shell to start
-    std.Thread.sleep(500 * std.time.ns_per_ms);
+    std.Thread.sleep(200 * std.time.ns_per_ms);
 
     // Send command to print TERM
     if (comptime builtin.os.tag == .windows) {
@@ -27,7 +27,7 @@ test "TERM env var is xterm-256color" {
     }
 
     // Verify output contains xterm-256color
-    const found = try app.expectOutput("xterm-256color", 10000);
+    const found = try app.expectOutput("xterm-256color", 3000);
     // Note: If the PTY env vars are not set by pterm yet, this may not be found.
     // The test documents the expected behavior per D-48.
     if (!found) {
@@ -44,7 +44,7 @@ test "COLORTERM env var is truecolor" {
     var app = try TestApp.init(allocator, shell_path, null);
     defer app.deinit();
 
-    std.Thread.sleep(500 * std.time.ns_per_ms);
+    std.Thread.sleep(200 * std.time.ns_per_ms);
 
     if (comptime builtin.os.tag == .windows) {
         try app.sendInput("echo %COLORTERM%\r\n");
@@ -52,7 +52,7 @@ test "COLORTERM env var is truecolor" {
         try app.sendInput("echo $COLORTERM\n");
     }
 
-    const found = try app.expectOutput("truecolor", 10000);
+    const found = try app.expectOutput("truecolor", 3000);
     if (!found) {
         std.log.warn("COLORTERM=truecolor not found in child shell output -- may need PTY env setup", .{});
     }

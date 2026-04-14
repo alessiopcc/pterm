@@ -7,6 +7,14 @@
 /// Communication between threads uses atomics (lock-free for hot path).
 const std = @import("std");
 const glfw = @import("zglfw");
+
+/// Wrapper around glfw.getProcAddress that aligns the returned pointer
+/// for zigglgen compatibility (macOS returns `?*const anyopaque` but
+/// zigglgen expects `?*align(4) const anyopaque`).
+fn glProcLoader(name: [*:0]const u8) ?*align(4) const anyopaque {
+    const ptr = glfw.getProcAddress(name) orelse return null;
+    return @alignCast(ptr);
+}
 const gl = @import("gl");
 const termio_mod = @import("termio");
 const renderer_mod = @import("renderer");
@@ -194,7 +202,7 @@ pub const Surface = struct {
         self.window.makeContextCurrent();
 
         // 2. Initialize GL procedure table
-        if (!self.gl_procs.init(glfw.getProcAddress)) {
+        if (!self.gl_procs.init(glProcLoader)) {
             std.log.err("Failed to initialize OpenGL procedure table", .{});
             return;
         }

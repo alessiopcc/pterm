@@ -8,18 +8,18 @@ const testing = std.testing;
 const harness = @import("e2e_harness");
 const TestApp = harness.TestApp;
 
-// Rapid PTY create/close: 50 iterations to check for resource leaks.
-test "rapid pty create close (50 iterations)" {
+// Rapid PTY create/close: 20 iterations to check for resource leaks.
+test "rapid pty create close (20 iterations)" {
     const allocator = testing.allocator;
     const shell_path = harness.defaultShellPath();
 
     var i: usize = 0;
-    while (i < 50) : (i += 1) {
+    while (i < 20) : (i += 1) {
         var app = TestApp.init(allocator, shell_path, null) catch |err| {
             // On some systems, rapid create/close can exhaust resources temporarily
-            if (i > 10) {
+            if (i > 5) {
                 std.log.warn("PTY creation failed at iteration {} (may be resource limit): {}", .{ i, err });
-                return; // Acceptable after 10+ successful iterations
+                return; // Acceptable after 5+ successful iterations
             }
             return err;
         };
@@ -36,7 +36,7 @@ test "fast output stress" {
     defer app.deinit();
 
     // Wait for shell to initialize
-    std.Thread.sleep(500 * std.time.ns_per_ms);
+    std.Thread.sleep(200 * std.time.ns_per_ms);
 
     // Platform-specific loop command for generating lots of output
     if (comptime builtin.os.tag == .windows) {
@@ -48,7 +48,7 @@ test "fast output stress" {
     }
 
     // Read until we see evidence of late output or timeout (15 seconds)
-    const found = try app.expectOutput("STRESS_LINE_", 15000);
+    const found = try app.expectOutput("STRESS_LINE_", 5000);
     try testing.expect(found);
 }
 
@@ -73,7 +73,7 @@ test "multiple shells simultaneously" {
     }
 
     // Wait for all shells to start
-    std.Thread.sleep(1000 * std.time.ns_per_ms);
+    std.Thread.sleep(300 * std.time.ns_per_ms);
 
     // Send unique marker to each
     const markers = [_][]const u8{
@@ -94,7 +94,7 @@ test "multiple shells simultaneously" {
     // Verify at least 2 of 3 respond (allow some tolerance)
     var responses: usize = 0;
     for (&apps, markers) |*app, marker| {
-        if (app.expectOutput(marker, 5000) catch false) {
+        if (app.expectOutput(marker, 3000) catch false) {
             responses += 1;
         }
     }

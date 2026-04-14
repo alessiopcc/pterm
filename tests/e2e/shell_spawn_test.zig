@@ -20,7 +20,14 @@ const MARKER = "PTERM_E2E_MARKER_7f3a";
 test "shell spawn and echo marker for all available shells" {
     const allocator = testing.allocator;
     const shells = try harness.availableShells(allocator);
-    defer allocator.free(shells);
+    defer {
+        for (shells) |shell| {
+            // Free heap-allocated paths from tryAddShellFromPath
+            // (static paths from tryAddShell are string literals and won't be freed).
+            allocator.free(shell.path);
+        }
+        allocator.free(shells);
+    }
 
     if (shells.len == 0) {
         std.log.warn("No shells detected on this system -- skipping shell spawn tests", .{});
@@ -55,7 +62,7 @@ fn testShellEcho(allocator: std.mem.Allocator, shell: harness.ShellInfo) !void {
     defer app.deinit();
 
     // Wait briefly for shell to initialize
-    std.Thread.sleep(500 * std.time.ns_per_ms);
+    std.Thread.sleep(200 * std.time.ns_per_ms);
 
     // Send echo command appropriate for the shell
     const echo_cmd = if (comptime builtin.os.tag == .windows)
@@ -69,7 +76,7 @@ fn testShellEcho(allocator: std.mem.Allocator, shell: harness.ShellInfo) !void {
     try app.sendInput(echo_cmd);
 
     // Verify marker appears in output within 10 seconds
-    const found = try app.expectOutput(MARKER, 10000);
+    const found = try app.expectOutput(MARKER, 3000);
     if (!found) return error.MarkerNotFound;
 }
 
@@ -83,6 +90,6 @@ test "default shell spawn and basic I/O" {
 
     // Shell should produce some initial output (prompt, VT sequences)
     var buf: [4096]u8 = undefined;
-    const n = try app.readOutputTimeout(&buf, 5000);
+    const n = try app.readOutputTimeout(&buf, 3000);
     try testing.expect(n > 0);
 }

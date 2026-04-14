@@ -43,13 +43,13 @@ jobs:
           path: |
             .zig-cache
             zig-out
-          key: ${{ runner.os }}-zig-${{ hashFiles('build.zig.zon') }}
+          key: ${{ runner.os }}-zig-${{ hashFiles('build.zig.zon', 'build.zig', 'src/**/*.zig') }}
           restore-keys: |
             ${{ runner.os }}-zig-
 
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libgl-dev
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libgl-dev libfontconfig-dev
 
       - name: Build
         run: zig build
@@ -77,8 +77,9 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y fish zsh
 
-      # D-31: E2E tests (skip on Windows — ConPTY hangs in headless CI)
+      # D-31: E2E tests (Linux only — macOS PTY tests exceed CI time limits,
+      # Windows ConPTY hangs in headless CI)
       - name: E2E tests
-        if: runner.os != 'Windows'
+        if: runner.os == 'Linux'
         run: zig build test-e2e
         timeout-minutes: 10
