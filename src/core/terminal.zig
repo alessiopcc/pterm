@@ -109,6 +109,13 @@ pub const PTermTerminal = struct {
         return self.terminal.modes.get(.mouse_format_sgr);
     }
 
+    /// Returns true if bracketed paste mode (DEC mode 2004) is active.
+    /// When enabled, pasted text must be wrapped in \e[200~ ... \e[201~
+    /// so the shell treats it as a single paste rather than individual lines.
+    pub fn isBracketedPasteEnabled(self: *PTermTerminal) bool {
+        return self.terminal.modes.get(.bracketed_paste);
+    }
+
     /// Access the underlying ghostty-vt ScreenSet for advanced queries.
     pub fn getScreens(self: *PTermTerminal) *ghostty_vt.ScreenSet {
         return &self.terminal.screens;

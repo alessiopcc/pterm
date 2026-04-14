@@ -687,9 +687,22 @@ pub const Surface = struct {
     }
 
     /// Paste clipboard contents to terminal PTY.
+    /// When bracketed paste mode (DEC 2004) is active, wraps the pasted
+    /// text in \e[200~ ... \e[201~ so the shell treats it as a single
+    /// paste event rather than executing each line individually.
     pub fn pasteFromClipboard(self: *Surface) void {
         if (glfw.getClipboardString(self.window.handle)) |clip| {
+            const snapshot = self.termio.lockTerminal();
+            const bracketed = @constCast(snapshot).isBracketedPasteEnabled();
+            self.termio.unlockTerminal();
+
+            if (bracketed) {
+                self.termio.writeInput("\x1b[200~") catch {};
+            }
             self.termio.writeInput(clip) catch {};
+            if (bracketed) {
+                self.termio.writeInput("\x1b[201~") catch {};
+            }
             self.scheduler.markActive();
             self.requestFrame();
         }
