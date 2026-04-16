@@ -298,26 +298,58 @@ pub fn renderThreadMain(self: *App) void {
                                 }
                             }
 
-                            // Debounced agent scan — check flag set by observer callback
-                            // Skip scan while resize suppress is active (PTY redraws produce false matches)
+                            // Debounced agent scan — check flag set by observer callback.
+                            // Skip scan while resize suppress is active (PTY redraws produce false matches).
+                            //
+                            // Two-step commit to avoid false flash/notify from brief spinner pauses:
+                            //   1. After `quiet_ns` with no output, run scan.
+                            //   2. On first match, mark a candidate timestamp — do NOT triggerWaiting yet.
+                            //   3. Only commit triggerWaiting once the candidate has persisted for
+                            //      `confirm_ns` with no new output. Any new output clears the candidate
+                            //      (see agentOutputCallback), resetting the confirmation clock.
+                            const agent_now_ns = std.time.nanoTimestamp();
+                            const agent_quiet_ns: i128 = 250 * 1_000_000; // 250ms: scan debounce
+                            const agent_confirm_ns: i128 = 750 * 1_000_000; // 750ms: waiting commit delay
+                            const output_is_quiet = (agent_now_ns - pd.idle_tracker.last_output_ns) >= agent_quiet_ns;
                             if (pd.suppress_agent_output.load(.acquire)) {
                                 pd.needs_agent_scan.store(false, .release);
-                            } else if (pd.needs_agent_scan.load(.acquire)) {
-                                pd.needs_agent_scan.store(false, .release);
-                                if (self.agent_detector) |*detector| {
-                                    // Extract last N visible lines from terminal for pattern scan
-                                    const scan_snap = pd.termio.lockTerminal();
-                                    var line_buf: [20][256]u8 = undefined;
-                                    var lines: [20][]const u8 = undefined;
-                                    const n_lines = extractVisibleLines(scan_snap, &line_buf, &lines, detector.scan_lines);
-                                    pd.termio.unlockTerminal();
-                                    if (detector.scanLines(lines[0..n_lines])) {
+                                pd.agent_candidate_ns = 0;
+                            } else {
+                                // Step 1: run scan if armed by callback AND output has settled.
+                                if (pd.needs_agent_scan.load(.acquire)) {
+                                    if (!output_is_quiet) {
+                                        self.requestFrame(); // keep flag armed, recheck when quiet
+                                    } else {
+                                        pd.needs_agent_scan.store(false, .release);
+                                        if (self.agent_detector) |*detector| {
+                                            const scan_snap = pd.termio.lockTerminal();
+                                            var line_buf: [20][256]u8 = undefined;
+                                            var lines: [20][]const u8 = undefined;
+                                            const n_lines = extractVisibleLines(scan_snap, &line_buf, &lines, detector.scan_lines);
+                                            pd.termio.unlockTerminal();
+                                            if (detector.scanLines(lines[0..n_lines])) {
+                                                if (pd.agent_candidate_ns == 0) pd.agent_candidate_ns = agent_now_ns;
+                                            } else {
+                                                pd.agent_candidate_ns = 0; // pattern gone
+                                            }
+                                        }
+                                    }
+                                }
+                                // Step 2: confirm commit — independent of scan flag.
+                                // Runs every frame while a candidate is pending. Parser-thread callback
+                                // zeroes agent_candidate_ns on any new output, so a brief spinner pause
+                                // that re-produces output invalidates the candidate automatically.
+                                if (pd.agent_candidate_ns != 0) {
+                                    if ((agent_now_ns - pd.agent_candidate_ns) >= agent_confirm_ns) {
                                         pd.agent_state.triggerWaiting();
+                                        pd.agent_candidate_ns = 0;
+                                    } else {
+                                        self.requestFrame(); // recheck next frame
                                     }
                                 }
                             }
-                            // Idle detection check (skip during resize suppress)
-                            if (!pd.suppress_agent_output.load(.acquire) and pd.idle_tracker.isIdle(std.time.nanoTimestamp())) {
+                            // Idle detection check (skip during resize suppress, and while output is still flowing)
+                            if (!pd.suppress_agent_output.load(.acquire) and output_is_quiet and pd.idle_tracker.isIdle(agent_now_ns)) {
                                 pd.agent_state.triggerWaiting();
                             }
 

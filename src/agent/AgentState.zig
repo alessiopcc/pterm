@@ -33,6 +33,11 @@ pub const AgentState = struct {
     /// Flash duration: 150ms UI-SPEC.
     pub const FLASH_DURATION_NS: i128 = 150_000_000;
 
+    /// Flash/notification cooldown: 30s. Prevents repeat flashes when state
+    /// cycles waiting↔working↔idle due to background output (cursor blinks,
+    /// OSC title updates) while the agent is genuinely awaiting input.
+    pub const FLASH_COOLDOWN_NS: i128 = 30_000_000_000;
+
     /// Current state, atomically updated for cross-thread reads.
     state: std.atomic.Value(State) = std.atomic.Value(State).init(.idle),
 
@@ -56,21 +61,30 @@ pub const AgentState = struct {
     /// Notification pending: set when entering .waiting, consumed by render thread to fire OS notification.
     notification_pending: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
+    /// Last wall-clock time a flash/notification actually fired (for per-pane cooldown).
+    /// Suppresses repeat flashes during state cycling; see FLASH_COOLDOWN_NS.
+    last_flash_fired_ns: i128 = 0,
+
     /// Transition to .waiting state. Called when pattern match or idle timeout detected.
-    /// Flash fires only on first entry (not re-entry while already waiting).
+    /// Flash fires only on first entry (not re-entry while already waiting)
+    /// AND only if FLASH_COOLDOWN_NS has elapsed since the last flash.
     pub fn triggerWaiting(self: *AgentState) void {
         self.triggerWaitingWithTimestamp(std.time.nanoTimestamp());
     }
 
     /// Testable variant with explicit timestamp.
     pub fn triggerWaitingWithTimestamp(self: *AgentState, now: i128) void {
-        // Only trigger flash on first entry to waiting (not if already waiting)
         if (self.state.load(.acquire) == .waiting) return;
         self.state.store(.waiting, .release);
-        self.flash_triggered.store(true, .release);
-        self.notification_pending.store(true, .release);
         self.show_badge = true;
         self.waiting_start_ns = now;
+        // Flash/notification cooldown: fire at most once per FLASH_COOLDOWN_NS per pane.
+        const elapsed = now - self.last_flash_fired_ns;
+        if (self.last_flash_fired_ns == 0 or elapsed >= FLASH_COOLDOWN_NS) {
+            self.flash_triggered.store(true, .release);
+            self.notification_pending.store(true, .release);
+            self.last_flash_fired_ns = now;
+        }
     }
 
     /// Called when terminal output received. Instantly clears waiting state.

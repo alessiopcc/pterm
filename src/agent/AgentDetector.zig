@@ -63,25 +63,18 @@ pub const AgentDetector = struct {
     pub fn scanLines(self: *const AgentDetector, lines: []const []const u8) bool {
         if (lines.len == 0) return false;
 
-        // Determine scan range: last N lines
         const start = if (lines.len > self.scan_lines)
             lines.len - self.scan_lines
         else
             0;
 
         for (lines[start..]) |line| {
-            // Check preset patterns (literal substring match)
             for (self.preset_patterns) |pattern| {
-                if (std.mem.indexOf(u8, line, pattern) != null) {
-                    return true;
-                }
+                if (std.mem.indexOf(u8, line, pattern) != null) return true;
             }
-            // Check custom patterns (literal substring match in v1)
             for (self.custom_patterns) |pattern| {
-                if (pattern.len == 0) continue; // Skip empty patterns
-                if (std.mem.indexOf(u8, line, pattern) != null) {
-                    return true;
-                }
+                if (pattern.len == 0) continue;
+                if (std.mem.indexOf(u8, line, pattern) != null) return true;
             }
         }
         return false;

@@ -138,6 +138,11 @@ pub const PaneData = struct {
     /// Suppress agent state transitions during resize (PTY redraws cause false positives).
     suppress_agent_output: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
+    /// Render-thread: timestamp when a waiting-pattern was first seen during a quiet window.
+    /// 0 = no pending candidate. Cleared by parser thread on any new output so that
+    /// a brief spinner pause doesn't commit to waiting (avoids false flash/notify).
+    agent_candidate_ns: i128 = 0,
+
     /// Scrollback viewport offset: 0 = live (bottom), >0 = scrolled up N lines into history.
     scroll_offset: u32 = 0,
 };
@@ -661,7 +666,7 @@ pub const App = struct {
 
         // Wire bell detection: Observer fires callbacks.bellCallback when BEL (0x07) found in output.
         pd.termio.terminal.observer.onBell = callbacks.bellCallback;
-        pd.termio.terminal.observer.bell_ctx = @ptrCast(&pd.bell_state);
+        pd.termio.terminal.observer.bell_ctx = @ptrCast(pd);
 
         // Wire agent output detection: Observer fires callbacks.agentOutputCallback on raw output.
         pd.termio.terminal.observer.onAgentOutput = callbacks.agentOutputCallback;

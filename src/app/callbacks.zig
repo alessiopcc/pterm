@@ -253,11 +253,14 @@ pub fn cursorPosCallback(handle: *glfw.Window, xpos: f64, ypos: f64) callconv(.c
 // -- Observer callbacks --
 
 /// Bell callback: invoked from read thread when BEL byte detected in output.
-/// Context pointer points to the PaneData's BellState.
+/// Context pointer points to PaneData. Suppresses bell when the pane's agent
+/// is in the .working state — TUIs like Claude Code emit BEL several times
+/// per second during active output, which would flash the pane continuously.
 pub fn bellCallback(ctx: ?*anyopaque) void {
     if (ctx) |c| {
-        const state: *BellState = @ptrCast(@alignCast(c));
-        _ = state.trigger();
+        const pd: *PaneData = @ptrCast(@alignCast(c));
+        if (pd.agent_state.state.load(.acquire) == .working) return;
+        _ = pd.bell_state.trigger();
     }
 }
 
@@ -275,6 +278,8 @@ pub fn agentOutputCallback(ctx: ?*anyopaque) void {
         pd.agent_state.onOutput();
         pd.idle_tracker.recordOutputNow();
         pd.needs_agent_scan.store(true, .release);
+        // Reset pending waiting candidate so spinner redraws can't commit to waiting.
+        pd.agent_candidate_ns = 0;
     }
 }
 

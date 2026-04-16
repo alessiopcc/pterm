@@ -11,7 +11,6 @@
 pub const conservative_patterns = [_][]const u8{
     "Do you want to proceed?",
     "Would you like me to",
-    "? ",
     "(Y/n)",
     "(y/N)",
     "[Y/n]",
@@ -19,6 +18,8 @@ pub const conservative_patterns = [_][]const u8{
     "aider> ",
     "? Run this command",
     "? Select a command",
+    "? Choose ",
+    "? Confirm ",
 };
 
 /// Broad preset: conservative patterns plus common shell/CLI confirmation prompts.
@@ -47,7 +48,7 @@ test "conservative_patterns contains expected entries" {
     var found_yn = false;
     for (&conservative_patterns) |p| {
         if (std.mem.eql(u8, p, "Do you want to proceed?")) found_proceed = true;
-        if (std.mem.eql(u8, p, "? ")) found_inquirer = true;
+        if (std.mem.eql(u8, p, "? Run this command")) found_inquirer = true;
         if (std.mem.eql(u8, p, "aider> ")) found_aider = true;
         if (std.mem.eql(u8, p, "(Y/n)")) found_yn = true;
     }

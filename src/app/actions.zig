@@ -711,7 +711,7 @@ pub fn respawnShell(self: *App, pd: *PaneData, shell_name: []const u8) !void {
 
     // Rewire observer callbacks (same as createPane lines 588-594)
     pd.termio.terminal.observer.onBell = callbacks.bellCallback;
-    pd.termio.terminal.observer.bell_ctx = @ptrCast(&pd.bell_state);
+    pd.termio.terminal.observer.bell_ctx = @ptrCast(pd);
     pd.termio.terminal.observer.onAgentOutput = callbacks.agentOutputCallback;
     pd.termio.terminal.observer.agent_ctx = @ptrCast(pd);
 
