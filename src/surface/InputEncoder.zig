@@ -31,8 +31,6 @@ pub const EncodeResult = union(enum) {
 /// `buf` must be at least 16 bytes. Returns the result.
 pub fn encodeKey(key: Key, mods: Mods, buf: []u8) EncodeResult {
     const ctrl = mods.control;
-    const shift = mods.shift;
-    _ = shift;
 
     // Ctrl+= (font zoom in), Ctrl+- (font zoom out), Ctrl+0 (font reset)
     if (ctrl) {
@@ -57,6 +55,13 @@ pub fn encodeKey(key: Key, mods: Mods, buf: []u8) EncodeResult {
         }
     }
 
+    // Compute xterm modifier parameter: 1 + (shift?1:0) + (alt?2:0) + (ctrl?4:0)
+    const modifier: u8 = 1 +
+        (if (mods.shift) @as(u8, 1) else 0) +
+        (if (mods.alt) @as(u8, 2) else 0) +
+        (if (ctrl) @as(u8, 4) else 0);
+    const has_modifier = modifier > 1;
+
     // Special keys
     switch (key) {
         .escape => {
@@ -76,15 +81,15 @@ pub fn encodeKey(key: Key, mods: Mods, buf: []u8) EncodeResult {
             return .{ .bytes = buf[0..1] };
         },
 
-        // Arrow keys -> ESC[A/B/C/D
-        .up => return csiSequence(buf, 'A'),
-        .down => return csiSequence(buf, 'B'),
-        .right => return csiSequence(buf, 'C'),
-        .left => return csiSequence(buf, 'D'),
+        // Arrow keys -> ESC[A/B/C/D or ESC[1;{mod}A/B/C/D with modifiers
+        .up => return if (has_modifier) csiModSequence(buf, 'A', modifier) else csiSequence(buf, 'A'),
+        .down => return if (has_modifier) csiModSequence(buf, 'B', modifier) else csiSequence(buf, 'B'),
+        .right => return if (has_modifier) csiModSequence(buf, 'C', modifier) else csiSequence(buf, 'C'),
+        .left => return if (has_modifier) csiModSequence(buf, 'D', modifier) else csiSequence(buf, 'D'),
 
         // Navigation keys
-        .home => return csiSequence(buf, 'H'),
-        .end => return csiSequence(buf, 'F'),
+        .home => return if (has_modifier) csiModSequence(buf, 'H', modifier) else csiSequence(buf, 'H'),
+        .end => return if (has_modifier) csiModSequence(buf, 'F', modifier) else csiSequence(buf, 'F'),
         .insert => return csiBracketSequence(buf, '2'),
         .delete => return csiBracketSequence(buf, '3'),
         .page_up => return csiBracketSequence(buf, '5'),
@@ -116,6 +121,17 @@ pub fn encodeChar(cp: u21, buf: []u8) []const u8 {
 }
 
 // -- Internal helpers --
+
+/// CSI sequence with xterm modifier: ESC [ 1 ; {modifier} {final_byte}
+fn csiModSequence(buf: []u8, final_byte: u8, modifier: u8) EncodeResult {
+    buf[0] = 0x1B;
+    buf[1] = '[';
+    buf[2] = '1';
+    buf[3] = ';';
+    buf[4] = '0' + modifier; // modifier is 2-8, single digit
+    buf[5] = final_byte;
+    return .{ .bytes = buf[0..6] };
+}
 
 fn csiSequence(buf: []u8, final_byte: u8) EncodeResult {
     buf[0] = 0x1B;
@@ -227,4 +243,32 @@ test "Delete produces CSI 3 ~" {
     var buf: [16]u8 = undefined;
     const result = encodeKey(.delete, Mods{}, &buf);
     try std.testing.expectEqualSlices(u8, "\x1b[3~", result.bytes);
+}
+
+test "Ctrl+Right produces CSI 1;5C (word forward)" {
+    var buf: [16]u8 = undefined;
+    const ctrl = Mods{ .control = true };
+    const result = encodeKey(.right, ctrl, &buf);
+    try std.testing.expectEqualSlices(u8, "\x1b[1;5C", result.bytes);
+}
+
+test "Ctrl+Left produces CSI 1;5D (word backward)" {
+    var buf: [16]u8 = undefined;
+    const ctrl = Mods{ .control = true };
+    const result = encodeKey(.left, ctrl, &buf);
+    try std.testing.expectEqualSlices(u8, "\x1b[1;5D", result.bytes);
+}
+
+test "Shift+Right produces CSI 1;2C" {
+    var buf: [16]u8 = undefined;
+    const shift = Mods{ .shift = true };
+    const result = encodeKey(.right, shift, &buf);
+    try std.testing.expectEqualSlices(u8, "\x1b[1;2C", result.bytes);
+}
+
+test "plain arrow keys unchanged with no modifiers" {
+    var buf: [16]u8 = undefined;
+    const no_mods = Mods{};
+    const result = encodeKey(.right, no_mods, &buf);
+    try std.testing.expectEqualSlices(u8, "\x1b[C", result.bytes);
 }
