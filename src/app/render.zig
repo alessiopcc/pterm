@@ -276,8 +276,7 @@ pub fn renderThreadMain(self: *App) void {
                 tree_ops.computeBounds(active_tab.root, available, metrics.cell_width, metrics.cell_height, 1);
 
                 // Render each pane (single tree walk, no re-lookup per leaf)
-                const leaf_infos = tree_ops.collectLeafInfos(active_tab.root, std.heap.page_allocator) catch &.{};
-                defer if (leaf_infos.len > 0) std.heap.page_allocator.free(leaf_infos);
+                const leaf_infos = tree_ops.collectLeafInfos(active_tab.root, self.frame_arena.allocator()) catch &.{};
 
                 self.pane_mutex.lock();
                 for (leaf_infos) |info| {
@@ -298,27 +297,21 @@ pub fn renderThreadMain(self: *App) void {
                                 }
                             }
 
-                            // Debounced agent scan — check flag set by observer callback.
-                            // Skip scan while resize suppress is active (PTY redraws produce false matches).
-                            //
-                            // Two-step commit to avoid false flash/notify from brief spinner pauses:
-                            //   1. After `quiet_ns` with no output, run scan.
-                            //   2. On first match, mark a candidate timestamp — do NOT triggerWaiting yet.
-                            //   3. Only commit triggerWaiting once the candidate has persisted for
-                            //      `confirm_ns` with no new output. Any new output clears the candidate
-                            //      (see agentOutputCallback), resetting the confirmation clock.
+                            // Two-stage commit avoids false flash/notify from brief spinner
+                            // pauses: scan after quiet_ns, then require the match to persist
+                            // for confirm_ns before triggering. Output cancels the candidate
+                            // (see agentOutputCallback).
                             const agent_now_ns = std.time.nanoTimestamp();
-                            const agent_quiet_ns: i128 = 250 * 1_000_000; // 250ms: scan debounce
-                            const agent_confirm_ns: i128 = 750 * 1_000_000; // 750ms: waiting commit delay
+                            const agent_quiet_ns: i128 = 250 * 1_000_000;
+                            const agent_confirm_ns: i128 = 750 * 1_000_000;
                             const output_is_quiet = (agent_now_ns - pd.idle_tracker.last_output_ns) >= agent_quiet_ns;
                             if (pd.suppress_agent_output.load(.acquire)) {
                                 pd.needs_agent_scan.store(false, .release);
                                 pd.agent_candidate_ns = 0;
                             } else {
-                                // Step 1: run scan if armed by callback AND output has settled.
                                 if (pd.needs_agent_scan.load(.acquire)) {
                                     if (!output_is_quiet) {
-                                        self.requestFrame(); // keep flag armed, recheck when quiet
+                                        self.requestFrame();
                                     } else {
                                         pd.needs_agent_scan.store(false, .release);
                                         if (self.agent_detector) |*detector| {
@@ -330,15 +323,11 @@ pub fn renderThreadMain(self: *App) void {
                                             if (detector.scanLines(lines[0..n_lines])) {
                                                 if (pd.agent_candidate_ns == 0) pd.agent_candidate_ns = agent_now_ns;
                                             } else {
-                                                pd.agent_candidate_ns = 0; // pattern gone
+                                                pd.agent_candidate_ns = 0;
                                             }
                                         }
                                     }
                                 }
-                                // Step 2: confirm commit — independent of scan flag.
-                                // Runs every frame while a candidate is pending. Parser-thread callback
-                                // zeroes agent_candidate_ns on any new output, so a brief spinner pause
-                                // that re-produces output invalidates the candidate automatically.
                                 if (pd.agent_candidate_ns != 0) {
                                     if ((agent_now_ns - pd.agent_candidate_ns) >= agent_confirm_ns) {
                                         pd.agent_state.triggerWaiting();
@@ -483,7 +472,8 @@ pub fn renderThreadMain(self: *App) void {
                                 const sel_cw: u32 = @intFromFloat(metrics.cell_width);
                                 const sel_ch: u32 = @intFromFloat(metrics.cell_height);
                                 const sel_pad: i32 = @intFromFloat(rs.grid_padding);
-                                const sel_color = renderer_types.Color{ .r = 0x45, .g = 0x47, .b = 0x5a, .a = 120 };
+                                const sb = self.renderer_palette.selection_bg;
+                const sel_color = renderer_types.Color{ .r = sb.r, .g = sb.g, .b = sb.b, .a = 120 };
                                 // Selection rows may extend outside the viewport when
                                 // the user dragged while scrolling. Clip to visible
                                 // row range: skip rows < 0 (scrolled above) and stop

@@ -566,18 +566,6 @@ pub const Surface = struct {
     /// Handle clipboard action for reserved keys.
     /// Smart Ctrl+C -- copies selection when active, sends SIGINT (0x03) when not.
     pub fn handleClipboardAction(self: *Surface, combo: keybindings.KeyCombo) void {
-        if (self.debug_key_file) |f| {
-            const key_str = switch (combo.key) {
-                .char => |c| c,
-                .special => @as(u21, 0),
-            };
-            var tmp: [128]u8 = undefined;
-            const line = std.fmt.bufPrint(&tmp, "[clip-action] char='{c}'\n", .{
-                @as(u8, @intCast(key_str)),
-            }) catch "";
-            if (line.len > 0) _ = f.write(line) catch 0;
-        }
-
         const is_c = switch (combo.key) {
             .char => |c| c == 'c',
             .special => false,
@@ -714,26 +702,17 @@ pub const Surface = struct {
             // Characters not present on the layout (e.g. `~` on Italian) are
             // dropped. win32-input-mode lets us pass the Unicode codepoint
             // directly, bypassing the layout lookup.
-            var i: usize = 0;
-            while (i < clip.len) {
-                const cp_len = std.unicode.utf8ByteSequenceLength(clip[i]) catch 1;
-                if (i + cp_len > clip.len) break;
-                const cp: u21 = std.unicode.utf8Decode(clip[i..][0..cp_len]) catch {
-                    i += 1;
-                    continue;
-                };
-                var buf: [64]u8 = undefined;
-                const seq = std.fmt.bufPrint(
-                    &buf,
+            var batch: std.ArrayList(u8) = .empty;
+            defer batch.deinit(self.allocator);
+            batch.ensureTotalCapacity(self.allocator, clip.len * 2) catch {};
+            var iter = (std.unicode.Utf8View.init(clip) catch std.unicode.Utf8View.initUnchecked(clip)).iterator();
+            while (iter.nextCodepoint()) |cp| {
+                batch.writer(self.allocator).print(
                     "\x1b[0;0;{d};1;0;1_\x1b[0;0;{d};0;0;1_",
                     .{ cp, cp },
-                ) catch {
-                    i += cp_len;
-                    continue;
-                };
-                self.termio.writeInput(seq) catch {};
-                i += cp_len;
+                ) catch {};
             }
+            if (batch.items.len > 0) self.termio.writeInput(batch.items) catch {};
         } else {
             self.termio.writeInput(clip) catch {};
         }

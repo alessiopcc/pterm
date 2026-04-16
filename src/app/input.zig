@@ -113,12 +113,6 @@ pub fn handleKeyInput(self: *App, key: glfw.Key, action: glfw.Action, mods: glfw
         };
 
         if (keybindings.isReservedClipboardKey(combo)) {
-            if (self.debug_key_file) |f| {
-                var tmp: [128]u8 = undefined;
-                const ch_byte: u8 = @intCast(ch);
-                const line = std.fmt.bufPrint(&tmp, "[clip-dispatch] ctrl+{c}\n", .{ch_byte}) catch "";
-                if (line.len > 0) _ = f.write(line) catch 0;
-            }
             if (self.getFocusedPaneData()) |pd| {
                 pd.surface.handleClipboardAction(combo);
             }
@@ -327,14 +321,12 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
     if (button == .right and action == .press) {
         // Focus the pane under the mouse cursor first
         if (self.tab_manager.getActiveTab()) |active_tab| {
-            const leaves = tree_ops.collectLeaves(active_tab.root, std.heap.page_allocator) catch return;
-            defer std.heap.page_allocator.free(leaves);
-            for (leaves) |pane_id| {
-                if (tree_ops.findLeaf(active_tab.root, pane_id)) |leaf_node| {
-                    if (leaf_node.leaf.bounds.contains(fb_x, fb_y)) {
-                        active_tab.focused_pane_id = pane_id;
-                        break;
-                    }
+            const leaf_infos = tree_ops.collectLeafInfos(active_tab.root, self.allocator) catch return;
+            defer self.allocator.free(leaf_infos);
+            for (leaf_infos) |info| {
+                if (info.bounds.contains(fb_x, fb_y)) {
+                    active_tab.focused_pane_id = info.pane_id;
+                    break;
                 }
             }
         }

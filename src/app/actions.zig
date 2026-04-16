@@ -226,32 +226,13 @@ pub fn actionNewTab(self: *App) void {
     // Switch to the new tab and clear stale activity indicators
     switchToTab(self, new_tab_idx);
     resizeAllPanes(self);
-    updateTabTitles(self);
+    _ = updateTabTitles(self);
     for (self.tab_manager.tabs.items) |*t| t.has_activity = false;
 }
 
 /// Close the active tab and all its panes.
 pub fn actionCloseTab(self: *App) void {
-    self.pane_mutex.lock();
-    defer self.pane_mutex.unlock();
-
-    const tab = self.tab_manager.getActiveTab() orelse return;
-
-    // Destroy all panes in this tab
-    const leaves = tree_ops.collectLeaves(tab.root, std.heap.page_allocator) catch return;
-    defer std.heap.page_allocator.free(leaves);
-    for (leaves) |pane_id| {
-        self.destroyPane(pane_id);
-    }
-
-    const idx = self.tab_manager.active_idx;
-    const result = self.tab_manager.closeTab(idx);
-    if (result == .last_tab_closed) {
-        self.window.handle.setShouldClose(true);
-        return;
-    }
-    resizeAllPanes(self);
-    self.requestFrame();
+    actionCloseTabByIndex(self, self.tab_manager.active_idx);
 }
 
 /// Close a specific tab by index and all its panes.
@@ -261,9 +242,8 @@ pub fn actionCloseTabByIndex(self: *App, idx: usize) void {
 
     const tab = self.tab_manager.getTab(idx) orelse return;
 
-    // Destroy all panes in this tab
-    const leaves = tree_ops.collectLeaves(tab.root, std.heap.page_allocator) catch return;
-    defer std.heap.page_allocator.free(leaves);
+    const leaves = tree_ops.collectLeaves(tab.root, self.allocator) catch return;
+    defer self.allocator.free(leaves);
     for (leaves) |pane_id| {
         self.destroyPane(pane_id);
     }
@@ -348,7 +328,7 @@ pub fn actionSplit(self: *App, direction: PaneTree.SplitDirection) void {
     }
 
     resizeAllPanes(self);
-    updateTabTitles(self);
+    _ = updateTabTitles(self);
     self.requestFrame();
 }
 
@@ -366,7 +346,7 @@ pub fn actionClosePane(self: *App) void {
     if (result) |_| {
         // Sibling takes focus, resize remaining panes
         resizeAllPanes(self);
-        updateTabTitles(self);
+        _ = updateTabTitles(self);
         self.requestFrame();
     } else {
         // Was last pane in tab - close the tab
@@ -376,7 +356,7 @@ pub fn actionClosePane(self: *App) void {
             self.window.handle.setShouldClose(true);
         }
         resizeAllPanes(self);
-        updateTabTitles(self);
+        _ = updateTabTitles(self);
         self.requestFrame();
     }
 }
@@ -542,12 +522,17 @@ pub fn resizeAllPanes(self: *App) void {
 /// Update tab titles from focused pane CWD and process name.
 /// Format: "N: basename: process [count] [Z]"
 /// Called periodically from the render loop.
-pub fn updateTabTitles(self: *App) void {
+/// Returns true if any tab title changed (caller can avoid a needless redraw).
+pub fn updateTabTitles(self: *App) bool {
+    var any_changed = false;
     for (self.tab_manager.tabs.items) |*tab| {
         var title_buf: [128]u8 = undefined;
         var offset: usize = 0;
 
-        // Prefer live CWD from child process; fall back to tracked CWD, then process name
+        // Prefer live CWD from child process; fall back to tracked CWD, then process name.
+        // The live query is the source of truth -- the tracked CWD only updates when the
+        // shell emits OSC-7, which many setups don't have configured, so a stale tracked
+        // value would mask `cd` until the next OSC-7.
         if (self.pane_data.get(tab.focused_pane_id)) |pd| {
             var cwd_query_buf: [512]u8 = undefined;
             const cwd_slice: ?[]const u8 = pd.pty.getChildCwd(&cwd_query_buf) orelse blk: {
@@ -556,17 +541,11 @@ pub fn updateTabTitles(self: *App) void {
             };
 
             if (cwd_slice) |cwd| {
-                const base = if (std.mem.lastIndexOfScalar(u8, cwd, '/')) |i|
-                    cwd[i + 1 ..]
-                else if (std.mem.lastIndexOfScalar(u8, cwd, '\\')) |i|
-                    cwd[i + 1 ..]
-                else
-                    cwd;
+                const base = std.fs.path.basename(cwd);
                 const copy_len = @min(base.len, title_buf.len - offset);
                 @memcpy(title_buf[offset .. offset + copy_len], base[0..copy_len]);
                 offset += copy_len;
             } else if (pd.process_name_len > 0) {
-                // No CWD -- show process name as fallback
                 const pname = pd.process_name[0..pd.process_name_len];
                 const copy_len = @min(pname.len, title_buf.len - offset);
                 @memcpy(title_buf[offset .. offset + copy_len], pname[0..copy_len]);
@@ -574,14 +553,12 @@ pub fn updateTabTitles(self: *App) void {
             }
         }
 
-        // Pane count badge "[N]" if >1 pane
         const pcount = tab.paneCount();
         if (pcount > 1) {
             const badge = std.fmt.bufPrint(title_buf[offset..], " [{d}]", .{pcount}) catch "";
             offset += badge.len;
         }
 
-        // Zoom badge "[Z]"
         if (tab.is_zoomed) {
             if (offset + 4 <= title_buf.len) {
                 @memcpy(title_buf[offset .. offset + 4], " [Z]");
@@ -590,8 +567,13 @@ pub fn updateTabTitles(self: *App) void {
         }
 
         const new_title = title_buf[0..offset];
-        tab.setTitle(new_title);
+        const old_title = tab.title[0..tab.title_len];
+        if (!std.mem.eql(u8, new_title, old_title)) {
+            tab.setTitle(new_title);
+            any_changed = true;
+        }
     }
+    return any_changed;
 }
 
 /// Open the shell picker overlay.
@@ -705,11 +687,12 @@ pub fn respawnShell(self: *App, pd: *PaneData, shell_name: []const u8) !void {
         .debug_keys = false,
     });
 
-    // Fix up internal pointers (Pitfall 1 -- CRITICAL, same as createPane lines 580-586)
+    // Fix up internal pointers (Pitfall 1 -- CRITICAL: surface holds raw pointers
+    // into termio/window that are invalidated when respawn replaces the structs).
     pd.surface.termio = &pd.termio;
     pd.surface.window = &self.window;
 
-    // Rewire observer callbacks (same as createPane lines 588-594)
+    // Rewire observer callbacks
     pd.termio.terminal.observer.onBell = callbacks.bellCallback;
     pd.termio.terminal.observer.bell_ctx = @ptrCast(pd);
     pd.termio.terminal.observer.onAgentOutput = callbacks.agentOutputCallback;
@@ -718,12 +701,7 @@ pub fn respawnShell(self: *App, pd: *PaneData, shell_name: []const u8) !void {
     // Update process name from new shell
     {
         const shell_path_slice = std.mem.span(shell_config.path);
-        const base = if (std.mem.lastIndexOfScalar(u8, shell_path_slice, '/')) |idx|
-            shell_path_slice[idx + 1 ..]
-        else if (std.mem.lastIndexOfScalar(u8, shell_path_slice, '\\')) |idx|
-            shell_path_slice[idx + 1 ..]
-        else
-            shell_path_slice;
+        const base = std.fs.path.basename(shell_path_slice);
         const name = if (std.mem.endsWith(u8, base, ".exe"))
             base[0 .. base.len - 4]
         else
@@ -841,7 +819,7 @@ pub fn activatePreset(self: *App, preset: *const LayoutPreset.LayoutPreset) void
         self.tab_manager.switchTab(idx);
     }
     resizeAllPanes(self);
-    updateTabTitles(self);
+    _ = updateTabTitles(self);
     self.requestFrame();
 }
 

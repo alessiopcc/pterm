@@ -785,13 +785,16 @@ pub const App = struct {
                 w.poll();
             }
 
-            // Periodic tab title update based on wall-clock timer
+            // Periodic tab title update based on wall-clock timer.
+            // Only request a frame when a title actually changed -- avoids
+            // waking the renderer at 1Hz forever on idle terminals.
             const now_ms = std.time.milliTimestamp();
             const interval_ms = @max(100, self.config.window.tab_title_interval);
             if (now_ms - self.last_title_update >= interval_ms) {
                 self.last_title_update = now_ms;
-                self.updateTabTitles();
-                self.requestFrame();
+                if (self.updateTabTitles()) {
+                    self.requestFrame();
+                }
             }
 
             // Adaptive event handling
@@ -871,8 +874,8 @@ pub const App = struct {
     pub fn resizeAllPanes(self: *App) void {
         actions.resizeAllPanes(self);
     }
-    pub fn updateTabTitles(self: *App) void {
-        actions.updateTabTitles(self);
+    pub fn updateTabTitles(self: *App) bool {
+        return actions.updateTabTitles(self);
     }
     pub fn actionOpenShellPicker(self: *App) void {
         actions.actionOpenShellPicker(self);

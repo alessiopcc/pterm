@@ -320,17 +320,7 @@ pub const FontGrid = struct {
     /// Invalidates the atlas and recomputes metrics at the current font size.
     pub fn setDpiScale(self: *FontGrid, dpi_scale: f32) !void {
         self.config.dpi_scale = dpi_scale;
-        const dpi: u32 = @intFromFloat(@round(96.0 * dpi_scale));
-
-        for (self.fonts.items) |*entry| {
-            try entry.rasterizer.setSize(self.config.size_pt, dpi);
-        }
-
-        self.shaper.fontChanged();
-        if (self.emoji_shaper) |*s| s.fontChanged();
-
-        self.atlas.clear();
-        self.metrics = self.fonts.items[0].rasterizer.getMetrics();
+        try self.setSize(self.config.size_pt);
     }
 
     /// Resolve a glyph by its font-internal glyph ID (post-shaping).

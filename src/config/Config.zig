@@ -114,7 +114,7 @@ pub const Config = struct {
         rows: i64 = 55,
         padding: f32 = 4.0,
         opacity: f32 = 1.0,
-        tab_title_interval: i64 = 1000, // milliseconds between tab title updates
+        tab_title_interval: i64 = default_tab_title_interval,
     };
 
     pub const Cursor = struct {
@@ -199,6 +199,7 @@ pub const Config = struct {
     pub const default_padding: f32 = 4.0;
     pub const default_opacity: f32 = 1.0;
     pub const default_scrollback: i64 = 10_000;
+    pub const default_tab_title_interval: i64 = 1000;
     pub const min_font_size: f32 = 4.0;
     pub const max_font_size: f32 = 128.0;
     pub const min_cols: i64 = 10;
