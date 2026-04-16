@@ -76,6 +76,15 @@ zig build --release=safe
 
 Binary output: `zig-out/bin/pterm`
 
+On **Windows**, pass `-Dconsole=true` during development to keep a console
+window attached so `stdout`/`stderr` and panic traces are visible:
+
+```sh
+zig build -Dconsole=true
+```
+
+Release builds omit this flag so PTerm launches as a standalone GUI app.
+
 ## Configuration
 
 PTerm uses [TOML](https://toml.io/) for configuration. Generate a default config:
