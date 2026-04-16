@@ -643,9 +643,10 @@ pub const OpenGLBackend = struct {
 
         self.text_program.use();
         self.text_program.setUniformMat4("uProjection", proj);
+        const icon_scale: f32 = @as(f32, @floatFromInt(display_size)) / @as(f32, @floatFromInt(self.icon_size));
         self.text_program.setUniformVec2("uCellSize", @floatFromInt(display_size), @floatFromInt(display_size));
         self.text_program.setUniformVec2("uGridOffset", @floatFromInt(px_x), @floatFromInt(px_y));
-        self.text_program.setUniformFloat("uTextScale", 1.0);
+        self.text_program.setUniformFloat("uTextScale", icon_scale);
         self.text_program.setUniformVec2("uAtlasSize", @floatFromInt(self.icon_size), @floatFromInt(self.icon_size));
         self.text_program.setUniformVec2("uColorAtlasSize", @floatFromInt(self.icon_size), @floatFromInt(self.icon_size));
 

@@ -243,7 +243,7 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
     // Check window edge resize — but NOT on title bar controls
     if (button == .left) {
         const edge = utils.detectWindowEdge(self, win_x, win_y);
-        const in_controls = TabBarRenderer.isInControlsArea(fb_x, fb_y, metrics.cell_height, fb.width);
+        const in_controls = TabBarRenderer.isInControlsArea(fb_x, fb_y, self.chrome_cell_height, fb.width);
         if (utils.edgeIsAny(edge) and !in_controls) {
             self.window_resize_active = true;
             self.window_resize_edge = edge;
@@ -260,10 +260,10 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
     }
 
     // Check title bar + tab bar (both rows) — all in framebuffer coords
-    const total_h: i32 = @intCast(TabBarRenderer.computeHeight(metrics.cell_height));
+    const total_h: i32 = @intCast(TabBarRenderer.computeHeight(self.chrome_cell_height));
     if (fb_y >= 0 and fb_y < total_h) {
         if (button == .middle) {
-            const hit = TabBarRenderer.hitTest(fb_x, fb_y, self.tab_manager.tabCount(), metrics.cell_width, metrics.cell_height, fb.width);
+            const hit = TabBarRenderer.hitTest(fb_x, fb_y, self.tab_manager.tabCount(), metrics.cell_width, self.chrome_cell_height, fb.width);
             switch (hit) {
                 .tab => |_| self.actionCloseTab(),
                 else => {},
@@ -277,7 +277,7 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
             fb_y,
             self.tab_manager.tabCount(),
             metrics.cell_width,
-            metrics.cell_height,
+            self.chrome_cell_height,
             fb.width,
         );
         switch (hit) {
@@ -369,7 +369,7 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
 
     // Check status bar click: focus the corresponding pane
     if (self.config.status_bar.visible) {
-        const sb_height = StatusBarRenderer.statusBarHeight(metrics.cell_height);
+        const sb_height = StatusBarRenderer.statusBarHeight(self.chrome_cell_height);
         const sb_top: i32 = @intCast(if (fb.height > sb_height) fb.height - sb_height else 0);
         if (fb_y >= sb_top) {
             // Build the same pane_number->pane_id mapping used in render
@@ -390,7 +390,7 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
                 }
             }
 
-            if (StatusBarRenderer.hitTest(sb_pane_infos[0..sb_count], fb_x, metrics.cell_height)) |pane_number| {
+            if (StatusBarRenderer.hitTest(sb_pane_infos[0..sb_count], fb_x, self.chrome_cell_height)) |pane_number| {
                 // pane_number is 1-indexed, leaf_infos is 0-indexed
                 const idx = pane_number - 1;
                 if (idx < leaf_infos.len) {
@@ -672,8 +672,8 @@ pub fn handleCursorPos(self: *App, xpos: f64, ypos: f64) void {
     const cur_metrics = self.font_grid.getMetrics();
     const cur_fb = self.window.getFramebufferSize();
     const old_hover = self.hovered_control;
-    if (TabBarRenderer.isInControlsArea(fb_x, fb_y, cur_metrics.cell_height, cur_fb.width)) {
-        const hit = TabBarRenderer.hitTest(fb_x, fb_y, 0, cur_metrics.cell_width, cur_metrics.cell_height, cur_fb.width);
+    if (TabBarRenderer.isInControlsArea(fb_x, fb_y, self.chrome_cell_height, cur_fb.width)) {
+        const hit = TabBarRenderer.hitTest(fb_x, fb_y, 0, cur_metrics.cell_width, self.chrome_cell_height, cur_fb.width);
         self.hovered_control = switch (hit) {
             .window_minimize => 1,
             .window_maximize => 2,

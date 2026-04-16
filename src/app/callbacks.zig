@@ -107,6 +107,16 @@ pub fn framebufferSizeCallback(handle: *glfw.Window, width: c_int, height: c_int
     app.requestFrame();
 }
 
+pub fn contentScaleCallback(handle: *glfw.Window, xscale: f32, _: f32) callconv(.c) void {
+    const app = Window.getUserPointer(App, handle) orelse return;
+    const scale_fp: u32 = @intFromFloat(xscale * 100.0);
+    const old_fp = app.new_dpi_scale.load(.acquire);
+    if (scale_fp == old_fp) return;
+    app.new_dpi_scale.store(scale_fp, .release);
+    app.pending_dpi_change.store(true, .release);
+    app.requestFrame();
+}
+
 pub fn focusCallback(handle: *glfw.Window, focused: glfw.Bool) callconv(.c) void {
     const app = Window.getUserPointer(App, handle) orelse return;
     app.focused = @intFromEnum(focused) != 0;

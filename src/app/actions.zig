@@ -479,9 +479,9 @@ pub fn resizeAllPanes(self: *App) void {
     const tab = self.tab_manager.getActiveTab() orelse return;
     const fb = self.window.getFramebufferSize();
     const metrics = self.font_grid.getMetrics();
-    const tab_bar_height = TabBarRenderer.computeHeight(metrics.cell_height);
+    const tab_bar_height = TabBarRenderer.computeHeight(self.chrome_cell_height);
     const status_bar_height: u32 = if (self.config.status_bar.visible)
-        StatusBarRenderer.statusBarHeight(metrics.cell_height)
+        StatusBarRenderer.statusBarHeight(self.chrome_cell_height)
     else
         0;
 

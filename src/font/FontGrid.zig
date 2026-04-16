@@ -316,6 +316,23 @@ pub const FontGrid = struct {
         self.metrics = self.fonts.items[0].rasterizer.getMetrics();
     }
 
+    /// Change DPI scale (e.g. when moving to a monitor with different scaling).
+    /// Invalidates the atlas and recomputes metrics at the current font size.
+    pub fn setDpiScale(self: *FontGrid, dpi_scale: f32) !void {
+        self.config.dpi_scale = dpi_scale;
+        const dpi: u32 = @intFromFloat(@round(96.0 * dpi_scale));
+
+        for (self.fonts.items) |*entry| {
+            try entry.rasterizer.setSize(self.config.size_pt, dpi);
+        }
+
+        self.shaper.fontChanged();
+        if (self.emoji_shaper) |*s| s.fontChanged();
+
+        self.atlas.clear();
+        self.metrics = self.fonts.items[0].rasterizer.getMetrics();
+    }
+
     /// Resolve a glyph by its font-internal glyph ID (post-shaping).
     /// When `color` is true, stores in the color (RGBA) atlas for emoji.
     pub fn getGlyphByID(self: *FontGrid, font_index: u8, glyph_id: u32, color: bool) !GlyphResult {

@@ -96,6 +96,31 @@ pub fn renderThreadMain(self: *App) void {
             }
             last_frame_ns = now;
 
+            // Handle pending DPI scale change (monitor switch)
+            if (self.pending_dpi_change.swap(false, .acq_rel)) {
+                const scale_fp = self.new_dpi_scale.load(.acquire);
+                const new_scale: f32 = @as(f32, @floatFromInt(scale_fp)) / 100.0;
+                self.font_grid.setDpiScale(new_scale) catch {};
+                self.window.content_scale = new_scale;
+
+                // Recompute chrome_cell_height at new DPI (using configured font size, not zoomed)
+                const cfg_size = self.config.font_size_pt();
+                self.font_grid.setSize(cfg_size) catch {};
+                self.chrome_cell_height = self.font_grid.getMetrics().cell_height;
+
+                // Restore actual (possibly zoomed) font size
+                const cur_size_fp = self.new_font_size.load(.acquire);
+                const cur_size: f32 = @as(f32, @floatFromInt(cur_size_fp)) / 100.0;
+                if (@abs(cur_size - cfg_size) > 0.01) {
+                    self.font_grid.setSize(cur_size) catch {};
+                }
+
+                const fb2 = self.window.getFramebufferSize();
+                backend.resize(@intCast(fb2.width), @intCast(fb2.height));
+
+                actions.resizeAllPanes(self);
+            }
+
             // Handle pending font size change
             if (self.pending_font_change.swap(false, .acq_rel)) {
                 const new_size_fp = self.new_font_size.load(.acquire);
@@ -128,7 +153,7 @@ pub fn renderThreadMain(self: *App) void {
                 continue;
             }
             const metrics = self.font_grid.getMetrics();
-            const tab_bar_height = TabBarRenderer.computeHeight(metrics.cell_height);
+            const tab_bar_height = TabBarRenderer.computeHeight(self.chrome_cell_height);
 
             // Clear full window
             const bg = self.renderer_palette.default_bg;
@@ -147,13 +172,25 @@ pub fn renderThreadMain(self: *App) void {
                 .backend = &backend,
                 .font_grid = self.font_grid,
             };
-            // Upload icon texture on first frame
-            if (backend.icon_size == 0) {
-                const icon_data = @import("icon");
-                const img = icon_data.images[1]; // 32x32
-                const sz: u32 = @intCast(img.width);
-                const byte_count = sz * @as(u32, @intCast(img.height)) * 4;
-                backend.uploadIcon(img.pixels[0..byte_count], sz);
+            // Upload icon texture on first frame or after DPI change
+            {
+                const title_h = TabBarRenderer.titleBarHeight(self.chrome_cell_height);
+                const icon_display: u32 = if (title_h > 6) title_h - 6 else title_h;
+                // Pick the smallest icon that is >= the display size (DPI-aware)
+                const desired = icon_display * @as(u32, @intFromFloat(@ceil(self.window.content_scale)));
+                if (backend.icon_size == 0 or backend.icon_size < desired) {
+                    const icon_data = @import("icon");
+                    var best = icon_data.images[icon_data.images.len - 1]; // fallback: largest
+                    for (icon_data.images) |img| {
+                        if (@as(u32, @intCast(img.width)) >= desired) {
+                            best = img;
+                            break;
+                        }
+                    }
+                    const sz: u32 = @intCast(best.width);
+                    const byte_count = sz * @as(u32, @intCast(best.height)) * 4;
+                    backend.uploadIcon(best.pixels[0..byte_count], sz);
+                }
             }
 
             // Build per-tab bell badge and agent badge flags for TabBarRenderer
@@ -197,7 +234,7 @@ pub fn renderThreadMain(self: *App) void {
                     .agent_alert = self.renderer_palette.ui_agent_alert.toU32(),
                     .pane_border = self.renderer_palette.ui_pane_border_active.toU32(),
                     .cell_width = metrics.cell_width,
-                    .cell_height = metrics.cell_height,
+                    .cell_height = self.chrome_cell_height,
                     .hovered_control = self.hovered_control,
                     .bell_badge_color = self.renderer_palette.ui_bell_badge.toU32(),
                     .tab_bell_badges = bell_badges_buf[0..badge_count],
@@ -213,7 +250,7 @@ pub fn renderThreadMain(self: *App) void {
 
             // Render panes in active tab
             const status_bar_height: u32 = if (self.config.status_bar.visible)
-                StatusBarRenderer.statusBarHeight(metrics.cell_height)
+                StatusBarRenderer.statusBarHeight(self.chrome_cell_height)
             else
                 0;
 
@@ -573,7 +610,7 @@ pub fn renderThreadMain(self: *App) void {
                         sb_config,
                         fb.width,
                         sb_y_offset,
-                        metrics.cell_height,
+                        self.chrome_cell_height,
                         bg_waiting,
                         statusBarDrawRect,
                         statusBarDrawText,

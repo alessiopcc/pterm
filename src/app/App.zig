@@ -173,6 +173,15 @@ pub const App = struct {
     pending_font_change: std.atomic.Value(bool),
     new_font_size: std.atomic.Value(u32),
 
+    // DPI change state (main thread -> render thread)
+    pending_dpi_change: std.atomic.Value(bool),
+    new_dpi_scale: std.atomic.Value(u32), // DPI scale * 100 (fixed-point)
+
+    // Chrome cell height: cell_height at the configured (unzoomed) font size.
+    // Used for titlebar/tabbar/statusbar sizing so zoom doesn't affect chrome.
+    // Updated only when DPI changes, not on zoom.
+    chrome_cell_height: f32,
+
     // Runtime color palette
     renderer_palette: RendererPalette,
 
@@ -367,6 +376,9 @@ pub const App = struct {
             .new_fb_height = std.atomic.Value(u32).init(0),
             .pending_font_change = std.atomic.Value(bool).init(false),
             .new_font_size = std.atomic.Value(u32).init(@intFromFloat(config.font_size_pt() * 100.0)),
+            .pending_dpi_change = std.atomic.Value(bool).init(false),
+            .new_dpi_scale = std.atomic.Value(u32).init(@intFromFloat(actual_dpi * 100.0)),
+            .chrome_cell_height = metrics.cell_height,
             .renderer_palette = theme_mod.buildRendererPaletteFromConfig(config.colors, config.theme),
             .keybinding_map = kb_map,
             .last_mods = .{},
@@ -456,6 +468,7 @@ pub const App = struct {
             .scroll_callback = callbacks.scrollCallback,
             .mouse_button_callback = callbacks.mouseButtonCallback,
             .cursor_pos_callback = callbacks.cursorPosCallback,
+            .content_scale_callback = callbacks.contentScaleCallback,
         });
 
         // Activate --layout preset BEFORE starting the render thread to avoid
