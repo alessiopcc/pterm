@@ -452,15 +452,22 @@ pub fn renderThreadMain(self: *App) void {
                                 const sel_ch: u32 = @intFromFloat(metrics.cell_height);
                                 const sel_pad: i32 = @intFromFloat(rs.grid_padding);
                                 const sel_color = renderer_types.Color{ .r = 0x45, .g = 0x47, .b = 0x5a, .a = 120 };
-                                var sel_row: u32 = norm.start_row;
-                                while (sel_row <= norm.end_row) : (sel_row += 1) {
+                                // Selection rows may extend outside the viewport when
+                                // the user dragged while scrolling. Clip to visible
+                                // row range: skip rows < 0 (scrolled above) and stop
+                                // at grid_rows - 1 (scrolled below).
+                                const grid_rows_i: i32 = @intCast(rs.grid_rows);
+                                const vis_start: i32 = if (norm.start_row < 0) 0 else norm.start_row;
+                                const vis_end: i32 = if (norm.end_row >= grid_rows_i) grid_rows_i - 1 else norm.end_row;
+                                var sel_row: i32 = vis_start;
+                                while (sel_row <= vis_end) : (sel_row += 1) {
                                     const sc: u16 = if (sel_row == norm.start_row) norm.start_col else 0;
                                     const ec: u16 = if (sel_row == norm.end_row) norm.end_col + 1 else rs.grid_cols;
                                     var sel_col: u16 = sc;
                                     while (sel_col < ec) : (sel_col += 1) {
                                         backend.drawFilledRectAlpha(RendererRect{
                                             .x = bounds.x + sel_pad + @as(i32, @intCast(@as(u32, sel_col) * sel_cw)),
-                                            .y = bounds.y + sel_pad + @as(i32, @intCast(sel_row * sel_ch)),
+                                            .y = bounds.y + sel_pad + @as(i32, @intCast(@as(u32, @intCast(sel_row)) * sel_ch)),
                                             .w = sel_cw,
                                             .h = sel_ch,
                                         }, sel_color);

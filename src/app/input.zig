@@ -463,8 +463,8 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
                                 // Double/triple click: select immediately
                                 if (self.text_select_click_count >= 3) {
                                     // Line select
-                                    pd.surface.selection.begin(row, 0, .line);
-                                    pd.surface.selection.update(row, cols);
+                                    pd.surface.selection.begin(@intCast(row), 0, .line);
+                                    pd.surface.selection.update(@intCast(row), cols);
                                 } else {
                                     // Word select: expand to word boundaries
                                     const snapshot = pd.termio.lockTerminal();
@@ -531,8 +531,8 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
                                     }
                                     pd.termio.unlockTerminal();
 
-                                    pd.surface.selection.begin(row, word_start, .word);
-                                    pd.surface.selection.update(row, word_end);
+                                    pd.surface.selection.begin(@intCast(row), word_start, .word);
+                                    pd.surface.selection.update(@intCast(row), word_end);
                                 }
 
                                 self.text_select_active = true;
@@ -554,6 +554,32 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
             }
         }
     }
+}
+
+/// Extend an active text-select drag to the given window-space cursor position.
+/// Converts pixel position to viewport (row, col) within the drag pane and
+/// calls selection.update. Called by cursor-move and by scroll handlers so
+/// that scrolling during a drag extends the selection.
+pub fn extendTextSelectionAtCursor(self: *App, xpos: f64, ypos: f64) void {
+    if (!self.text_select_active) return;
+    const pid = self.text_select_pane_id orelse return;
+    const pd = self.pane_data.get(pid) orelse return;
+    const active_tab = self.tab_manager.getActiveTab() orelse return;
+    const leaf_node = tree_ops.findLeaf(active_tab.root, pid) orelse return;
+    const m = self.font_grid.getMetrics();
+    const cw: u32 = @intFromFloat(m.cell_width);
+    const ch: u32 = @intFromFloat(m.cell_height);
+    if (cw == 0 or ch == 0) return;
+    const bounds = leaf_node.leaf.bounds;
+    const pad: i32 = @intFromFloat(self.config.grid_padding());
+    const rel_x = @as(i32, @intFromFloat(xpos)) - bounds.x - pad;
+    const rel_y = @as(i32, @intFromFloat(ypos)) - bounds.y - pad;
+    const clamped_x: u32 = if (rel_x < 0) 0 else @intCast(rel_x);
+    const clamped_y: u32 = if (rel_y < 0) 0 else @intCast(rel_y);
+    const col: u16 = @intCast(@min(clamped_x / cw, 65535));
+    const row: u32 = clamped_y / ch;
+    pd.surface.selection.update(@intCast(row), col);
+    self.requestFrame();
 }
 
 /// Handle cursor position for border drag resize and cursor shape.
@@ -648,7 +674,7 @@ pub fn handleCursorPos(self: *App, xpos: f64, ypos: f64) void {
     if (self.text_select_pending) {
         if (self.text_select_pane_id) |pid| {
             if (self.pane_data.get(pid)) |pd| {
-                pd.surface.selection.begin(self.text_select_start_row, self.text_select_start_col, .normal);
+                pd.surface.selection.begin(@intCast(self.text_select_start_row), self.text_select_start_col, .normal);
                 self.text_select_active = true;
                 self.text_select_pending = false;
             }
@@ -657,30 +683,7 @@ pub fn handleCursorPos(self: *App, xpos: f64, ypos: f64) void {
 
     // Text selection drag: update selection endpoint as cursor moves
     if (self.text_select_active) {
-        if (self.text_select_pane_id) |pid| {
-            if (self.pane_data.get(pid)) |pd| {
-                const active_tab_sel = self.tab_manager.getActiveTab();
-                if (active_tab_sel) |at| {
-                    if (tree_ops.findLeaf(at.root, pid)) |leaf_node| {
-                        const m = self.font_grid.getMetrics();
-                        const cw: u32 = @intFromFloat(m.cell_width);
-                        const ch: u32 = @intFromFloat(m.cell_height);
-                        if (cw > 0 and ch > 0) {
-                            const bounds = leaf_node.leaf.bounds;
-                            const pad: i32 = @intFromFloat(self.config.grid_padding());
-                            const rel_x = @as(i32, @intFromFloat(xpos)) - bounds.x - pad;
-                            const rel_y = @as(i32, @intFromFloat(ypos)) - bounds.y - pad;
-                            const clamped_x: u32 = if (rel_x < 0) 0 else @intCast(rel_x);
-                            const clamped_y: u32 = if (rel_y < 0) 0 else @intCast(rel_y);
-                            const col: u16 = @intCast(@min(clamped_x / cw, 65535));
-                            const row: u32 = clamped_y / ch;
-                            pd.surface.selection.update(row, col);
-                            self.requestFrame();
-                        }
-                    }
-                }
-            }
-        }
+        extendTextSelectionAtCursor(self, xpos, ypos);
         return;
     }
 

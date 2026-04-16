@@ -6,10 +6,14 @@
 const std = @import("std");
 
 /// A range of selected cells in the terminal.
+///
+/// Rows are signed so the selection can track content that has scrolled
+/// above the visible viewport (negative row) or below it (row beyond the
+/// viewport's row count). Rendering and copying clamp/skip as needed.
 pub const SelectionRange = struct {
-    start_row: u32,
+    start_row: i32,
     start_col: u16,
-    end_row: u32,
+    end_row: i32,
     end_col: u16,
 
     /// Returns the range normalized so start <= end (top-left to bottom-right).
@@ -54,7 +58,7 @@ pub const Selection = struct {
     }
 
     /// Begin a selection at the given position.
-    pub fn begin(self: *Selection, row: u32, col: u16, mode: SelectionMode) void {
+    pub fn begin(self: *Selection, row: i32, col: u16, mode: SelectionMode) void {
         self.range = .{
             .start_row = row,
             .start_col = col,
@@ -66,7 +70,7 @@ pub const Selection = struct {
     }
 
     /// Extend the selection to a new position (mouse drag).
-    pub fn update(self: *Selection, row: u32, col: u16) void {
+    pub fn update(self: *Selection, row: i32, col: u16) void {
         if (self.range) |*r| {
             r.end_row = row;
             r.end_col = col;
@@ -105,11 +109,13 @@ pub const Selection = struct {
         var result: std.ArrayList(u8) = .empty;
         errdefer result.deinit(allocator);
 
-        var row = norm.start_row;
+        var row: i32 = norm.start_row;
         while (row <= norm.end_row) : (row += 1) {
-            if (row >= screen_lines.len) break;
+            if (row < 0) continue;
+            const uidx: usize = @intCast(row);
+            if (uidx >= screen_lines.len) break;
 
-            const line = screen_lines[row];
+            const line = screen_lines[uidx];
             const start_col: usize = if (row == norm.start_row) @as(usize, norm.start_col) else 0;
             const end_col: usize = if (row == norm.end_row) @min(@as(usize, norm.end_col) + 1, line.len) else line.len;
 
@@ -121,7 +127,7 @@ pub const Selection = struct {
             }
 
             // Add newline between rows (not after last row)
-            if (row < norm.end_row and row + 1 < screen_lines.len) {
+            if (row < norm.end_row and uidx + 1 < screen_lines.len) {
                 try result.append(allocator, '\n');
             }
         }

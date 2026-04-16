@@ -608,7 +608,6 @@ pub const Surface = struct {
         const screens = @constCast(snapshot).getScreens();
         const screen = screens.active;
         const cols: u16 = @intCast(screen.pages.cols);
-        const rows: u16 = @intCast(screen.pages.rows);
 
         // Compute screen-coordinate base row for scrollback viewport
         const total_rows = screen.pages.total_rows;
@@ -623,29 +622,34 @@ pub const Surface = struct {
         // characters make byte offsets diverge from cell column indices.
         const alloc = std.heap.page_allocator;
         const norm = range.normalized();
-        const screen_rows: usize = @min(@as(usize, rows), 500);
 
         var result: std.ArrayList(u8) = .empty;
 
-        var sel_row: u32 = norm.start_row;
+        // Selection rows are signed; negative means "above the visible
+        // viewport" (scrolled out the top) and beyond viewport rows means
+        // "below" (scrolled out the bottom). Both cases resolve to valid
+        // content rows via viewport_base + sel_row — use .screen pin so the
+        // lookup reaches into scrollback.
+        var sel_row: i32 = norm.start_row;
         while (sel_row <= norm.end_row) : (sel_row += 1) {
-            if (sel_row >= screen_rows) break;
+            const content_row_i: i64 = @as(i64, @intCast(viewport_base)) + @as(i64, sel_row);
+            if (content_row_i < 0 or content_row_i >= @as(i64, @intCast(total_rows))) {
+                if (sel_row < norm.end_row) {
+                    result.append(alloc, '\n') catch {};
+                }
+                continue;
+            }
+            const content_row: u32 = @intCast(content_row_i);
 
             const sc: u16 = if (sel_row == norm.start_row) norm.start_col else 0;
             const ec: u16 = if (sel_row == norm.end_row) norm.end_col else cols - 1;
 
             var col: u16 = sc;
             while (col <= ec) : (col += 1) {
-                const pin = if (clamped_offset > 0)
-                    screen.pages.pin(.{ .screen = .{
-                        .x = @intCast(col),
-                        .y = @intCast(viewport_base + sel_row),
-                    } })
-                else
-                    screen.pages.pin(.{ .active = .{
-                        .x = @intCast(col),
-                        .y = @intCast(sel_row),
-                    } });
+                const pin = screen.pages.pin(.{ .screen = .{
+                    .x = @intCast(col),
+                    .y = @intCast(content_row),
+                } });
                 const pin_val = pin orelse {
                     result.append(alloc, ' ') catch {};
                     continue;

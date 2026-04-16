@@ -61,9 +61,9 @@ test "selection begin update finish" {
     // Finish and verify range
     const range = sel.finish().?;
     try std.testing.expectEqual(false, sel.active);
-    try std.testing.expectEqual(@as(u32, 0), range.start_row);
+    try std.testing.expectEqual(@as(i32, 0), range.start_row);
     try std.testing.expectEqual(@as(u16, 0), range.start_col);
-    try std.testing.expectEqual(@as(u32, 0), range.end_row);
+    try std.testing.expectEqual(@as(i32, 0), range.end_row);
     try std.testing.expectEqual(@as(u16, 10), range.end_col);
 }
 

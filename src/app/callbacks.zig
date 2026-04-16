@@ -161,6 +161,7 @@ pub fn scrollCallback(handle: *glfw.Window, _: f64, yoffset: f64) callconv(.c) v
         }
 
         // Normal scrollback behavior
+        const old_offset = pd.scroll_offset;
         const lines: i32 = @intFromFloat(yoffset * 3.0);
         if (lines > 0) {
             pd.scroll_offset +|= @intCast(lines);
@@ -181,6 +182,29 @@ pub fn scrollCallback(handle: *glfw.Window, _: f64, yoffset: f64) callconv(.c) v
             }
         }
         pd.surface.scroll_offset = pd.scroll_offset;
+
+        // If a text-select drag is active on this pane, scrolling should
+        // extend the selection rather than desync it from the content.
+        // Selection rows are stored in viewport coordinates, so shift them by
+        // the scroll delta to keep them anchored to the same content, then
+        // update the endpoint to match the current cursor position.
+        const new_offset = pd.scroll_offset;
+        if (new_offset != old_offset and app.text_select_active) {
+            const active_tab = app.tab_manager.getActiveTab();
+            const drag_pid = app.text_select_pane_id;
+            if (active_tab != null and drag_pid != null and
+                active_tab.?.focused_pane_id == drag_pid.?)
+            {
+                if (pd.surface.selection.range) |*r| {
+                    const delta: i32 = @as(i32, @intCast(new_offset)) - @as(i32, @intCast(old_offset));
+                    r.start_row += delta;
+                    r.end_row += delta;
+                }
+                const pos = app.window.handle.getCursorPos();
+                const input = @import("input.zig");
+                input.extendTextSelectionAtCursor(app, pos[0], pos[1]);
+            }
+        }
     }
     app.requestFrame();
 }
