@@ -6,6 +6,7 @@
 ///
 /// Communication between threads uses atomics (lock-free for hot path).
 const std = @import("std");
+const builtin = @import("builtin");
 const glfw = @import("zglfw");
 
 /// Wrapper around glfw.getProcAddress that aligns the returned pointer
@@ -165,10 +166,15 @@ pub const Surface = struct {
             .last_mods = .{},
             .perf_logging = options.perf_logging,
             .debug_keys = options.debug_keys,
-            .debug_key_file = if (options.debug_keys)
-                std.fs.cwd().createFile("pterm_debug.log", .{}) catch null
-            else
-                null,
+            .debug_key_file = if (options.debug_keys) blk: {
+                // Open in append so we share the file with App's debug handle
+                // without either truncating the other's entries.
+                const f = std.fs.cwd().openFile("pterm_debug.log", .{ .mode = .read_write }) catch {
+                    break :blk std.fs.cwd().createFile("pterm_debug.log", .{}) catch null;
+                };
+                f.seekFromEnd(0) catch {};
+                break :blk f;
+            } else null,
             .gl_procs = undefined,
         };
     }
@@ -560,6 +566,18 @@ pub const Surface = struct {
     /// Handle clipboard action for reserved keys.
     /// Smart Ctrl+C -- copies selection when active, sends SIGINT (0x03) when not.
     pub fn handleClipboardAction(self: *Surface, combo: keybindings.KeyCombo) void {
+        if (self.debug_key_file) |f| {
+            const key_str = switch (combo.key) {
+                .char => |c| c,
+                .special => @as(u21, 0),
+            };
+            var tmp: [128]u8 = undefined;
+            const line = std.fmt.bufPrint(&tmp, "[clip-action] char='{c}'\n", .{
+                @as(u8, @intCast(key_str)),
+            }) catch "";
+            if (line.len > 0) _ = f.write(line) catch 0;
+        }
+
         const is_c = switch (combo.key) {
             .char => |c| c == 'c',
             .special => false,
@@ -677,21 +695,49 @@ pub const Surface = struct {
     /// text in \e[200~ ... \e[201~ so the shell treats it as a single
     /// paste event rather than executing each line individually.
     pub fn pasteFromClipboard(self: *Surface) void {
-        if (glfw.getClipboardString(self.window.handle)) |clip| {
-            const snapshot = self.termio.lockTerminal();
-            const bracketed = @constCast(snapshot).isBracketedPasteEnabled();
-            self.termio.unlockTerminal();
+        const clip = glfw.getClipboardString(self.window.handle) orelse return;
 
-            if (bracketed) {
-                self.termio.writeInput("\x1b[200~") catch {};
-            }
-            self.termio.writeInput(clip) catch {};
-            if (bracketed) {
-                self.termio.writeInput("\x1b[201~") catch {};
-            }
-            self.scheduler.markActive();
-            self.requestFrame();
+        const snapshot = self.termio.lockTerminal();
+        const bracketed = @constCast(snapshot).isBracketedPasteEnabled();
+        self.termio.unlockTerminal();
+
+        if (bracketed) {
+            self.termio.writeInput("\x1b[200~") catch {};
         }
+        if (builtin.os.tag == .windows) {
+            // ConPTY synthesises INPUT_RECORD keystrokes from raw input-pipe
+            // bytes by looking each char up in the active keyboard layout.
+            // Characters not present on the layout (e.g. `~` on Italian) are
+            // dropped. win32-input-mode lets us pass the Unicode codepoint
+            // directly, bypassing the layout lookup.
+            var i: usize = 0;
+            while (i < clip.len) {
+                const cp_len = std.unicode.utf8ByteSequenceLength(clip[i]) catch 1;
+                if (i + cp_len > clip.len) break;
+                const cp: u21 = std.unicode.utf8Decode(clip[i..][0..cp_len]) catch {
+                    i += 1;
+                    continue;
+                };
+                var buf: [64]u8 = undefined;
+                const seq = std.fmt.bufPrint(
+                    &buf,
+                    "\x1b[0;0;{d};1;0;1_\x1b[0;0;{d};0;0;1_",
+                    .{ cp, cp },
+                ) catch {
+                    i += cp_len;
+                    continue;
+                };
+                self.termio.writeInput(seq) catch {};
+                i += cp_len;
+            }
+        } else {
+            self.termio.writeInput(clip) catch {};
+        }
+        if (bracketed) {
+            self.termio.writeInput("\x1b[201~") catch {};
+        }
+        self.scheduler.markActive();
+        self.requestFrame();
     }
 
     /// Change font size by delta points.

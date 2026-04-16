@@ -593,7 +593,7 @@ pub const App = struct {
         // Create lightweight Surface for this pane
         const surface = try Surface.init(self.allocator, self.config, &self.window, &termio, .{
             .perf_logging = self.perf_logging,
-            .debug_keys = false, // Only first pane gets debug logging
+            .debug_keys = self.debug_keys,
         });
 
         // Determine process name from shell

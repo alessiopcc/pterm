@@ -113,6 +113,12 @@ pub fn handleKeyInput(self: *App, key: glfw.Key, action: glfw.Action, mods: glfw
         };
 
         if (keybindings.isReservedClipboardKey(combo)) {
+            if (self.debug_key_file) |f| {
+                var tmp: [128]u8 = undefined;
+                const ch_byte: u8 = @intCast(ch);
+                const line = std.fmt.bufPrint(&tmp, "[clip-dispatch] ctrl+{c}\n", .{ch_byte}) catch "";
+                if (line.len > 0) _ = f.write(line) catch 0;
+            }
             if (self.getFocusedPaneData()) |pd| {
                 pd.surface.handleClipboardAction(combo);
             }
