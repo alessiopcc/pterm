@@ -599,74 +599,64 @@ pub const Surface = struct {
         const clamped_offset = @min(scroll_offset, history_rows);
         const viewport_base: u32 = history_rows - clamped_offset;
 
-        // Build UTF-8 screen lines from terminal cells
+        // Extract selected text directly from terminal cells using cell coordinates.
+        // Each cell codepoint is encoded as UTF-8 and appended to the result buffer.
+        // This avoids the byte-vs-column mismatch that occurs when multi-byte
+        // characters make byte offsets diverge from cell column indices.
         const alloc = std.heap.page_allocator;
+        const norm = range.normalized();
         const screen_rows: usize = @min(@as(usize, rows), 500);
-        const line_ptrs = alloc.alloc([]const u8, screen_rows) catch {
-            self.termio.unlockTerminal();
-            return;
-        };
 
-        // Flat buffer for UTF-8 bytes: each cell can produce up to 4 UTF-8 bytes
-        const bytes_per_row: usize = @as(usize, cols) * 4;
-        const flat_buf = alloc.alloc(u8, screen_rows * bytes_per_row) catch {
-            alloc.free(line_ptrs);
-            self.termio.unlockTerminal();
-            return;
-        };
+        var result: std.ArrayList(u8) = .empty;
 
-        var row: u16 = 0;
-        while (row < screen_rows) : (row += 1) {
-            const row_offset = @as(usize, row) * bytes_per_row;
-            var byte_len: usize = 0;
-            var col: u16 = 0;
-            while (col < cols) : (col += 1) {
-                // When scrolled back, use screen coordinates; otherwise use active
+        var sel_row: u32 = norm.start_row;
+        while (sel_row <= norm.end_row) : (sel_row += 1) {
+            if (sel_row >= screen_rows) break;
+
+            const sc: u16 = if (sel_row == norm.start_row) norm.start_col else 0;
+            const ec: u16 = if (sel_row == norm.end_row) norm.end_col else cols - 1;
+
+            var col: u16 = sc;
+            while (col <= ec) : (col += 1) {
                 const pin = if (clamped_offset > 0)
                     screen.pages.pin(.{ .screen = .{
                         .x = @intCast(col),
-                        .y = @intCast(viewport_base + row),
+                        .y = @intCast(viewport_base + sel_row),
                     } })
                 else
                     screen.pages.pin(.{ .active = .{
                         .x = @intCast(col),
-                        .y = @intCast(row),
+                        .y = @intCast(sel_row),
                     } });
                 const pin_val = pin orelse {
-                    // No cell at this position, emit space
-                    flat_buf[row_offset + byte_len] = ' ';
-                    byte_len += 1;
+                    result.append(alloc, ' ') catch {};
                     continue;
                 };
                 const rac = pin_val.rowAndCell();
                 const cp: u21 = rac.cell.codepoint();
                 if (cp == 0) {
-                    flat_buf[row_offset + byte_len] = ' ';
-                    byte_len += 1;
+                    result.append(alloc, ' ') catch {};
                 } else {
-                    // Encode codepoint as UTF-8
-                    const dest = flat_buf[row_offset + byte_len .. row_offset + bytes_per_row];
-                    const enc_len = std.unicode.utf8Encode(cp, dest) catch 0;
+                    var enc_buf: [4]u8 = undefined;
+                    const enc_len = std.unicode.utf8Encode(cp, &enc_buf) catch 0;
                     if (enc_len > 0) {
-                        byte_len += enc_len;
+                        result.appendSlice(alloc, enc_buf[0..enc_len]) catch {};
                     } else {
-                        flat_buf[row_offset + byte_len] = ' ';
-                        byte_len += 1;
+                        result.append(alloc, ' ') catch {};
                     }
                 }
             }
-            line_ptrs[row] = flat_buf[row_offset .. row_offset + byte_len];
+
+            // Add newline between rows (not after last row)
+            if (sel_row < norm.end_row) {
+                result.append(alloc, '\n') catch {};
+            }
         }
 
         self.termio.unlockTerminal();
 
-        // Extract selected text using Selection API
-        const selected_text = selection_mod.Selection.getSelectedText(
-            range,
-            line_ptrs,
-            alloc,
-        ) catch return;
-        defer alloc.free(selected_text);
+        const selected_text = result.items;
+        defer result.deinit(alloc);
 
         // Set GLFW clipboard (needs null-terminated string)
         if (selected_text.len > 0) {
@@ -677,10 +667,6 @@ pub const Surface = struct {
             const sentinel_str: [:0]const u8 = clipboard_str[0..selected_text.len :0];
             glfw.setClipboardString(self.window.handle, sentinel_str);
         }
-
-        // Clean up screen line buffers
-        alloc.free(flat_buf);
-        alloc.free(line_ptrs);
 
         // Clear selection after successful copy
         self.selection.clear();

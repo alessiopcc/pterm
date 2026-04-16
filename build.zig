@@ -19,6 +19,7 @@ pub fn build(b: *std.Build) void {
     // Build options: version string injected at compile time
     const options = b.addOptions();
     options.addOption([]const u8, "version", b.option([]const u8, "version", "Version string") orelse "0.1.0-dev");
+    const console = b.option(bool, "console", "Keep console window attached (dev mode)") orelse false;
     exe_mod.addOptions("build_options", options);
 
     if (ghostty_dep) |dep| {
@@ -30,7 +31,7 @@ pub fn build(b: *std.Build) void {
         .root_module = exe_mod,
     });
     if (target.result.os.tag == .windows) {
-        exe.subsystem = .Windows;
+        if (!console) exe.subsystem = .Windows;
         exe.addWin32ResourceFile(.{ .file = b.path("assets/pterm.rc") });
     }
     b.installArtifact(exe);

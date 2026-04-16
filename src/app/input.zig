@@ -319,6 +319,19 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
 
     // Right-click context-sensitive copy/paste in pane area
     if (button == .right and action == .press) {
+        // Focus the pane under the mouse cursor first
+        if (self.tab_manager.getActiveTab()) |active_tab| {
+            const leaves = tree_ops.collectLeaves(active_tab.root, std.heap.page_allocator) catch return;
+            defer std.heap.page_allocator.free(leaves);
+            for (leaves) |pane_id| {
+                if (tree_ops.findLeaf(active_tab.root, pane_id)) |leaf_node| {
+                    if (leaf_node.leaf.bounds.contains(fb_x, fb_y)) {
+                        active_tab.focused_pane_id = pane_id;
+                        break;
+                    }
+                }
+            }
+        }
         if (self.getFocusedPaneData()) |pd| {
             if (pd.surface.selection.range != null) {
                 pd.surface.copySelection(pd.scroll_offset);
@@ -327,6 +340,7 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
                 pd.surface.pasteFromClipboard();
             }
         }
+        self.requestFrame();
         return;
     }
 
@@ -419,8 +433,9 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
                     const ch: u32 = @intFromFloat(m.cell_height);
                     if (cw > 0 and ch > 0) {
                         const bounds = leaf_node.leaf.bounds;
-                        const rel_x = fb_x - bounds.x;
-                        const rel_y = fb_y - bounds.y;
+                        const pad: i32 = @intFromFloat(self.config.grid_padding());
+                        const rel_x = fb_x - bounds.x - pad;
+                        const rel_y = fb_y - bounds.y - pad;
                         if (rel_x >= 0 and rel_y >= 0) {
                             const col: u16 = @intCast(@min(@as(u32, @intCast(rel_x)) / cw, 65535));
                             const row: u32 = @as(u32, @intCast(rel_y)) / ch;
@@ -646,8 +661,9 @@ pub fn handleCursorPos(self: *App, xpos: f64, ypos: f64) void {
                         const ch: u32 = @intFromFloat(m.cell_height);
                         if (cw > 0 and ch > 0) {
                             const bounds = leaf_node.leaf.bounds;
-                            const rel_x = @as(i32, @intFromFloat(xpos)) - bounds.x;
-                            const rel_y = @as(i32, @intFromFloat(ypos)) - bounds.y;
+                            const pad: i32 = @intFromFloat(self.config.grid_padding());
+                            const rel_x = @as(i32, @intFromFloat(xpos)) - bounds.x - pad;
+                            const rel_y = @as(i32, @intFromFloat(ypos)) - bounds.y - pad;
                             const clamped_x: u32 = if (rel_x < 0) 0 else @intCast(rel_x);
                             const clamped_y: u32 = if (rel_y < 0) 0 else @intCast(rel_y);
                             const col: u16 = @intCast(@min(clamped_x / cw, 65535));
@@ -717,8 +733,9 @@ pub fn handleCursorPos(self: *App, xpos: f64, ypos: f64) void {
                 if (active_t) |at| {
                     if (tree_ops.findLeaf(at.root, at.focused_pane_id)) |leaf| {
                         const bounds = leaf.leaf.bounds;
-                        const rel_x = fb_x - bounds.x;
-                        const rel_y = fb_y - bounds.y;
+                        const url_pad: i32 = @intFromFloat(self.config.grid_padding());
+                        const rel_x = fb_x - bounds.x - url_pad;
+                        const rel_y = fb_y - bounds.y - url_pad;
                         const cw_int: u32 = @intFromFloat(cur_m.cell_width);
                         const ch_int: u32 = @intFromFloat(cur_m.cell_height);
                         if (rel_x >= 0 and rel_y >= 0 and cw_int > 0 and ch_int > 0) {
