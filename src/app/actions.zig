@@ -254,6 +254,29 @@ pub fn actionCloseTab(self: *App) void {
     self.requestFrame();
 }
 
+/// Close a specific tab by index and all its panes.
+pub fn actionCloseTabByIndex(self: *App, idx: usize) void {
+    self.pane_mutex.lock();
+    defer self.pane_mutex.unlock();
+
+    const tab = self.tab_manager.getTab(idx) orelse return;
+
+    // Destroy all panes in this tab
+    const leaves = tree_ops.collectLeaves(tab.root, std.heap.page_allocator) catch return;
+    defer std.heap.page_allocator.free(leaves);
+    for (leaves) |pane_id| {
+        self.destroyPane(pane_id);
+    }
+
+    const result = self.tab_manager.closeTab(idx);
+    if (result == .last_tab_closed) {
+        self.window.handle.setShouldClose(true);
+        return;
+    }
+    resizeAllPanes(self);
+    self.requestFrame();
+}
+
 /// Switch to a tab by index, clearing activity indicator.
 pub fn switchToTab(self: *App, idx: usize) void {
     // Close overlays on tab switch (Pitfall 3: prevent acting on wrong pane)

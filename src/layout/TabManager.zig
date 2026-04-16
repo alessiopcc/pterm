@@ -100,6 +100,12 @@ pub const TabManager = struct {
         return &self.tabs.items[self.active_idx];
     }
 
+    /// Get a pointer to a tab by index.
+    pub fn getTab(self: *TabManager, idx: usize) ?*Tab {
+        if (idx >= self.tabs.items.len) return null;
+        return &self.tabs.items[idx];
+    }
+
     /// Return the number of tabs.
     pub fn tabCount(self: *const TabManager) usize {
         return self.tabs.items.len;

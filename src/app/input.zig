@@ -265,7 +265,7 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
         if (button == .middle) {
             const hit = TabBarRenderer.hitTest(fb_x, fb_y, self.tab_manager.tabCount(), metrics.cell_width, self.chrome_cell_height, fb.width);
             switch (hit) {
-                .tab => |_| self.actionCloseTab(),
+                .tab => |idx| self.actionCloseTabByIndex(idx),
                 else => {},
             }
             return;
@@ -281,8 +281,8 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
             fb.width,
         );
         switch (hit) {
-            .close_tab => |_| {
-                self.actionCloseTab();
+            .close_tab => |idx| {
+                self.actionCloseTabByIndex(idx);
             },
             .new_tab => {
                 self.actionNewTab();

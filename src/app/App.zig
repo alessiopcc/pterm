@@ -833,6 +833,9 @@ pub const App = struct {
     pub fn actionCloseTab(self: *App) void {
         actions.actionCloseTab(self);
     }
+    pub fn actionCloseTabByIndex(self: *App, idx: usize) void {
+        actions.actionCloseTabByIndex(self, idx);
+    }
     pub fn switchToTab(self: *App, idx: usize) void {
         actions.switchToTab(self, idx);
     }
