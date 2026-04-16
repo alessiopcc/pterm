@@ -77,7 +77,9 @@ pub fn encodeKey(key: Key, mods: Mods, buf: []u8) EncodeResult {
             return .{ .bytes = buf[0..1] };
         },
         .backspace => {
-            buf[0] = 0x7F;
+            // Ctrl+Backspace -> 0x17 (^W, readline backward-kill-word).
+            // Plain Backspace -> 0x7F (DEL).
+            buf[0] = if (ctrl) 0x17 else 0x7F;
             return .{ .bytes = buf[0..1] };
         },
 
