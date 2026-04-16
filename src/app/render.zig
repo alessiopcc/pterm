@@ -473,7 +473,7 @@ pub fn renderThreadMain(self: *App) void {
                                 const sel_ch: u32 = @intFromFloat(metrics.cell_height);
                                 const sel_pad: i32 = @intFromFloat(rs.grid_padding);
                                 const sb = self.renderer_palette.selection_bg;
-                const sel_color = renderer_types.Color{ .r = sb.r, .g = sb.g, .b = sb.b, .a = 120 };
+                                const sel_color = renderer_types.Color{ .r = sb.r, .g = sb.g, .b = sb.b, .a = 120 };
                                 // Selection rows may extend outside the viewport when
                                 // the user dragged while scrolling. Clip to visible
                                 // row range: skip rows < 0 (scrolled above) and stop

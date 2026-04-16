@@ -153,8 +153,11 @@ pub const PosixPty = struct {
         if (self.child_pid <= 0) return null;
         var path_buf: [64]u8 = undefined;
         const path = std.fmt.bufPrint(&path_buf, "/proc/{d}/cwd", .{self.child_pid}) catch return null;
-        const link = std.fs.readLinkAbsolute(path, buf) catch return null;
-        return link;
+        var link_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const link = std.fs.readLinkAbsolute(path, &link_buf) catch return null;
+        if (link.len > buf.len) return null;
+        @memcpy(buf[0..link.len], link);
+        return buf[0..link.len];
     }
 
     /// Clean up PTY resources.
