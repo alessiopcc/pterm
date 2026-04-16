@@ -532,9 +532,30 @@ pub const App = struct {
         );
         defer shell_config.deinit();
 
+        // Resolve working directory: explicit arg > config > inherit CWD
+        const effective_wd: ?[]const u8 = working_dir orelse self.config.shell.working_dir;
+
+        // Expand ~ prefix to home directory
+        var home_buf: [512]u8 = undefined;
+        var expanded_wd: ?[]const u8 = effective_wd;
+        if (effective_wd) |wd| {
+            if (wd.len > 0 and wd[0] == '~') {
+                const home_env = if (@import("builtin").os.tag == .windows) "USERPROFILE" else "HOME";
+                if (std.process.getEnvVarOwned(self.allocator, home_env)) |home| {
+                    defer self.allocator.free(home);
+                    const rest = if (wd.len > 1) wd[1..] else "";
+                    if (home.len + rest.len < home_buf.len) {
+                        @memcpy(home_buf[0..home.len], home);
+                        @memcpy(home_buf[home.len .. home.len + rest.len], rest);
+                        expanded_wd = home_buf[0 .. home.len + rest.len];
+                    }
+                } else |_| {}
+            }
+        }
+
         // pass working_dir to PTY spawn for per-pane CWD
         var wd_buf: [1024]u8 = undefined;
-        const wd_z: ?[*:0]const u8 = if (working_dir) |wd| blk: {
+        const wd_z: ?[*:0]const u8 = if (expanded_wd) |wd| blk: {
             if (wd.len < wd_buf.len) {
                 @memcpy(wd_buf[0..wd.len], wd);
                 wd_buf[wd.len] = 0;
@@ -583,7 +604,7 @@ pub const App = struct {
         // Initialize CWD from working_dir, or detect from current process directory
         var cwd_buf: [256]u8 = [_]u8{0} ** 256;
         var cwd_len: u32 = 0;
-        if (working_dir) |wd| {
+        if (expanded_wd) |wd| {
             const copy_len = @min(wd.len, cwd_buf.len);
             @memcpy(cwd_buf[0..copy_len], wd[0..copy_len]);
             cwd_len = @intCast(copy_len);

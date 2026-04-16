@@ -54,7 +54,7 @@ pub fn dumpConfig() void {
         \\
         \\[font]
         \\# family = ""        # empty = platform default
-        \\size = 13.0
+        \\size = 11.0
         \\
         \\[window]
         \\title = "PTerm"
@@ -72,7 +72,7 @@ pub fn dumpConfig() void {
         \\
         \\[shell]
         \\# program = ""       # empty = auto-detect
-        \\# working_dir = ""   # empty = inherit
+        \\working_dir = "~"    # default = home dir; set path to override, "" = inherit CWD
         \\# args = []           # extra arguments, e.g. ["--login", "--norc"]
         \\
         \\[colors]

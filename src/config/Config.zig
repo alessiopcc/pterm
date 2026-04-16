@@ -104,7 +104,7 @@ pub const Config = struct {
 
     pub const Font = struct {
         family: ?[]const u8 = null, // null = platform default
-        size: f32 = 13.0,
+        size: f32 = 11.0,
         fallback: ?[]const []const u8 = null, // Additional fallback fonts
     };
 
@@ -129,7 +129,7 @@ pub const Config = struct {
 
     pub const Shell = struct {
         program: ?[]const u8 = null, // null = auto-detect
-        working_dir: ?[]const u8 = null,
+        working_dir: ?[]const u8 = "~",
         args: ?[]const []const u8 = null, // raw args appended after shell binary
     };
 
@@ -192,7 +192,7 @@ pub const Config = struct {
     };
 
     /// Default config path constants.
-    pub const default_font_size: f32 = 13.0;
+    pub const default_font_size: f32 = 11.0;
     pub const default_cols: i64 = 200;
     pub const default_rows: i64 = 55;
     pub const default_padding: f32 = 4.0;

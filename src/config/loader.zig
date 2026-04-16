@@ -33,7 +33,7 @@ const max_import_depth: u8 = 10;
 /// so we use those types here and convert in the final Config.
 const FileFont = struct {
     family: ?[]const u8 = null,
-    size: f64 = 13.0,
+    size: f64 = 11.0,
     fallback: ?[]const []const u8 = null,
 };
 
@@ -365,7 +365,7 @@ fn applyFileConfig(allocator: std.mem.Allocator, base: Config, file: FileConfig)
 
     if (file.font) |f| {
         if (f.family) |v| result.font.family = try allocator.dupe(u8, v);
-        if (f.size != 13.0) result.font.size = @floatCast(f.size);
+        if (f.size != 11.0) result.font.size = @floatCast(f.size);
         if (f.fallback) |v| {
             const duped = try allocator.alloc([]const u8, v.len);
             for (v, 0..) |arg, i| {
