@@ -114,6 +114,7 @@ pub const Config = struct {
         rows: i64 = 55,
         padding: f32 = 4.0,
         opacity: f32 = 1.0,
+        tab_title_interval: i64 = 1000, // milliseconds between tab title updates
     };
 
     pub const Cursor = struct {

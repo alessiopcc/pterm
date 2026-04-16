@@ -43,6 +43,7 @@ const FileWindow = struct {
     rows: i64 = 48,
     padding: f64 = 4.0,
     opacity: f64 = 1.0,
+    tab_title_interval: i64 = 1000,
 };
 
 const FileCursor = struct {
@@ -273,6 +274,7 @@ fn mergeConfigs(base: Config, over: Config) Config {
     if (over.window.rows != Config.default_rows) result.window.rows = over.window.rows;
     if (over.window.padding != Config.default_padding) result.window.padding = over.window.padding;
     if (over.window.opacity != Config.default_opacity) result.window.opacity = over.window.opacity;
+    if (over.window.tab_title_interval != 1000) result.window.tab_title_interval = over.window.tab_title_interval;
 
     // Cursor
     if (over.cursor.style != .block) result.cursor.style = over.cursor.style;
@@ -381,6 +383,7 @@ fn applyFileConfig(allocator: std.mem.Allocator, base: Config, file: FileConfig)
         if (w.rows != 48) result.window.rows = w.rows;
         if (w.padding != 4.0) result.window.padding = @floatCast(w.padding);
         if (w.opacity != 1.0) result.window.opacity = @floatCast(w.opacity);
+        if (w.tab_title_interval != 1000) result.window.tab_title_interval = w.tab_title_interval;
     }
 
     if (file.cursor) |c| {

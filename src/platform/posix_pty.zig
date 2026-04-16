@@ -147,6 +147,16 @@ pub const PosixPty = struct {
         return @intCast(self.child_pid);
     }
 
+    /// Query the child process's current working directory via /proc/<pid>/cwd.
+    /// Returns the CWD as a UTF-8 slice into the provided buffer, or null on failure.
+    pub fn getChildCwd(self: *const PosixPty, buf: []u8) ?[]const u8 {
+        if (self.child_pid <= 0) return null;
+        var path_buf: [64]u8 = undefined;
+        const path = std.fmt.bufPrint(&path_buf, "/proc/{d}/cwd", .{self.child_pid}) catch return null;
+        const link = std.fs.readLinkAbsolute(path, buf) catch return null;
+        return link;
+    }
+
     /// Clean up PTY resources.
     pub fn deinit(self: *PosixPty) void {
         if (self.master_fd >= 0) {

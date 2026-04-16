@@ -177,6 +177,32 @@ extern "kernel32" fn SetEnvironmentVariableA(
     lpValue: [*:0]const u8,
 ) callconv(.c) BOOL;
 
+// NtQueryInformationProcess + ReadProcessMemory for querying child CWD
+const PROCESS_BASIC_INFORMATION = extern struct {
+    ExitStatus: usize = 0,
+    PebBaseAddress: ?*anyopaque = null,
+    AffinityMask: usize = 0,
+    BasePriority: i32 = 0,
+    UniqueProcessId: usize = 0,
+    InheritedFromUniqueProcessId: usize = 0,
+};
+
+extern "ntdll" fn NtQueryInformationProcess(
+    ProcessHandle: HANDLE,
+    ProcessInformationClass: DWORD,
+    ProcessInformation: *anyopaque,
+    ProcessInformationLength: DWORD,
+    ReturnLength: ?*DWORD,
+) callconv(.c) i32;
+
+extern "kernel32" fn ReadProcessMemory(
+    hProcess: HANDLE,
+    lpBaseAddress: ?*const anyopaque,
+    lpBuffer: *anyopaque,
+    nSize: usize,
+    lpNumberOfBytesRead: ?*usize,
+) callconv(.c) BOOL;
+
 const EXTENDED_STARTUPINFO_PRESENT: DWORD = 0x00080000;
 const PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE: usize = 0x00020016;
 
@@ -398,6 +424,85 @@ pub const ConPty = struct {
     pub fn getChildPid(self: *const ConPty) ?i32 {
         if (self.process_info.dwProcessId == 0) return null;
         return @intCast(self.process_info.dwProcessId);
+    }
+
+    /// Query the child process's current working directory via NtQueryInformationProcess.
+    /// Returns the CWD as a UTF-8 slice into the provided buffer, or null on failure.
+    pub fn getChildCwd(self: *const ConPty, buf: []u8) ?[]const u8 {
+        if (self.process_info.hProcess == INVALID_HANDLE_VALUE) return null;
+
+        // Read the PEB address from the child process
+        var pbi: PROCESS_BASIC_INFORMATION = undefined;
+        var return_len: DWORD = 0;
+        const status = NtQueryInformationProcess(
+            self.process_info.hProcess,
+            0, // ProcessBasicInformation
+            &pbi,
+            @sizeOf(PROCESS_BASIC_INFORMATION),
+            &return_len,
+        );
+        if (status != 0) return null;
+
+        const peb_addr = pbi.PebBaseAddress orelse return null;
+
+        // Read RTL_USER_PROCESS_PARAMETERS pointer from PEB
+        // Offset of ProcessParameters in PEB is 0x20 on x64
+        const params_offset = 0x20;
+        var params_ptr: usize = 0;
+        var bytes_read: usize = 0;
+        if (ReadProcessMemory(
+            self.process_info.hProcess,
+            @ptrFromInt(@intFromPtr(peb_addr) + params_offset),
+            @ptrCast(&params_ptr),
+            @sizeOf(usize),
+            &bytes_read,
+        ) == 0) return null;
+
+        // Read CurrentDirectory.Buffer (UNICODE_STRING at offset 0x38 in RTL_USER_PROCESS_PARAMETERS on x64)
+        // UNICODE_STRING: Length (u16) + MaxLength (u16) + padding + Buffer (ptr)
+        const cwd_offset = 0x38;
+        var cwd_length: u16 = 0;
+        if (ReadProcessMemory(
+            self.process_info.hProcess,
+            @ptrFromInt(params_ptr + cwd_offset),
+            @ptrCast(&cwd_length),
+            @sizeOf(u16),
+            &bytes_read,
+        ) == 0) return null;
+
+        if (cwd_length == 0) return null;
+
+        var cwd_buffer_ptr: usize = 0;
+        if (ReadProcessMemory(
+            self.process_info.hProcess,
+            @ptrFromInt(params_ptr + cwd_offset + 8), // Buffer pointer is at +8 in UNICODE_STRING
+            @ptrCast(&cwd_buffer_ptr),
+            @sizeOf(usize),
+            &bytes_read,
+        ) == 0) return null;
+
+        // Read the actual CWD string (UTF-16)
+        const wchar_len = cwd_length / 2;
+        var wbuf: [512]u16 = undefined;
+        if (wchar_len > wbuf.len) return null;
+
+        if (ReadProcessMemory(
+            self.process_info.hProcess,
+            @ptrFromInt(cwd_buffer_ptr),
+            @ptrCast(wbuf[0..wchar_len]),
+            cwd_length,
+            &bytes_read,
+        ) == 0) return null;
+
+        // Strip trailing backslash (e.g., "C:\Users\foo\" -> "C:\Users\foo")
+        var effective_len = wchar_len;
+        if (effective_len > 1 and wbuf[effective_len - 1] == '\\') {
+            effective_len -= 1;
+        }
+
+        // Convert UTF-16 to UTF-8
+        const utf8_len = std.unicode.utf16LeToUtf8(buf, wbuf[0..effective_len]) catch return null;
+        return buf[0..utf8_len];
     }
 
     /// Clean up all ConPTY resources.

@@ -298,10 +298,17 @@ pub fn actionSplit(self: *App, direction: PaneTree.SplitDirection) void {
         return;
     }
 
+    // Inherit CWD from the focused pane's child process (live query)
+    var cwd_query_buf: [512]u8 = undefined;
+    const parent_cwd: ?[]const u8 = if (self.pane_data.get(tab.focused_pane_id)) |pd|
+        pd.pty.getChildCwd(&cwd_query_buf)
+    else
+        null;
+
     const new_id = tab.splitFocused(direction) catch return;
 
     // Create pane with TermIO + PTY
-    const pane_id = self.createPane(null, null, null) catch return;
+    const pane_id = self.createPane(parent_cwd, null, null) catch return;
 
     // Update the new leaf's pane_id to match the created pane
     if (tree_ops.findLeaf(tab.root, new_id)) |new_leaf| {
@@ -514,17 +521,21 @@ pub fn updateTabTitles(self: *App) void {
         var title_buf: [128]u8 = undefined;
         var offset: usize = 0;
 
-        // Prefer CWD basename; fall back to process name
+        // Prefer live CWD from child process; fall back to tracked CWD, then process name
         if (self.pane_data.get(tab.focused_pane_id)) |pd| {
-            const cwd_l = pd.cwd_len.load(.acquire);
-            if (cwd_l > 0) {
-                const cwd_slice = pd.cwd[0..cwd_l];
-                const base = if (std.mem.lastIndexOfScalar(u8, cwd_slice, '/')) |i|
-                    cwd_slice[i + 1 ..]
-                else if (std.mem.lastIndexOfScalar(u8, cwd_slice, '\\')) |i|
-                    cwd_slice[i + 1 ..]
+            var cwd_query_buf: [512]u8 = undefined;
+            const cwd_slice: ?[]const u8 = pd.pty.getChildCwd(&cwd_query_buf) orelse blk: {
+                const cwd_l = pd.cwd_len.load(.acquire);
+                break :blk if (cwd_l > 0) pd.cwd[0..cwd_l] else null;
+            };
+
+            if (cwd_slice) |cwd| {
+                const base = if (std.mem.lastIndexOfScalar(u8, cwd, '/')) |i|
+                    cwd[i + 1 ..]
+                else if (std.mem.lastIndexOfScalar(u8, cwd, '\\')) |i|
+                    cwd[i + 1 ..]
                 else
-                    cwd_slice;
+                    cwd;
                 const copy_len = @min(base.len, title_buf.len - offset);
                 @memcpy(title_buf[offset .. offset + copy_len], base[0..copy_len]);
                 offset += copy_len;

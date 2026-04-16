@@ -62,6 +62,7 @@ pub fn dumpConfig() void {
         \\rows = 48
         \\padding = 4.0
         \\opacity = 1.0
+        \\tab_title_interval = 1000  # milliseconds between tab title updates
         \\
         \\[cursor]
         \\style = "block"      # block, bar, underline

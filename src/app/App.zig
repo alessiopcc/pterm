@@ -186,6 +186,9 @@ pub const App = struct {
     debug_key_file: ?std.fs.File,
     frame_count: u64,
 
+    // Wall-clock timer for periodic tab title updates
+    last_title_update: i64,
+
     // Cursor blink state (global, applies to focused pane)
     cursor_blink_timer: i128,
     cursor_visible: bool,
@@ -374,6 +377,7 @@ pub const App = struct {
             else
                 null,
             .frame_count = 0,
+            .last_title_update = std.time.milliTimestamp(),
             .cursor_blink_timer = std.time.nanoTimestamp(),
             .cursor_visible = true,
             .focused = true,
@@ -761,6 +765,15 @@ pub const App = struct {
             // Poll config file watcher
             if (self.config_watcher) |*w| {
                 w.poll();
+            }
+
+            // Periodic tab title update based on wall-clock timer
+            const now_ms = std.time.milliTimestamp();
+            const interval_ms = @max(100, self.config.window.tab_title_interval);
+            if (now_ms - self.last_title_update >= interval_ms) {
+                self.last_title_update = now_ms;
+                self.updateTabTitles();
+                self.requestFrame();
             }
 
             // Adaptive event handling

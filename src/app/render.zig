@@ -142,11 +142,6 @@ pub fn renderThreadMain(self: *App) void {
             gl.Disable(gl.SCISSOR_TEST);
             gl.Clear(gl.COLOR_BUFFER_BIT);
 
-            // Update tab titles periodically (forced on pane/tab create/close)
-            if (self.frame_count % 60 == 0 or self.frame_count <= 1) {
-                self.updateTabTitles();
-            }
-
             // Render tab bar
             var tab_bar_ctx = TabBarRenderCtx{
                 .backend = &backend,
