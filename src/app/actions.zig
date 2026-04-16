@@ -501,12 +501,15 @@ pub fn resizeAllPanes(self: *App) void {
     const leaves = tree_ops.collectLeaves(tab.root, std.heap.page_allocator) catch return;
     defer std.heap.page_allocator.free(leaves);
 
+    const padding = self.config.grid_padding();
     for (leaves) |pid| {
         if (self.pane_data.get(pid)) |pd| {
             if (tree_ops.findLeaf(tab.root, pid)) |leaf_node| {
                 const bounds = leaf_node.leaf.bounds;
-                const cols: u16 = @intFromFloat(@min(500.0, @max(1.0, @as(f32, @floatFromInt(bounds.w)) / metrics.cell_width)));
-                const rows: u16 = @intFromFloat(@min(500.0, @max(1.0, @as(f32, @floatFromInt(bounds.h)) / metrics.cell_height)));
+                const usable_w: f32 = @as(f32, @floatFromInt(bounds.w)) - 2.0 * padding;
+                const usable_h: f32 = @as(f32, @floatFromInt(bounds.h)) - 2.0 * padding;
+                const cols: u16 = @intFromFloat(@min(500.0, @max(1.0, usable_w / metrics.cell_width)));
+                const rows: u16 = @intFromFloat(@min(500.0, @max(1.0, usable_h / metrics.cell_height)));
                 pd.termio.resize(cols, rows) catch {};
             }
         }
