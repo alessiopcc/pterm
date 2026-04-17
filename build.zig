@@ -18,7 +18,8 @@ pub fn build(b: *std.Build) void {
 
     // Build options: version string injected at compile time
     const options = b.addOptions();
-    options.addOption([]const u8, "version", b.option([]const u8, "version", "Version string") orelse "0.2.0-dev");
+    const version_str = b.option([]const u8, "version", "Version string") orelse "0.2.0-dev";
+    options.addOption([]const u8, "version", version_str);
     const console = b.option(bool, "console", "Keep console window attached (dev mode)") orelse false;
     exe_mod.addOptions("build_options", options);
 
@@ -32,7 +33,15 @@ pub fn build(b: *std.Build) void {
     });
     if (target.result.os.tag == .windows) {
         if (!console) exe.subsystem = .Windows;
-        exe.addWin32ResourceFile(.{ .file = b.path("assets/pterm.rc") });
+        // Generate pterm.rc with a VERSIONINFO block sourced from `version_str`
+        // so the exe's FileVersion metadata tracks the release version. The MSI
+        // binds its ProductVersion to this via !(bind.FileVersion.PTermExe);
+        // without it, every build looked like 0.0.0.0 and MajorUpgrade refused.
+        const rc_file = generateRcFile(b, version_str);
+        exe.addWin32ResourceFile(.{
+            .file = rc_file,
+            .include_paths = &.{b.path("assets")},
+        });
     }
     b.installArtifact(exe);
 
@@ -1295,4 +1304,62 @@ pub fn build(b: *std.Build) void {
     const run_config_e2e = b.addRunArtifact(config_e2e_tests);
     run_config_e2e.step.dependOn(&exe.step);
     e2e_test_step.dependOn(&run_config_e2e.step);
+}
+
+/// Parse a semver string like "0.2.0" or "0.2.0-dev" into a 4-tuple suitable
+/// for the Win32 VERSIONINFO FILEVERSION/PRODUCTVERSION fields. Anything after
+/// a '-' (prerelease) is ignored for the numeric tuple; missing parts become 0.
+fn parseVersionTuple(version: []const u8) [4]u16 {
+    const dash = std.mem.indexOfScalar(u8, version, '-') orelse version.len;
+    const numeric = version[0..dash];
+    var result: [4]u16 = .{ 0, 0, 0, 0 };
+    var iter = std.mem.splitScalar(u8, numeric, '.');
+    var i: usize = 0;
+    while (iter.next()) |part| : (i += 1) {
+        if (i >= 4) break;
+        result[i] = std.fmt.parseInt(u16, part, 10) catch 0;
+    }
+    return result;
+}
+
+/// Generate assets/pterm.rc into the build cache with a VERSIONINFO block
+/// populated from the project version. The ICON reference resolves through
+/// the include_paths passed to addWin32ResourceFile (assets/ holds pterm.ico).
+fn generateRcFile(b: *std.Build, version_str: []const u8) std.Build.LazyPath {
+    const v = parseVersionTuple(version_str);
+    const content = b.fmt(
+        \\1 ICON "pterm.ico"
+        \\
+        \\1 VERSIONINFO
+        \\FILEVERSION {d},{d},{d},{d}
+        \\PRODUCTVERSION {d},{d},{d},{d}
+        \\FILEFLAGSMASK 0x3fL
+        \\FILEFLAGS 0x0L
+        \\FILEOS 0x40004L
+        \\FILETYPE 0x1L
+        \\FILESUBTYPE 0x0L
+        \\BEGIN
+        \\    BLOCK "StringFileInfo"
+        \\    BEGIN
+        \\        BLOCK "040904b0"
+        \\        BEGIN
+        \\            VALUE "CompanyName", "PTerm Project"
+        \\            VALUE "FileDescription", "PTerm terminal emulator"
+        \\            VALUE "FileVersion", "{s}"
+        \\            VALUE "InternalName", "pterm"
+        \\            VALUE "OriginalFilename", "pterm.exe"
+        \\            VALUE "ProductName", "PTerm"
+        \\            VALUE "ProductVersion", "{s}"
+        \\        END
+        \\    END
+        \\    BLOCK "VarFileInfo"
+        \\    BEGIN
+        \\        VALUE "Translation", 0x409, 1200
+        \\    END
+        \\END
+        \\
+    , .{ v[0], v[1], v[2], v[3], v[0], v[1], v[2], v[3], version_str, version_str });
+
+    const wf = b.addWriteFiles();
+    return wf.add("pterm.rc", content);
 }
