@@ -34,7 +34,20 @@ jobs:
         # Intel Haswell-or-newer / AMD Excavator-or-newer CPU. Without this
         # Zig would use the GitHub runner's native CPU, which may emit
         # AVX-512 instructions that crash on consumer-grade hardware.
-        run: zig build --release=safe -Dcpu=x86_64_v3 "-Dversion=${{ steps.version.outputs.VERSION }}"
+        # Retry loop guards against flaky upstream mirrors (savannah.gnu.org
+        # freetype tarball in particular) — a bad extract can linger in the
+        # package cache, so wipe it between attempts.
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if zig build --release=safe -Dcpu=x86_64_v3 "-Dversion=${{ steps.version.outputs.VERSION }}"; then
+              exit 0
+            fi
+            echo "::warning::build attempt $attempt failed — wiping package cache and retrying"
+            rm -rf .zig-cache "$HOME/.cache/zig" "${LOCALAPPDATA:-/tmp/__nx}/zig" 2>/dev/null || true
+            sleep 15
+          done
+          exit 1
 
       - name: Unit tests
         run: zig build test
@@ -87,7 +100,18 @@ jobs:
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
 
       - name: Build (ReleaseSafe)
-        run: zig build --release=safe "-Dversion=${{ steps.version.outputs.VERSION }}"
+        # Retry on flaky upstream dep downloads — see Windows job.
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if zig build --release=safe "-Dversion=${{ steps.version.outputs.VERSION }}"; then
+              exit 0
+            fi
+            echo "::warning::build attempt $attempt failed — wiping package cache and retrying"
+            rm -rf .zig-cache "$HOME/.cache/zig" 2>/dev/null || true
+            sleep 15
+          done
+          exit 1
 
       - name: Unit tests
         run: zig build test
@@ -139,8 +163,19 @@ jobs:
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
 
       - name: Build (ReleaseSafe)
-        # Pin CPU to x86_64_v3 (AVX2) — see Windows job for rationale.
-        run: zig build --release=safe -Dcpu=x86_64_v3 "-Dversion=${{ steps.version.outputs.VERSION }}"
+        # Pin CPU to x86_64_v3 (AVX2) and retry on flaky dep downloads —
+        # see Windows job for rationale.
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if zig build --release=safe -Dcpu=x86_64_v3 "-Dversion=${{ steps.version.outputs.VERSION }}"; then
+              exit 0
+            fi
+            echo "::warning::build attempt $attempt failed — wiping package cache and retrying"
+            rm -rf .zig-cache "$HOME/.cache/zig" 2>/dev/null || true
+            sleep 15
+          done
+          exit 1
 
       - name: Separate debug symbols
         run: |
@@ -214,7 +249,18 @@ jobs:
           ln -s /usr/include/fontconfig /tmp/aarch64-prefix/include/fontconfig
 
       - name: Cross-compile for aarch64
-        run: zig build -Dtarget=aarch64-linux-gnu --release=safe "-Dversion=${{ steps.version.outputs.VERSION }}" --search-prefix /tmp/aarch64-prefix
+        # Retry on flaky dep downloads — see Windows job.
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if zig build -Dtarget=aarch64-linux-gnu --release=safe "-Dversion=${{ steps.version.outputs.VERSION }}" --search-prefix /tmp/aarch64-prefix; then
+              exit 0
+            fi
+            echo "::warning::build attempt $attempt failed — wiping package cache and retrying"
+            rm -rf .zig-cache "$HOME/.cache/zig" 2>/dev/null || true
+            sleep 15
+          done
+          exit 1
 
       - name: Build .deb and .rpm
         run: |
