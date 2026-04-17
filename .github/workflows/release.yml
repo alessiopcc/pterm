@@ -30,7 +30,11 @@ jobs:
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
 
       - name: Build (ReleaseSafe)
-        run: zig build --release=safe "-Dversion=${{ steps.version.outputs.VERSION }}"
+        # Pin CPU to x86_64_v3 (AVX2) so the release binary runs on any
+        # Intel Haswell-or-newer / AMD Excavator-or-newer CPU. Without this
+        # Zig would use the GitHub runner's native CPU, which may emit
+        # AVX-512 instructions that crash on consumer-grade hardware.
+        run: zig build --release=safe -Dcpu=x86_64_v3 "-Dversion=${{ steps.version.outputs.VERSION }}"
 
       - name: Unit tests
         run: zig build test
@@ -135,7 +139,8 @@ jobs:
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
 
       - name: Build (ReleaseSafe)
-        run: zig build --release=safe "-Dversion=${{ steps.version.outputs.VERSION }}"
+        # Pin CPU to x86_64_v3 (AVX2) — see Windows job for rationale.
+        run: zig build --release=safe -Dcpu=x86_64_v3 "-Dversion=${{ steps.version.outputs.VERSION }}"
 
       - name: Separate debug symbols
         run: |
