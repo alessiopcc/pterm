@@ -75,8 +75,11 @@ pub const PtyReader = struct {
                     }
                 }
             } else {
-                // No data available, yield to avoid busy-waiting
-                std.Thread.sleep(1 * std.time.ns_per_ms);
+                // No data available — sleep to avoid burning CPU on Windows,
+                // where readFromPty polls PeekNamedPipe instead of blocking.
+                // 5ms keeps keystroke latency imperceptible while cutting
+                // wakeups per pane from ~1000/s to ~200/s.
+                std.Thread.sleep(5 * std.time.ns_per_ms);
             }
         }
     }

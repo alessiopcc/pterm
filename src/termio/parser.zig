@@ -42,6 +42,8 @@ pub const ParseThread = struct {
 
     pub fn stop(self: *ParseThread) void {
         self.running.store(false, .release);
+        // Unblock the parse thread if it is currently inside waitData().
+        self.mailbox.wake();
         if (self.thread) |t| {
             t.join();
             self.thread = null;
@@ -60,7 +62,9 @@ pub const ParseThread = struct {
                 };
                 if (self.term_mutex) |m| m.unlock();
             } else {
-                std.Thread.yield() catch {};
+                // Block until the reader pushes or shutdown wakes us. The
+                // 100ms timeout bounds latency if a signal is ever missed.
+                self.mailbox.waitData(100 * std.time.ns_per_ms);
             }
         }
 

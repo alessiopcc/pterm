@@ -797,8 +797,10 @@ pub const App = struct {
                 }
             }
 
-            // Adaptive event handling
-            Window.pollEvents();
+            // Block until a GLFW event arrives or the timeout fires so the
+            // main thread sleeps when idle instead of spinning. Timeout keeps
+            // the config watcher and tab-title refresh responsive.
+            Window.waitEventsTimeout(0.1);
         }
     }
 
