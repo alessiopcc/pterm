@@ -17,6 +17,7 @@
       <ComponentGroupRef Id="ProductComponents" />
       <ComponentRef Id="PTermShortcut" />
       <ComponentRef Id="PTermPathEntry" />
+      <ComponentRef Id="PTermCrashDumps" />
     </Feature>
 
     <StandardDirectory Id="ProgramFiles64Folder">
@@ -51,6 +52,14 @@
                    Action="set"
                    System="yes" />
       <RegistryValue Root="HKLM" Key="Software\PTerm" Name="path_added" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <Component Id="PTermCrashDumps" Guid="d4e5f6a7-b8c9-0123-defa-234567890123" Directory="INSTALLFOLDER">
+      <RegistryKey Root="HKLM" Key="Software\Microsoft\Windows\Windows Error Reporting\LocalDumps\pterm.exe">
+        <RegistryValue Name="DumpType" Type="integer" Value="1" />
+        <RegistryValue Name="DumpCount" Type="integer" Value="10" />
+        <RegistryValue Name="DumpFolder" Type="expandable" Value="%LOCALAPPDATA%\pterm\crashes" KeyPath="yes" />
+      </RegistryKey>
     </Component>
 
     <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
