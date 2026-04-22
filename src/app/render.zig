@@ -100,20 +100,15 @@ pub fn renderThreadMain(self: *App) void {
             if (self.pending_dpi_change.swap(false, .acq_rel)) {
                 const scale_fp = self.new_dpi_scale.load(.acquire);
                 const new_scale: f32 = @as(f32, @floatFromInt(scale_fp)) / 100.0;
+                // Main font grid keeps its current (possibly zoomed) size, re-rasterized at new DPI.
                 self.font_grid.setDpiScale(new_scale) catch {};
+                // Chrome font grid always stays at the configured size, re-rasterized at new DPI.
+                self.chrome_font_grid.setDpiScale(new_scale) catch {};
                 self.window.content_scale = new_scale;
 
-                // Recompute chrome_cell_height at new DPI (using configured font size, not zoomed)
-                const cfg_size = self.config.font_size_pt();
-                self.font_grid.setSize(cfg_size) catch {};
-                self.chrome_cell_height = self.font_grid.getMetrics().cell_height;
-
-                // Restore actual (possibly zoomed) font size
-                const cur_size_fp = self.new_font_size.load(.acquire);
-                const cur_size: f32 = @as(f32, @floatFromInt(cur_size_fp)) / 100.0;
-                if (@abs(cur_size - cfg_size) > 0.01) {
-                    self.font_grid.setSize(cur_size) catch {};
-                }
+                const chrome_metrics = self.chrome_font_grid.getMetrics();
+                self.chrome_cell_height = chrome_metrics.cell_height;
+                self.chrome_cell_width = chrome_metrics.cell_width;
 
                 const fb2 = self.window.getFramebufferSize();
                 backend.resize(@intCast(fb2.width), @intCast(fb2.height));
@@ -171,6 +166,7 @@ pub fn renderThreadMain(self: *App) void {
             var tab_bar_ctx = TabBarRenderCtx{
                 .backend = &backend,
                 .font_grid = self.font_grid,
+                .chrome_font_grid = self.chrome_font_grid,
             };
             // Upload icon texture on first frame or after DPI change
             {
@@ -233,7 +229,7 @@ pub fn renderThreadMain(self: *App) void {
                     .fg_color = self.renderer_palette.default_fg.toU32(),
                     .agent_alert = self.renderer_palette.ui_agent_alert.toU32(),
                     .pane_border = self.renderer_palette.ui_pane_border_active.toU32(),
-                    .cell_width = metrics.cell_width,
+                    .cell_width = self.chrome_cell_width,
                     .cell_height = self.chrome_cell_height,
                     .hovered_control = self.hovered_control,
                     .bell_badge_color = self.renderer_palette.ui_bell_badge.toU32(),
@@ -633,6 +629,7 @@ pub fn renderThreadMain(self: *App) void {
                     var sb_render_ctx = TabBarRenderCtx{
                         .backend = &backend,
                         .font_grid = self.font_grid,
+                        .chrome_font_grid = self.chrome_font_grid,
                     };
                     StatusBarRenderer.render(
                         pane_infos[0..pane_count],
@@ -779,12 +776,18 @@ fn shellPickerDrawRectCallback(x: i32, y: i32, w: u32, h: u32, color: u32, ctx: 
 pub const TabBarRenderCtx = struct {
     backend: *OpenGLBackend,
     font_grid: *FontGrid,
+    // When non-null, drawTextCallback renders via this grid and the chrome atlas
+    // texture, keeping chrome text fixed at the configured size regardless of zoom.
+    chrome_font_grid: ?*FontGrid = null,
 };
 
 fn drawTextCallback(text: []const u8, px_x: i32, px_y: i32, color: Compositor.ColorU32, ctx: *anyopaque) void {
     const rc: *TabBarRenderCtx = @ptrCast(@alignCast(ctx));
     const backend = rc.backend;
-    const font_grid = rc.font_grid;
+    // Chrome rendering uses a dedicated font grid + atlas so it stays pinned at
+    // the configured size regardless of content zoom.
+    const is_chrome = rc.chrome_font_grid != null;
+    const font_grid = rc.chrome_font_grid orelse rc.font_grid;
     const metrics = font_grid.getMetrics();
 
     // Build CellInstance array for each byte in the string
@@ -816,12 +819,20 @@ fn drawTextCallback(text: []const u8, px_x: i32, px_y: i32, color: Compositor.Co
 
     if (count == 0) return;
 
-    // Upload atlas if dirty (glyph lookup may have rasterized new glyphs)
+    // Upload atlas if dirty (glyph lookup may have rasterized new glyphs).
+    // Chrome uses its own atlas texture; content uses the shared atlas.
     if (font_grid.getAtlas().isDirty()) {
         const atlas = font_grid.getAtlas();
-        backend.uploadAtlas(atlas.getPixels(), atlas.getSize());
+        if (is_chrome) {
+            backend.uploadChromeAtlas(atlas.getPixels(), atlas.getSize());
+        } else {
+            backend.uploadAtlas(atlas.getPixels(), atlas.getSize());
+        }
         font_grid.getAtlasMut().clearDirty();
     }
+
+    const atlas_tex = if (is_chrome) backend.chrome_atlas_texture else backend.atlas_texture;
+    const atlas_size = if (is_chrome) backend.chrome_atlas_size else backend.atlas_size;
 
     // Set up text shader with pixel-based grid offset
     // Use setFullViewport to get correct projection, then override grid offset
@@ -832,14 +843,14 @@ fn drawTextCallback(text: []const u8, px_x: i32, px_y: i32, color: Compositor.Co
     backend.text_program.setUniformVec2("uCellSize", metrics.cell_width, metrics.cell_height);
     backend.text_program.setUniformVec2("uGridOffset", @floatFromInt(px_x), @floatFromInt(px_y));
     backend.text_program.setUniformFloat("uTextScale", 0.75);
-    backend.text_program.setUniformVec2("uAtlasSize", @floatFromInt(backend.atlas_size), @floatFromInt(backend.atlas_size));
+    backend.text_program.setUniformVec2("uAtlasSize", @floatFromInt(atlas_size), @floatFromInt(atlas_size));
     backend.text_program.setUniformVec2("uColorAtlasSize", @floatFromInt(backend.color_atlas_size), @floatFromInt(backend.color_atlas_size));
 
     gl.Enable(gl.BLEND);
     gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
     gl.ActiveTexture(gl.TEXTURE0);
-    gl.BindTexture(gl.TEXTURE_2D, backend.atlas_texture);
+    gl.BindTexture(gl.TEXTURE_2D, atlas_tex);
     backend.text_program.setUniformInt("uAtlasTexture", 0);
 
     gl.ActiveTexture(gl.TEXTURE1);

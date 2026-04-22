@@ -155,6 +155,9 @@ pub const App = struct {
     pane_registry: PaneRegistry,
     compositor: Compositor,
     font_grid: *FontGrid,
+    /// Separate font grid for chrome (tab bar / status bar). Always rasterized at
+    /// the configured font size — never touched by content zoom. Rebuilt only on DPI change.
+    chrome_font_grid: *FontGrid,
     allocator: std.mem.Allocator,
     config: Config,
     config_path: ?[]const u8,
@@ -182,10 +185,11 @@ pub const App = struct {
     pending_dpi_change: std.atomic.Value(bool),
     new_dpi_scale: std.atomic.Value(u32), // DPI scale * 100 (fixed-point)
 
-    // Chrome cell height: cell_height at the configured (unzoomed) font size.
+    // Chrome cell dimensions: cell size at the configured (unzoomed) font size.
     // Used for titlebar/tabbar/statusbar sizing so zoom doesn't affect chrome.
     // Updated only when DPI changes, not on zoom.
     chrome_cell_height: f32,
+    chrome_cell_width: f32,
 
     // Runtime color palette
     renderer_palette: RendererPalette,
@@ -347,6 +351,17 @@ pub const App = struct {
             metrics = font_grid.getMetrics();
         }
 
+        // Create chrome font grid (independent of content zoom — always cfg size at current DPI).
+        const chrome_font_grid = try allocator.create(FontGrid);
+        errdefer allocator.destroy(chrome_font_grid);
+        chrome_font_grid.* = try FontGrid.init(allocator, FontConfig{
+            .family = config.font_family(),
+            .size_pt = config.font_size_pt(),
+            .dpi_scale = actual_dpi,
+            .fallback = config.font_fallback(),
+        });
+        errdefer chrome_font_grid.deinit();
+
         // Build keybinding map
         const user_bindings: ?[]const keybindings.UserBinding = if (config.keybindings.len > 0)
             @ptrCast(config.keybindings)
@@ -367,6 +382,7 @@ pub const App = struct {
             .pane_registry = .{},
             .compositor = compositor,
             .font_grid = font_grid,
+            .chrome_font_grid = chrome_font_grid,
             .allocator = allocator,
             .config = config,
             .config_path = null,
@@ -384,6 +400,7 @@ pub const App = struct {
             .pending_dpi_change = std.atomic.Value(bool).init(false),
             .new_dpi_scale = std.atomic.Value(u32).init(@intFromFloat(actual_dpi * 100.0)),
             .chrome_cell_height = metrics.cell_height,
+            .chrome_cell_width = metrics.cell_width,
             .renderer_palette = theme_mod.buildRendererPaletteFromConfig(config.colors, config.theme),
             .keybinding_map = kb_map,
             .last_mods = .{},
@@ -767,6 +784,8 @@ pub const App = struct {
         self.frame_arena.deinit();
         self.font_grid.deinit();
         self.allocator.destroy(self.font_grid);
+        self.chrome_font_grid.deinit();
+        self.allocator.destroy(self.chrome_font_grid);
         // Free config arena (all heap strings from Config.load)
         self.config.deinit();
         self.window.deinit();

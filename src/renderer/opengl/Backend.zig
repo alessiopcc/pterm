@@ -53,6 +53,8 @@ pub const OpenGLBackend = struct {
     atlas_size: u32,
     color_atlas_texture: gl.uint,
     color_atlas_size: u32,
+    chrome_atlas_texture: gl.uint,
+    chrome_atlas_size: u32,
 
     // Projection matrix (orthographic, updated on resize)
     projection: [16]gl.float,
@@ -175,6 +177,19 @@ pub const OpenGLBackend = struct {
         gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
         gl.BindTexture(gl.TEXTURE_2D, 0);
 
+        // Create chrome-only grayscale atlas texture (for tab bar / status bar text
+        // that stays pinned to the configured font size regardless of content zoom).
+        var chrome_atlas_texture: gl.uint = 0;
+        gl.GenTextures(1, @ptrCast(&chrome_atlas_texture));
+        if (chrome_atlas_texture == 0) return error.GLResourceCreation;
+
+        gl.BindTexture(gl.TEXTURE_2D, chrome_atlas_texture);
+        gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.BindTexture(gl.TEXTURE_2D, 0);
+
         // Create color (RGBA) atlas texture (unit 1) for emoji
         var color_atlas_texture: gl.uint = 0;
         gl.GenTextures(1, @ptrCast(&color_atlas_texture));
@@ -215,6 +230,8 @@ pub const OpenGLBackend = struct {
             .atlas_size = 0,
             .color_atlas_texture = color_atlas_texture,
             .color_atlas_size = 512,
+            .chrome_atlas_texture = chrome_atlas_texture,
+            .chrome_atlas_size = 0,
             .icon_texture = 0,
             .icon_size = 0,
             .projection = identityMatrix(),
@@ -239,6 +256,11 @@ pub const OpenGLBackend = struct {
         if (self.color_atlas_texture != 0) {
             gl.DeleteTextures(1, @ptrCast(&self.color_atlas_texture));
             self.color_atlas_texture = 0;
+        }
+
+        if (self.chrome_atlas_texture != 0) {
+            gl.DeleteTextures(1, @ptrCast(&self.chrome_atlas_texture));
+            self.chrome_atlas_texture = 0;
         }
 
         var vbos = [_]gl.uint{ self.quad_vbo, self.bg_instance_vbo, self.text_instance_vbo, self.block_instance_vbo, self.cursor_instance_vbo };
@@ -299,6 +321,38 @@ pub const OpenGLBackend = struct {
                 pixels.ptr,
             );
             self.atlas_size = size;
+        }
+        gl.BindTexture(gl.TEXTURE_2D, 0);
+    }
+
+    /// Upload glyph atlas pixel data (single-channel R8) to the chrome atlas texture.
+    pub fn uploadChromeAtlas(self: *OpenGLBackend, pixels: []const u8, size: u32) void {
+        gl.BindTexture(gl.TEXTURE_2D, self.chrome_atlas_texture);
+        if (self.chrome_atlas_size == size) {
+            gl.TexSubImage2D(
+                gl.TEXTURE_2D,
+                0,
+                0,
+                0,
+                @intCast(size),
+                @intCast(size),
+                gl.RED,
+                gl.UNSIGNED_BYTE,
+                pixels.ptr,
+            );
+        } else {
+            gl.TexImage2D(
+                gl.TEXTURE_2D,
+                0,
+                gl.R8,
+                @intCast(size),
+                @intCast(size),
+                0,
+                gl.RED,
+                gl.UNSIGNED_BYTE,
+                pixels.ptr,
+            );
+            self.chrome_atlas_size = size;
         }
         gl.BindTexture(gl.TEXTURE_2D, 0);
     }

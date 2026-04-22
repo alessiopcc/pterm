@@ -237,7 +237,6 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
     const fb_y: i32 = @intFromFloat(pos[1]);
     const win_x = fb_x;
     const win_y = fb_y;
-    const metrics = self.font_grid.getMetrics();
     const fb = self.window.getFramebufferSize();
 
     // Check window edge resize — but NOT on title bar controls
@@ -263,7 +262,7 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
     const total_h: i32 = @intCast(TabBarRenderer.computeHeight(self.chrome_cell_height));
     if (fb_y >= 0 and fb_y < total_h) {
         if (button == .middle) {
-            const hit = TabBarRenderer.hitTest(fb_x, fb_y, self.tab_manager.tabCount(), metrics.cell_width, self.chrome_cell_height, fb.width);
+            const hit = TabBarRenderer.hitTest(fb_x, fb_y, self.tab_manager.tabCount(), self.chrome_cell_width, self.chrome_cell_height, fb.width);
             switch (hit) {
                 .tab => |idx| self.actionCloseTabByIndex(idx),
                 else => {},
@@ -276,7 +275,7 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
             fb_x,
             fb_y,
             self.tab_manager.tabCount(),
-            metrics.cell_width,
+            self.chrome_cell_width,
             self.chrome_cell_height,
             fb.width,
         );
@@ -686,11 +685,10 @@ pub fn handleCursorPos(self: *App, xpos: f64, ypos: f64) void {
     const fb_y = win_y;
 
     // Track which control button is hovered (for background highlight)
-    const cur_metrics = self.font_grid.getMetrics();
     const cur_fb = self.window.getFramebufferSize();
     const old_hover = self.hovered_control;
     if (TabBarRenderer.isInControlsArea(fb_x, fb_y, self.chrome_cell_height, cur_fb.width)) {
-        const hit = TabBarRenderer.hitTest(fb_x, fb_y, 0, cur_metrics.cell_width, self.chrome_cell_height, cur_fb.width);
+        const hit = TabBarRenderer.hitTest(fb_x, fb_y, 0, self.chrome_cell_width, self.chrome_cell_height, cur_fb.width);
         self.hovered_control = switch (hit) {
             .window_minimize => 1,
             .window_maximize => 2,
