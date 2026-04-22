@@ -436,10 +436,6 @@ fn shapeRowInto(
         // (U+E0A0-E0D4) stay in the text pass — they need full-cell
         // fg+bg rendering that fonts handle better.
         if (preferPrimaryFont(first_cp) and first_cp < 0xE0A0 and !is_emoji and !is_wide_run) {
-            // Emit backgrounds for block cells (same as text and emoji paths).
-            for (run_start..run_end) |ci| {
-                emitBg(row_cells[ci], @intCast(ci), row, bg_buf, bg_count);
-            }
             for (run_start..run_end) |ci| {
                 const c = row_cells[ci];
                 if (c.grapheme_len == 0 or c.grapheme[0] == 0) continue;
