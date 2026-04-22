@@ -160,6 +160,23 @@ pub fn snapshotCells(
                 inverse = style.flags.inverse;
             }
 
+            // ghostty-vt stores "bg-only" cells (produced by ECH/ED/EL with a
+            // non-default SGR bg, heavily used by TUIs like k9s) with
+            // style_id = 0 and the bg packed into the content union, not the
+            // style table. Without this branch those cells read as "default
+            // bg" and emitBg drops them, leaking the terminal's default bg.
+            switch (cell.content_tag) {
+                .bg_color_palette => {
+                    const idx = cell.content.color_palette;
+                    bg = if (pal) |p| p.resolve256(idx) else palette.resolve256(idx);
+                },
+                .bg_color_rgb => {
+                    const rgb = cell.content.color_rgb;
+                    bg = .{ .r = rgb.r, .g = rgb.g, .b = rgb.b };
+                },
+                .codepoint, .codepoint_grapheme => {},
+            }
+
             // Get base codepoint directly from ghostty-vt cell.
             const cp = cell.codepoint();
             var grapheme_buf: [cell_mod.MAX_GRAPHEME_CODEPOINTS]u21 = empty_grapheme;
