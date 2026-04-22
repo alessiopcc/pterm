@@ -19,6 +19,9 @@ pub const PtyReader = struct {
     pty: *Pty,
     mailbox: *MailboxType,
     running: std.atomic.Value(bool),
+    /// Set to true when the PTY read loop ends due to pipe break / child exit.
+    /// Main thread polls this to close exited panes.
+    exited: std.atomic.Value(bool),
     thread: ?std.Thread,
 
     pub fn init(pty: *Pty, mailbox: *MailboxType) PtyReader {
@@ -26,8 +29,13 @@ pub const PtyReader = struct {
             .pty = pty,
             .mailbox = mailbox,
             .running = std.atomic.Value(bool).init(false),
+            .exited = std.atomic.Value(bool).init(false),
             .thread = null,
         };
+    }
+
+    pub fn hasExited(self: *const PtyReader) bool {
+        return self.exited.load(.acquire);
     }
 
     /// Start the reader thread. Spawns a new OS thread that reads
@@ -57,8 +65,14 @@ pub const PtyReader = struct {
             const n = self.readFromPty(&read_buf) catch |err| {
                 switch (err) {
                     // Child process exited or pipe broken -- stop gracefully
-                    error.ReadFailed => break,
-                    else => break,
+                    error.ReadFailed => {
+                        self.exited.store(true, .release);
+                        break;
+                    },
+                    else => {
+                        self.exited.store(true, .release);
+                        break;
+                    },
                 }
             };
 

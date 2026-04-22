@@ -426,6 +426,14 @@ pub const ConPty = struct {
         return @intCast(self.process_info.dwProcessId);
     }
 
+    /// Returns true if the child process has exited. Uses a zero-timeout wait on
+    /// the process handle — cheap and non-blocking.
+    pub fn hasChildExited(self: *const ConPty) bool {
+        if (self.process_info.hProcess == INVALID_HANDLE_VALUE) return true;
+        const WAIT_OBJECT_0: DWORD = 0x00000000;
+        return WaitForSingleObject(self.process_info.hProcess, 0) == WAIT_OBJECT_0;
+    }
+
     /// Query the child process's current working directory via NtQueryInformationProcess.
     /// Returns the CWD as a UTF-8 slice into the provided buffer, or null on failure.
     pub fn getChildCwd(self: *const ConPty, buf: []u8) ?[]const u8 {

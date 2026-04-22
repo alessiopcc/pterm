@@ -794,6 +794,9 @@ pub const App = struct {
     /// Main thread event loop.
     pub fn run(self: *App) !void {
         while (!self.window.shouldClose()) {
+            // Reap panes whose child process has exited (e.g. shell ran `exit` or Ctrl+D).
+            self.reapExitedPanes();
+
             // Apply pending OSC title from focused pane
             if (self.getFocusedPaneData()) |pd| {
                 pd.surface.applyPendingTitle();
@@ -922,6 +925,28 @@ pub const App = struct {
 
     pub fn requestFrame(self: *App) void {
         self.frame_requested.store(true, .release);
+    }
+
+    /// Scan all panes for processes that have exited (reader thread detected
+    /// pipe break) and close them. Called from the main event loop.
+    pub fn reapExitedPanes(self: *App) void {
+        var exited: [32]u32 = undefined;
+        var exited_count: usize = 0;
+        {
+            self.pane_mutex.lock();
+            defer self.pane_mutex.unlock();
+            var it = self.pane_data.iterator();
+            while (it.next()) |entry| {
+                if (exited_count >= exited.len) break;
+                if (entry.value_ptr.*.termio.hasPtyExited()) {
+                    exited[exited_count] = entry.key_ptr.*;
+                    exited_count += 1;
+                }
+            }
+        }
+        for (exited[0..exited_count]) |pane_id| {
+            actions.actionClosePaneById(self, pane_id);
+        }
     }
 
     pub fn queueOp(self: *App, op: PaneOp) void {

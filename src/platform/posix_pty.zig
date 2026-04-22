@@ -147,6 +147,15 @@ pub const PosixPty = struct {
         return @intCast(self.child_pid);
     }
 
+    /// Returns true if the child process has exited. Uses a non-blocking waitpid.
+    pub fn hasChildExited(self: *const PosixPty) bool {
+        if (self.child_pid <= 0) return true;
+        var status: c_int = 0;
+        const rc = c.waitpid(self.child_pid, &status, c.WNOHANG);
+        // rc > 0: child state changed (exited). rc == 0: still running. rc < 0: error.
+        return rc > 0;
+    }
+
     /// Query the child process's current working directory via /proc/<pid>/cwd.
     /// Returns the CWD as a UTF-8 slice into the provided buffer, or null on failure.
     pub fn getChildCwd(self: *const PosixPty, buf: []u8) ?[]const u8 {

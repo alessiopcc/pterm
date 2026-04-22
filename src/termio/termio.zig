@@ -165,4 +165,17 @@ pub const TermIO = struct {
     pub fn feedMailbox(self: *TermIO, data: []const u8) usize {
         return self.mailbox.push(data);
     }
+
+    /// Returns true once the child process has exited. Checks both the reader
+    /// thread's observed pipe break (Unix) and the process handle directly
+    /// (Windows ConPTY, where the pipe does not always close on exit).
+    pub fn hasPtyExited(self: *const TermIO) bool {
+        if (self.reader) |*r| {
+            if (r.hasExited()) return true;
+        }
+        if (self.pty) |p| {
+            if (p.hasChildExited()) return true;
+        }
+        return false;
+    }
 };

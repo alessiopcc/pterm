@@ -361,6 +361,43 @@ pub fn actionClosePane(self: *App) void {
     }
 }
 
+/// Close the pane with the given id (may be in any tab). If it was the last
+/// pane in its tab, close that tab too. Used to reap panes whose process has exited.
+pub fn actionClosePaneById(self: *App, pane_id: u32) void {
+    self.pane_mutex.lock();
+    defer self.pane_mutex.unlock();
+
+    const pd = self.pane_data.get(pane_id) orelse return;
+    const tab_idx = pd.tab_index;
+    const tab = self.tab_manager.getTab(tab_idx) orelse return;
+
+    const leaf = tree_ops.findLeaf(tab.root, pane_id) orelse {
+        self.destroyPane(pane_id);
+        return;
+    };
+
+    const sibling_focus = tree_ops.close(self.allocator, leaf);
+    self.destroyPane(pane_id);
+
+    if (sibling_focus) |new_focus| {
+        tab.focused_pane_id = new_focus;
+        resizeAllPanes(self);
+        _ = updateTabTitles(self);
+        self.requestFrame();
+        return;
+    }
+
+    // Was the last pane in the tab — close the tab.
+    const close_result = self.tab_manager.closeTab(tab_idx);
+    if (close_result == .last_tab_closed) {
+        self.window.handle.setShouldClose(true);
+        return;
+    }
+    resizeAllPanes(self);
+    _ = updateTabTitles(self);
+    self.requestFrame();
+}
+
 /// Toggle zoom on the focused pane.
 pub fn actionZoomPane(self: *App) void {
     const tab = self.tab_manager.getActiveTab() orelse return;
