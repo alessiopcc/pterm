@@ -66,8 +66,7 @@ const BellState = bell_state_mod.BellState;
 const system_beep = @import("system_beep");
 
 const AgentState = @import("agent_state").AgentState;
-const AgentDetector = @import("agent_detector").AgentDetector;
-const IdleTracker = @import("idle_tracker").IdleTracker;
+const process_monitor = @import("process_monitor");
 const notification_manager_mod = @import("notification_manager");
 const NotificationManager = notification_manager_mod.NotificationManager;
 const status_bar_mod = @import("status_bar_renderer");
@@ -129,23 +128,37 @@ pub const PaneData = struct {
     /// Per-pane agent monitoring state (independent per pane).
     agent_state: AgentState = .{},
 
-    /// Per-pane idle tracker (optional idle detection).
-    idle_tracker: IdleTracker = IdleTracker.init(5, false),
+    /// Wall-clock timestamp (ns) of the most recent raw output event.
+    /// Used to classify the pane as "working" (recent output) vs quiet.
+    /// Written by the parser/reader thread, read by the render thread.
+    last_output_ns: std.atomic.Value(i128) = std.atomic.Value(i128).init(0),
 
-    /// Flag set by observer callback, consumed by render snapshot for debounced scan.
-    needs_agent_scan: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Render-thread only: timestamp of last foreground-process poll.
+    last_process_poll_ns: i128 = 0,
 
-    /// Suppress agent state transitions during resize (PTY redraws cause false positives).
-    suppress_agent_output: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-
-    /// Render-thread: timestamp when a waiting-pattern was first seen during a quiet window.
-    /// 0 = no pending candidate. Cleared by parser thread on any new output so that
-    /// a brief spinner pause doesn't commit to waiting (avoids false flash/notify).
-    agent_candidate_ns: i128 = 0,
+    /// Suppress agent state transitions during resize (PTY redraws cause
+    /// false positives). Time-based: resize sets `suppress_until_ns = now +
+    /// SUPPRESS_DURATION_NS` and all checks compare wall-clock to that.
+    /// Using a deadline (vs "500ms of PTY silence") means animated TUIs
+    /// like claude, whose spinners keep the PTY busy, still un-suppress on
+    /// schedule.
+    suppress_until_ns: std.atomic.Value(i128) = std.atomic.Value(i128).init(0),
 
     /// Scrollback viewport offset: 0 = live (bottom), >0 = scrolled up N lines into history.
     scroll_offset: u32 = 0,
+
+    pub fn isAgentOutputSuppressed(self: *const PaneData, now_ns: i128) bool {
+        return now_ns < self.suppress_until_ns.load(.acquire);
+    }
+
+    pub fn suppressAgentOutputUntil(self: *PaneData, deadline_ns: i128) void {
+        self.suppress_until_ns.store(deadline_ns, .release);
+    }
 };
+
+/// Resize-suppression window: agent state transitions are blocked this long
+/// after a resize so PTY redraws don't flip the state to waiting spuriously.
+pub const SUPPRESS_DURATION_NS: i128 = 1_000_000_000; // 1 second
 
 // Static state vars are in callbacks.zig (callbacks.g_reload_app, callbacks.g_screen_change_app).
 
@@ -215,8 +228,7 @@ pub const App = struct {
     // Frame arena for per-frame allocations
     frame_arena: std.heap.ArenaAllocator,
 
-    /// Shared agent detector (one per app, patterns are global.
-    agent_detector: ?AgentDetector = null,
+    // (agent detection is per-pane via ProcessMonitor; no shared state needed)
 
     /// Notification manager: per-pane cooldown, focus suppression, OS notification dispatch.
     notification_manager: NotificationManager,
@@ -416,14 +428,6 @@ pub const App = struct {
             .cursor_visible = true,
             .focused = true,
             .frame_arena = std.heap.ArenaAllocator.init(allocator),
-            .agent_detector = if (config.agent.enabled)
-                AgentDetector.init(
-                    config.agent.preset,
-                    config.agent.custom_patterns orelse &[_][]const u8{},
-                    @intCast(config.agent.scan_lines),
-                )
-            else
-                null,
             .notification_manager = NotificationManager.init(
                 config.agent.notification_cooldown,
                 config.agent.notifications,
@@ -666,10 +670,6 @@ pub const App = struct {
             .process_name_len = proc_name_len,
             .screen_change_fn = null,
             .row_cache = .{},
-            .idle_tracker = IdleTracker.init(
-                @intCast(self.config.agent.idle_timeout),
-                self.config.agent.idle_detection,
-            ),
         };
 
         // Fix up internal pointers to point to PaneData's copies (not the stack locals)

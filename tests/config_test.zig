@@ -16,7 +16,7 @@ const env_mod = @import("env");
 
 test "Config.defaults returns expected default values" {
     const config = Config.defaults();
-    try testing.expectEqual(@as(f32, 11.0), config.font.size);
+    try testing.expectEqual(@as(f32, 10.0), config.font.size);
     try testing.expectEqual(@as(i64, 200), config.window.cols);
     try testing.expectEqual(@as(i64, 55), config.window.rows);
     try testing.expectEqual(@as(f32, 4.0), config.window.padding);
@@ -134,14 +134,14 @@ test "Config.validate resets invalid font_size to default" {
     var config = Config.defaults();
     config.font.size = 0.0;
     config.validate();
-    try testing.expectEqual(@as(f32, 11.0), config.font.size);
+    try testing.expectEqual(@as(f32, 10.0), config.font.size);
 }
 
 test "Config.validate resets negative font_size to default" {
     var config = Config.defaults();
     config.font.size = -5.0;
     config.validate();
-    try testing.expectEqual(@as(f32, 11.0), config.font.size);
+    try testing.expectEqual(@as(f32, 10.0), config.font.size);
 }
 
 test "Config.validate resets invalid cols to default" {
@@ -215,7 +215,7 @@ test "cli.applyOverrides preserves unset fields" {
     var config = Config.defaults();
     const cli_args = cli_mod.CliArgs{}; // all null
     config = cli_mod.applyOverrides(config, cli_args);
-    try testing.expectEqual(@as(f32, 11.0), config.font.size);
+    try testing.expectEqual(@as(f32, 10.0), config.font.size);
     try testing.expectEqual(@as(i64, 200), config.window.cols);
 }
 
@@ -227,7 +227,7 @@ test "Config backward-compatible accessors" {
     const config = Config.defaults();
     try testing.expectEqual(@as(u16, 200), config.cols());
     try testing.expectEqual(@as(u16, 55), config.rows());
-    try testing.expectEqual(@as(f32, 11.0), config.font_size_pt());
+    try testing.expectEqual(@as(f32, 10.0), config.font_size_pt());
     try testing.expectEqual(@as(f32, 4.0), config.grid_padding());
     try testing.expectEqual(@as(u32, 10_000), config.scrollback_lines());
     try testing.expectEqual(@as(?[]const u8, null), config.font_family());
@@ -260,7 +260,7 @@ test "env overrides apply to config" {
     const config = Config.defaults();
     const result = env_mod.applyOverrides(config);
     // Without PTERM_* env vars set, should return unchanged config
-    try testing.expectEqual(@as(f32, 11.0), result.font.size);
+    try testing.expectEqual(@as(f32, 10.0), result.font.size);
     try testing.expectEqual(@as(i64, 200), result.window.cols);
 }
 
@@ -269,7 +269,7 @@ test "Config.load returns defaults when no config file exists" {
     const cli_args = cli_mod.CliArgs{};
     // With no config file and no env/CLI overrides, should return defaults
     const config = try Config.load(allocator, cli_args);
-    try testing.expectEqual(@as(f32, 11.0), config.font.size);
+    try testing.expectEqual(@as(f32, 10.0), config.font.size);
     try testing.expectEqual(@as(i64, 200), config.window.cols);
     try testing.expectEqual(@as(i64, 55), config.window.rows);
 }
@@ -307,10 +307,11 @@ test "agent fields parsed from TOML" {
     const allocator = std.heap.page_allocator;
     const config = try loader.loadConfigFromPath(allocator, "tests/fixtures/agent_config.toml");
     try testing.expectEqual(false, config.agent.enabled);
-    try testing.expectEqualStrings("broad", config.agent.preset);
-    try testing.expectEqual(true, config.agent.idle_detection);
-    try testing.expectEqual(@as(i64, 10), config.agent.idle_timeout);
-    try testing.expectEqual(@as(i64, 5), config.agent.scan_lines);
+    try testing.expectEqual(@as(usize, 2), config.agent.processes.len);
+    try testing.expectEqualStrings("claude", config.agent.processes[0]);
+    try testing.expectEqualStrings("aider", config.agent.processes[1]);
+    try testing.expectEqual(@as(i64, 750), config.agent.poll_interval_ms);
+    try testing.expectEqual(@as(i64, 400), config.agent.quiet_threshold_ms);
     try testing.expectEqual(false, config.agent.notifications);
     try testing.expectEqual(false, config.agent.notification_sound);
     try testing.expectEqual(@as(i64, 60), config.agent.notification_cooldown);

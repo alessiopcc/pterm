@@ -95,14 +95,15 @@ pub fn framebufferSizeCallback(handle: *glfw.Window, width: c_int, height: c_int
         app.requestFrame(); // Still redraw, just don't resize terminal
         return;
     }
-    // Suppress agent state transitions immediately — before any render thread
-    // processes the resize and triggers PTY output that would flip state to working
+    // Suppress agent state transitions for a fixed window after resize so
+    // PTY redraws don't flip state to waiting spuriously.
     {
         app.pane_mutex.lock();
         defer app.pane_mutex.unlock();
+        const deadline = std.time.nanoTimestamp() + app_mod.SUPPRESS_DURATION_NS;
         var pd_iter = app.pane_data.iterator();
         while (pd_iter.next()) |entry| {
-            entry.value_ptr.*.suppress_agent_output.store(true, .release);
+            entry.value_ptr.*.suppressAgentOutputUntil(deadline);
         }
     }
     app.new_fb_width.store(@intCast(width), .release);
@@ -271,21 +272,16 @@ pub fn bellCallback(ctx: ?*anyopaque) void {
 }
 
 /// Agent output callback: invoked from read thread on every raw output event.
-/// Context pointer points to PaneData. Clears waiting state,
-/// resets idle timer, and schedules scan for next render snapshot.
+/// Context pointer points to PaneData. Records the output timestamp; the
+/// render thread derives state (working/waiting/idle) from this + the
+/// foreground-process poll.
 pub fn agentOutputCallback(ctx: ?*anyopaque) void {
     if (ctx) |c| {
         const pd: *PaneData = @ptrCast(@alignCast(c));
-        // Suppress agent state transitions during resize (PTY redraws cause false positives)
-        if (pd.suppress_agent_output.load(.acquire)) {
-            pd.idle_tracker.recordOutputNow();
-            return;
-        }
+        const now = std.time.nanoTimestamp();
+        pd.last_output_ns.store(now, .release);
+        if (pd.isAgentOutputSuppressed(now)) return;
         pd.agent_state.onOutput();
-        pd.idle_tracker.recordOutputNow();
-        pd.needs_agent_scan.store(true, .release);
-        // Reset pending waiting candidate so spinner redraws can't commit to waiting.
-        pd.agent_candidate_ns = 0;
     }
 }
 

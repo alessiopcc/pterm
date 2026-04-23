@@ -39,9 +39,9 @@ const ShellInfo = shell_mod.ShellInfo;
 const StatusBarRenderer = status_bar_mod.StatusBarRenderer;
 const SearchState = search_mod.SearchState.SearchState;
 const matcher = search_mod.matcher;
-const IdleTracker = @import("idle_tracker").IdleTracker;
 const AgentState = @import("agent_state").AgentState;
 const BellState = @import("bell_state").BellState;
+const process_monitor = @import("process_monitor");
 
 /// Dispatch a keybinding action.
 pub fn dispatchAction(self: *App, action: keybindings.Action) void {
@@ -508,16 +508,20 @@ pub fn actionBreakOut(self: *App) void {
 /// Recompute bounds for the active tab and resize all pane PTYs.
 /// Called after any structural layout change (split, close, resize, zoom, etc).
 pub fn resizeAllPanes(self: *App) void {
+    const fb = self.window.getFramebufferSize();
     // Suppress activity for 30 frames -- async PTY redraws from resize cause false positives
     self.suppress_activity_frames.store(30, .release);
     for (self.tab_manager.tabs.items) |*t| t.has_activity = false;
     // Suppress agent state transitions on ALL panes during resize
+    const deadline = std.time.nanoTimestamp() + app_mod.SUPPRESS_DURATION_NS;
     var pd_iter = self.pane_data.iterator();
     while (pd_iter.next()) |entry| {
-        entry.value_ptr.*.suppress_agent_output.store(true, .release);
+        entry.value_ptr.*.suppressAgentOutputUntil(deadline);
     }
-    const tab = self.tab_manager.getActiveTab() orelse return;
-    const fb = self.window.getFramebufferSize();
+    const tab = self.tab_manager.getActiveTab() orelse {
+        std.log.warn("resizeAllPanes: no active tab", .{});
+        return;
+    };
     const metrics = self.font_grid.getMetrics();
     const tab_bar_height = TabBarRenderer.computeHeight(self.chrome_cell_height);
     const status_bar_height: u32 = if (self.config.status_bar.visible)
@@ -577,15 +581,24 @@ pub fn updateTabTitles(self: *App) bool {
                 break :blk if (cwd_l > 0) pd.cwd[0..cwd_l] else null;
             };
 
-            if (cwd_slice) |cwd| {
+            // When an agent process is live in the pane, prefer its name in
+            // the title so users can see "claude" / "codex" at a glance.
+            const pname_slice: []const u8 = pd.process_name[0..pd.process_name_len];
+            const is_agent = pname_slice.len > 0 and
+                process_monitor.nameMatchesList(pname_slice, self.config.agent.processes);
+
+            if (is_agent) {
+                const copy_len = @min(pname_slice.len, title_buf.len - offset);
+                @memcpy(title_buf[offset .. offset + copy_len], pname_slice[0..copy_len]);
+                offset += copy_len;
+            } else if (cwd_slice) |cwd| {
                 const base = std.fs.path.basename(cwd);
                 const copy_len = @min(base.len, title_buf.len - offset);
                 @memcpy(title_buf[offset .. offset + copy_len], base[0..copy_len]);
                 offset += copy_len;
-            } else if (pd.process_name_len > 0) {
-                const pname = pd.process_name[0..pd.process_name_len];
-                const copy_len = @min(pname.len, title_buf.len - offset);
-                @memcpy(title_buf[offset .. offset + copy_len], pname[0..copy_len]);
+            } else if (pname_slice.len > 0) {
+                const copy_len = @min(pname_slice.len, title_buf.len - offset);
+                @memcpy(title_buf[offset .. offset + copy_len], pname_slice[0..copy_len]);
                 offset += copy_len;
             }
         }
@@ -756,12 +769,9 @@ pub fn respawnShell(self: *App, pd: *PaneData, shell_name: []const u8) !void {
     pd.url_state = .{};
     pd.bell_state = .{};
     pd.agent_state = .{};
-    pd.needs_agent_scan = std.atomic.Value(bool).init(false);
-    pd.suppress_agent_output = std.atomic.Value(bool).init(false);
-    pd.idle_tracker = IdleTracker.init(
-        @intCast(self.config.agent.idle_timeout),
-        self.config.agent.idle_detection,
-    );
+    pd.last_output_ns = std.atomic.Value(i128).init(0);
+    pd.last_process_poll_ns = 0;
+    pd.suppress_until_ns = std.atomic.Value(i128).init(0);
 
     // Wire screen change callback (triggers frame request on terminal output)
     pd.termio.terminal.observer.onScreenChange = &callbacks.screenChangeCallback;
@@ -776,6 +786,13 @@ pub fn respawnShell(self: *App, pd: *PaneData, shell_name: []const u8) !void {
 /// Activate a layout preset: create new tabs with the preset's pane tree.
 /// Non-destructive: opens in new tab(s), preserving existing tabs.
 pub fn activatePreset(self: *App, preset: *const LayoutPreset.LayoutPreset) void {
+    // Hold pane_mutex across structural mutations so the render thread
+    // doesn't walk freed tab trees or observe half-built pane_data entries.
+    // Must wrap tree replacement, pane creation, and the initial resize —
+    // release before blocking on startup-command writes (those can back up
+    // on the TermIO writer if the child hasn't read yet).
+    self.pane_mutex.lock();
+
     var first_new_tab_idx: ?usize = null;
 
     for (preset.tabs) |tab_def| {
@@ -839,14 +856,24 @@ pub fn activatePreset(self: *App, preset: *const LayoutPreset.LayoutPreset) void
         tab.next_pane_id = utils.generatePaneId(self);
     }
 
-    // Switch to the first new tab
-    if (first_new_tab_idx) |idx| {
-        self.tab_manager.switchTab(idx);
+    // Resize PTYs for EVERY newly-created tab's panes — not just the active
+    // one. A layout with multiple tabs was spawning panes at full-window
+    // PTY dims and never resizing until the user switched to that tab.
+    if (first_new_tab_idx) |first_idx| {
+        const original_active = self.tab_manager.active_idx;
+        var ti: usize = first_idx;
+        while (ti < self.tab_manager.tabs.items.len) : (ti += 1) {
+            self.tab_manager.switchTab(ti);
+            resizeAllPanes(self);
+        }
+        // Leave the first new tab active (original post-activation behavior).
+        _ = original_active;
+        self.tab_manager.switchTab(first_idx);
     }
-    // Resize PTYs to actual pane bounds BEFORE writing startup commands.
-    // Otherwise the spawned child (e.g. `claude`) reads the initial full-window
-    // COLS/ROWS and renders overflowing until the user triggers a manual resize.
-    resizeAllPanes(self);
+
+    // Release pane_mutex: writes to the PTY can block briefly and the render
+    // thread needs to paint.
+    self.pane_mutex.unlock();
 
     // Execute startup commands now that every pane PTY is sized correctly.
     for (preset.tabs, 0..) |tab_def, tab_i| {

@@ -33,7 +33,7 @@ const max_import_depth: u8 = 10;
 /// so we use those types here and convert in the final Config.
 const FileFont = struct {
     family: ?[]const u8 = null,
-    size: f64 = 11.0,
+    size: f64 = 10.0,
     fallback: ?[]const []const u8 = null,
 };
 
@@ -102,11 +102,9 @@ const FileBell = struct {
 
 const FileAgent = struct {
     enabled: bool = true,
-    preset: ?[]const u8 = null,
-    idle_detection: bool = false,
-    idle_timeout: i64 = 5,
-    scan_lines: i64 = 3,
-    custom_patterns: ?[]const []const u8 = null,
+    processes: ?[]const []const u8 = null,
+    poll_interval_ms: i64 = 500,
+    quiet_threshold_ms: i64 = 500,
     notifications: bool = true,
     notification_sound: bool = true,
     notification_cooldown: i64 = 30,
@@ -313,11 +311,9 @@ fn mergeConfigs(base: Config, over: Config) Config {
 
     // Agent core fields (complement existing notification-only merge)
     if (!over.agent.enabled) result.agent.enabled = over.agent.enabled;
-    if (!std.mem.eql(u8, over.agent.preset, "conservative")) result.agent.preset = over.agent.preset;
-    if (over.agent.idle_detection) result.agent.idle_detection = over.agent.idle_detection;
-    if (over.agent.idle_timeout != 5) result.agent.idle_timeout = over.agent.idle_timeout;
-    if (over.agent.scan_lines != 3) result.agent.scan_lines = over.agent.scan_lines;
-    if (over.agent.custom_patterns) |v| result.agent.custom_patterns = v;
+    if (over.agent.processes.ptr != (&Config.default_agent_processes).ptr) result.agent.processes = over.agent.processes;
+    if (over.agent.poll_interval_ms != 500) result.agent.poll_interval_ms = over.agent.poll_interval_ms;
+    if (over.agent.quiet_threshold_ms != 500) result.agent.quiet_threshold_ms = over.agent.quiet_threshold_ms;
 
     // Agent notification fields
     if (!over.agent.notifications) result.agent.notifications = over.agent.notifications;
@@ -367,7 +363,7 @@ fn applyFileConfig(allocator: std.mem.Allocator, base: Config, file: FileConfig)
 
     if (file.font) |f| {
         if (f.family) |v| result.font.family = try allocator.dupe(u8, v);
-        if (f.size != 11.0) result.font.size = @floatCast(f.size);
+        if (f.size != 10.0) result.font.size = @floatCast(f.size);
         if (f.fallback) |v| {
             const duped = try allocator.alloc([]const u8, v.len);
             for (v, 0..) |arg, i| {
@@ -470,17 +466,15 @@ fn applyFileConfig(allocator: std.mem.Allocator, base: Config, file: FileConfig)
     // Agent
     if (file.agent) |a| {
         if (!a.enabled) result.agent.enabled = false;
-        if (a.preset) |v| result.agent.preset = try allocator.dupe(u8, v);
-        if (a.idle_detection) result.agent.idle_detection = true;
-        if (a.idle_timeout != 5) result.agent.idle_timeout = a.idle_timeout;
-        if (a.scan_lines != 3) result.agent.scan_lines = a.scan_lines;
-        if (a.custom_patterns) |v| {
+        if (a.processes) |v| {
             const duped = try allocator.alloc([]const u8, v.len);
-            for (v, 0..) |pat, i| {
-                duped[i] = try allocator.dupe(u8, pat);
+            for (v, 0..) |name, i| {
+                duped[i] = try allocator.dupe(u8, name);
             }
-            result.agent.custom_patterns = duped;
+            result.agent.processes = duped;
         }
+        if (a.poll_interval_ms != 500) result.agent.poll_interval_ms = a.poll_interval_ms;
+        if (a.quiet_threshold_ms != 500) result.agent.quiet_threshold_ms = a.quiet_threshold_ms;
         if (!a.notifications) result.agent.notifications = false;
         if (!a.notification_sound) result.agent.notification_sound = false;
         if (a.notification_cooldown != 30) result.agent.notification_cooldown = a.notification_cooldown;

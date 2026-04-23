@@ -1102,53 +1102,31 @@ pub fn build(b: *std.Build) void {
     // Agent monitoring modules
     // -------------------------------------------------------
 
-    const presets_mod = b.createModule(.{
-        .root_source_file = b.path("src/agent/presets.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
     const agent_state_mod = b.createModule(.{
         .root_source_file = b.path("src/agent/AgentState.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    const idle_tracker_mod = b.createModule(.{
-        .root_source_file = b.path("src/agent/IdleTracker.zig"),
+    const process_monitor_mod = b.createModule(.{
+        .root_source_file = b.path("src/agent/ProcessMonitor.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
-
-    const agent_detector_mod = b.createModule(.{
-        .root_source_file = b.path("src/agent/AgentDetector.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    agent_detector_mod.addImport("presets", presets_mod);
 
     // Wire agent modules into app
     app_mod.addImport("agent_state", agent_state_mod);
-    app_mod.addImport("agent_detector", agent_detector_mod);
-    app_mod.addImport("idle_tracker", idle_tracker_mod);
-    app_mod.addImport("presets", presets_mod);
+    app_mod.addImport("process_monitor", process_monitor_mod);
 
     // Agent module inline tests
     const agent_state_tests = b.addTest(.{ .root_module = agent_state_mod });
     const run_agent_state_tests = b.addRunArtifact(agent_state_tests);
     test_step.dependOn(&run_agent_state_tests.step);
 
-    const presets_tests = b.addTest(.{ .root_module = presets_mod });
-    const run_presets_tests = b.addRunArtifact(presets_tests);
-    test_step.dependOn(&run_presets_tests.step);
-
-    const idle_tracker_tests = b.addTest(.{ .root_module = idle_tracker_mod });
-    const run_idle_tracker_tests = b.addRunArtifact(idle_tracker_tests);
-    test_step.dependOn(&run_idle_tracker_tests.step);
-
-    const agent_detector_tests = b.addTest(.{ .root_module = agent_detector_mod });
-    const run_agent_detector_tests = b.addRunArtifact(agent_detector_tests);
-    test_step.dependOn(&run_agent_detector_tests.step);
+    const process_monitor_tests = b.addTest(.{ .root_module = process_monitor_mod });
+    const run_process_monitor_tests = b.addRunArtifact(process_monitor_tests);
+    test_step.dependOn(&run_process_monitor_tests.step);
 
     // -------------------------------------------------------
     // Notification modules
@@ -1283,16 +1261,6 @@ pub fn build(b: *std.Build) void {
     const run_pane_tab = b.addRunArtifact(pane_tab_tests);
     e2e_test_step.dependOn(&run_pane_tab.step);
 
-    // Agent detection tests (headless, no PTY or GPU needed)
-    const agent_detection_test_mod = b.createModule(.{
-        .root_source_file = b.path("tests/e2e/agent_detection_test.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    agent_detection_test_mod.addImport("agent_detector", agent_detector_mod);
-    const agent_detection_tests = b.addTest(.{ .root_module = agent_detection_test_mod });
-    const run_agent_detection = b.addRunArtifact(agent_detection_tests);
-    e2e_test_step.dependOn(&run_agent_detection.step);
 
     // Config loading + hot-reload tests
     const config_e2e_test_mod = b.createModule(.{

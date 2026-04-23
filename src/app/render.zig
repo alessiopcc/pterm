@@ -34,7 +34,62 @@ const SearchColors = search_mod.SearchOverlay.SearchColors;
 const RendererPalette = @import("theme").RendererPalette;
 const BellState = bell_state_mod.BellState;
 const AgentState = @import("agent_state").AgentState;
+const process_monitor = @import("process_monitor");
 const glfw = @import("zglfw");
+
+/// Poll the PTY's foreground process name at the configured cadence and log
+/// it once per second. Always safe to call; independent of agent.enabled and
+/// suppress_agent_output so diagnostics keep flowing during resize.
+pub fn pollForegroundProcess(self: *App, pd: *PaneData) void {
+    const now = std.time.nanoTimestamp();
+    const poll_interval_ns: i128 = @as(i128, self.config.agent.poll_interval_ms) * 1_000_000;
+
+    if (pd.last_process_poll_ns == 0 or (now - pd.last_process_poll_ns) >= poll_interval_ns) {
+        pd.last_process_poll_ns = now;
+        var pn = process_monitor.ProcessName{};
+        const ok = process_monitor.queryForegroundName(.{
+            .shell_pid = pd.pty.getChildPid(),
+            .master_fd = if (@hasField(@TypeOf(pd.pty), "master_fd")) pd.pty.master_fd else -1,
+        }, &pn);
+        if (ok and pn.len > 0) {
+            const n = @min(pn.len, pd.process_name.len);
+            @memset(&pd.process_name, 0);
+            @memcpy(pd.process_name[0..n], pn.buf[0..n]);
+            pd.process_name_len = @intCast(n);
+        }
+    }
+
+}
+
+/// Per-pane state derivation. Call AFTER pollForegroundProcess.
+pub fn updateAgentStateFromProcess(self: *App, pd: *PaneData) void {
+    const now = std.time.nanoTimestamp();
+    const quiet_threshold_ns: i128 = @as(i128, self.config.agent.quiet_threshold_ms) * 1_000_000;
+
+    const last_output = pd.last_output_ns.load(.acquire);
+    const recent_output = last_output > 0 and (now - last_output) < quiet_threshold_ns;
+    const current = pd.agent_state.state.load(.acquire);
+
+    if (recent_output) {
+        if (current != .working) pd.agent_state.onOutput();
+        // Keep rendering until the quiet threshold elapses so we can
+        // re-evaluate.
+        self.requestFrame();
+        return;
+    }
+
+    // Quiet: decide waiting vs idle based on foreground-process name.
+    const name = pd.process_name[0..pd.process_name_len];
+    const is_agent = process_monitor.nameMatchesList(name, self.config.agent.processes);
+
+    if (is_agent) {
+        if (current != .waiting) pd.agent_state.triggerWaiting();
+        self.requestFrame(); // drive the pulse animation
+    } else {
+        if (current != .idle) pd.agent_state.markIdle();
+        // Idle: no frame request. Next output or user input will wake us.
+    }
+}
 
 /// Wrapper around glfw.getProcAddress that aligns the returned pointer
 /// for zigglgen compatibility (macOS returns `?*const anyopaque` but
@@ -293,49 +348,12 @@ pub fn renderThreadMain(self: *App) void {
                                 }
                             }
 
-                            // Two-stage commit avoids false flash/notify from brief spinner
-                            // pauses: scan after quiet_ns, then require the match to persist
-                            // for confirm_ns before triggering. Output cancels the candidate
-                            // (see agentOutputCallback).
-                            const agent_now_ns = std.time.nanoTimestamp();
-                            const agent_quiet_ns: i128 = 250 * 1_000_000;
-                            const agent_confirm_ns: i128 = 750 * 1_000_000;
-                            const output_is_quiet = (agent_now_ns - pd.idle_tracker.last_output_ns) >= agent_quiet_ns;
-                            if (pd.suppress_agent_output.load(.acquire)) {
-                                pd.needs_agent_scan.store(false, .release);
-                                pd.agent_candidate_ns = 0;
-                            } else {
-                                if (pd.needs_agent_scan.load(.acquire)) {
-                                    if (!output_is_quiet) {
-                                        self.requestFrame();
-                                    } else {
-                                        pd.needs_agent_scan.store(false, .release);
-                                        if (self.agent_detector) |*detector| {
-                                            const scan_snap = pd.termio.lockTerminal();
-                                            var line_buf: [20][256]u8 = undefined;
-                                            var lines: [20][]const u8 = undefined;
-                                            const n_lines = extractVisibleLines(scan_snap, &line_buf, &lines, detector.scan_lines);
-                                            pd.termio.unlockTerminal();
-                                            if (detector.scanLines(lines[0..n_lines])) {
-                                                if (pd.agent_candidate_ns == 0) pd.agent_candidate_ns = agent_now_ns;
-                                            } else {
-                                                pd.agent_candidate_ns = 0;
-                                            }
-                                        }
-                                    }
-                                }
-                                if (pd.agent_candidate_ns != 0) {
-                                    if ((agent_now_ns - pd.agent_candidate_ns) >= agent_confirm_ns) {
-                                        pd.agent_state.triggerWaiting();
-                                        pd.agent_candidate_ns = 0;
-                                    } else {
-                                        self.requestFrame(); // recheck next frame
-                                    }
-                                }
-                            }
-                            // Idle detection check (skip during resize suppress, and while output is still flowing)
-                            if (!pd.suppress_agent_output.load(.acquire) and output_is_quiet and pd.idle_tracker.isIdle(agent_now_ns)) {
-                                pd.agent_state.triggerWaiting();
+                            // Always poll the foreground process (for title + debug
+                            // log). State-machine transitions are gated on
+                            // agent.enabled and suppress_agent_output.
+                            pollForegroundProcess(self, pd);
+                            if (self.config.agent.enabled and !pd.isAgentOutputSuppressed(std.time.nanoTimestamp())) {
+                                updateAgentStateFromProcess(self, pd);
                             }
 
                             // Snapshot under mutex
@@ -1057,19 +1075,7 @@ pub fn processBellForPane(self: *App, pd: *PaneData, bounds: RendererRect, backe
 /// Process agent flash state for a pane during render: consume trigger, draw flash overlay.
 /// Mirrors processBellForPane pattern.
 pub fn processAgentFlashForPane(self: *App, pd: *PaneData, bounds: RendererRect, backend: *OpenGLBackend) void {
-    // Idle transition: if in .working and no output for 500ms, go back to .idle
-    // Also clears resize suppress flag so normal detection resumes
-    if (pd.agent_state.state.load(.acquire) == .working or
-        pd.suppress_agent_output.load(.acquire))
-    {
-        const now = std.time.nanoTimestamp();
-        if (pd.idle_tracker.last_output_ns > 0 and
-            (now - pd.idle_tracker.last_output_ns) >= 500_000_000)
-        {
-            pd.suppress_agent_output.store(false, .release);
-            pd.agent_state.markIdle();
-        }
-    }
+    // Suppress-window expiry is time-based — no explicit clear needed.
     // Consume notification pending flag and fire OS notification
     if (pd.agent_state.notification_pending.load(.acquire)) {
         pd.agent_state.notification_pending.store(false, .release);
@@ -1109,56 +1115,3 @@ pub fn processAgentFlashForPane(self: *App, pd: *PaneData, bounds: RendererRect,
     }
 }
 
-/// Extract the last N visible lines from the terminal for agent pattern scanning.
-/// Returns the number of lines extracted. Each line is written into line_buf/lines arrays.
-/// Uses the same ghostty-vt pin API as snapshotCells.
-pub fn extractVisibleLines(
-    terminal_snapshot: anytype,
-    line_buf: *[20][256]u8,
-    lines: *[20][]const u8,
-    max_lines: u32,
-) usize {
-    const n = @min(max_lines, 20);
-    const screens = @constCast(terminal_snapshot).getScreens();
-    const screen = screens.active;
-    const rows: usize = @intCast(screen.pages.rows);
-    const cols: usize = @intCast(screen.pages.cols);
-    const cursor_row: usize = @intCast(screen.cursor.y);
-
-    var count: usize = 0;
-    // Scan from (cursor_row - n + 1) to cursor_row
-    const start_row: usize = if (cursor_row >= n - 1) cursor_row - (n - 1) else 0;
-    var row_idx: usize = 0;
-    while (row_idx < n and (start_row + row_idx) < rows) : (row_idx += 1) {
-        const r = start_row + row_idx;
-        var buf_pos: usize = 0;
-        var col: usize = 0;
-        while (col < cols and buf_pos < 255) : (col += 1) {
-            const pin = screen.pages.pin(.{ .active = .{
-                .x = @intCast(col),
-                .y = @intCast(r),
-            } });
-            if (pin) |p| {
-                const rac = p.rowAndCell();
-                const cell = rac.cell;
-                // Get first codepoint (char_data or grapheme)
-                const cp: u21 = cell.codepoint();
-                if (cp == 0) {
-                    line_buf[count][buf_pos] = ' ';
-                } else if (cp < 128) {
-                    line_buf[count][buf_pos] = @intCast(cp);
-                } else {
-                    line_buf[count][buf_pos] = '?';
-                }
-            } else {
-                line_buf[count][buf_pos] = ' ';
-            }
-            buf_pos += 1;
-        }
-        // Trim trailing spaces
-        while (buf_pos > 0 and line_buf[count][buf_pos - 1] == ' ') : (buf_pos -= 1) {}
-        lines[count] = line_buf[count][0..buf_pos];
-        count += 1;
-    }
-    return count;
-}

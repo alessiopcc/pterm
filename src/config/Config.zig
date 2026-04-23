@@ -49,20 +49,20 @@ pub const Config = struct {
     config_arena: ?*std.heap.ArenaAllocator = null,
 
     /// Agent monitoring config.
-    /// Controls pattern-based detection and optional idle detection.
+    /// State is derived from two signals: terminal repainting (working) and
+    /// the live foreground process name (waiting when it matches a configured
+    /// agent process). No pattern heuristics.
     pub const Agent = struct {
         /// Whether agent monitoring is active. enabled by default.
         enabled: bool = true,
-        /// Pattern preset name: "conservative" or "broad". conservative default.
-        preset: []const u8 = "conservative",
-        /// Whether idle detection is enabled. off by default.
-        idle_detection: bool = false,
-        /// Idle timeout in seconds. 5 seconds default.
-        idle_timeout: i64 = 5,
-        /// Number of terminal lines to scan from the end. 3 lines default.
-        scan_lines: i64 = 3,
-        /// Custom regex/literal patterns appended to preset patterns..
-        custom_patterns: ?[]const []const u8 = null,
+        /// Process names that count as "agent" for flash/notify when quiet.
+        /// Case-insensitive match against the PTY foreground process name.
+        processes: []const []const u8 = &default_agent_processes,
+        /// Foreground-process poll cadence in milliseconds.
+        poll_interval_ms: i64 = 500,
+        /// Output-quiet threshold in milliseconds: output newer than this means
+        /// the pane is considered "working" (repainting).
+        quiet_threshold_ms: i64 = 500,
 
         // Notification fields
         /// Whether OS desktop notifications are enabled. enabled by default.
@@ -74,6 +74,8 @@ pub const Config = struct {
         /// Whether to suppress notification when PTerm window is focused. true by default.
         suppress_when_focused: bool = true,
     };
+
+    pub const default_agent_processes = [_][]const u8{ "claude", "opencode", "codex" };
 
     /// Status bar config.
     /// Controls the persistent status bar at the bottom of the window.
@@ -104,7 +106,7 @@ pub const Config = struct {
 
     pub const Font = struct {
         family: ?[]const u8 = null, // null = platform default
-        size: f32 = 11.0,
+        size: f32 = 10.0,
         fallback: ?[]const []const u8 = null, // Additional fallback fonts
     };
 
@@ -193,7 +195,7 @@ pub const Config = struct {
     };
 
     /// Default config path constants.
-    pub const default_font_size: f32 = 11.0;
+    pub const default_font_size: f32 = 10.0;
     pub const default_cols: i64 = 200;
     pub const default_rows: i64 = 55;
     pub const default_padding: f32 = 4.0;
@@ -324,11 +326,9 @@ pub const Config = struct {
 
         // Agent
         if (!file.agent.enabled) result.agent.enabled = file.agent.enabled;
-        if (!std.mem.eql(u8, file.agent.preset, "conservative")) result.agent.preset = file.agent.preset;
-        if (file.agent.idle_detection) result.agent.idle_detection = file.agent.idle_detection;
-        if (file.agent.idle_timeout != 5) result.agent.idle_timeout = file.agent.idle_timeout;
-        if (file.agent.scan_lines != 3) result.agent.scan_lines = file.agent.scan_lines;
-        if (file.agent.custom_patterns) |v| result.agent.custom_patterns = v;
+        if (file.agent.processes.ptr != (&default_agent_processes).ptr) result.agent.processes = file.agent.processes;
+        if (file.agent.poll_interval_ms != 500) result.agent.poll_interval_ms = file.agent.poll_interval_ms;
+        if (file.agent.quiet_threshold_ms != 500) result.agent.quiet_threshold_ms = file.agent.quiet_threshold_ms;
 
         // Agent notification fields
         if (!file.agent.notifications) result.agent.notifications = file.agent.notifications;
@@ -406,28 +406,22 @@ pub const Config = struct {
             self.scrollback.lines = default_scrollback;
         }
 
-        // Agent: scan_lines clamped to [1, 20]
-        if (self.agent.scan_lines < 1 or self.agent.scan_lines > 20) {
-            std.log.warn("Invalid agent.scan_lines={}, clamping to [1, 20]", .{self.agent.scan_lines});
-            self.agent.scan_lines = std.math.clamp(self.agent.scan_lines, 1, 20);
+        // Agent: poll_interval_ms clamped to [50, 10000]
+        if (self.agent.poll_interval_ms < 50 or self.agent.poll_interval_ms > 10_000) {
+            std.log.warn("Invalid agent.poll_interval_ms={}, clamping to [50, 10000]", .{self.agent.poll_interval_ms});
+            self.agent.poll_interval_ms = std.math.clamp(self.agent.poll_interval_ms, 50, 10_000);
         }
 
-        // Agent: idle_timeout clamped to [1, 300]
-        if (self.agent.idle_timeout < 1 or self.agent.idle_timeout > 300) {
-            std.log.warn("Invalid agent.idle_timeout={}, clamping to [1, 300]", .{self.agent.idle_timeout});
-            self.agent.idle_timeout = std.math.clamp(self.agent.idle_timeout, 1, 300);
+        // Agent: quiet_threshold_ms clamped to [100, 60000]
+        if (self.agent.quiet_threshold_ms < 100 or self.agent.quiet_threshold_ms > 60_000) {
+            std.log.warn("Invalid agent.quiet_threshold_ms={}, clamping to [100, 60000]", .{self.agent.quiet_threshold_ms});
+            self.agent.quiet_threshold_ms = std.math.clamp(self.agent.quiet_threshold_ms, 100, 60_000);
         }
 
         // Agent: notification_cooldown clamped to [1, 600]
         if (self.agent.notification_cooldown < 1 or self.agent.notification_cooldown > 600) {
             std.log.warn("Invalid agent.notification_cooldown={}, clamping to [1, 600]", .{self.agent.notification_cooldown});
             self.agent.notification_cooldown = std.math.clamp(self.agent.notification_cooldown, 1, 600);
-        }
-
-        // Agent: preset must be "conservative" or "broad"
-        if (!std.mem.eql(u8, self.agent.preset, "conservative") and !std.mem.eql(u8, self.agent.preset, "broad")) {
-            std.log.warn("Invalid agent.preset='{s}', resetting to 'conservative'", .{self.agent.preset});
-            self.agent.preset = "conservative";
         }
     }
 

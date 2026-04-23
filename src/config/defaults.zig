@@ -54,7 +54,7 @@ pub fn dumpConfig() void {
         \\
         \\[font]
         \\# family = ""        # empty = platform default
-        \\size = 11.0
+        \\size = 10.0
         \\
         \\[window]
         \\title = "PTerm"
@@ -133,11 +133,9 @@ pub fn dumpConfig() void {
         \\[agent]
         \\# Agent monitoring and notification settings
         \\# enabled = true
-        \\# preset = "conservative"  # conservative, broad
-        \\# idle_detection = false
-        \\# idle_timeout = 5
-        \\# scan_lines = 3
-        \\# custom_patterns = []  # additional prompt patterns to detect
+        \\# processes = ["claude", "opencode", "codex"]  # process names that trigger waiting-state flash
+        \\# poll_interval_ms = 500   # foreground-process poll cadence
+        \\# quiet_threshold_ms = 500 # output quiet threshold before leaving "working"
         \\# notifications = true
         \\# notification_sound = true
         \\# notification_cooldown = 30
