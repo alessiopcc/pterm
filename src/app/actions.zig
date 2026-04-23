@@ -827,18 +827,6 @@ pub fn activatePreset(self: *App, preset: *const LayoutPreset.LayoutPreset) void
                 tab.focused_pane_id = actual_id;
             }
 
-            // Execute startup command if specified
-            if (i < tab_def.panes.len) {
-                if (tab_def.panes[i].cmd) |cmd| {
-                    if (self.pane_data.get(actual_id)) |pd| {
-                        // Write command + newline to the pane's TermIO
-                        // Shell stays interactive after command runs
-                        pd.termio.writeInput(cmd) catch {};
-                        pd.termio.writeInput("\n") catch {};
-                    }
-                }
-            }
-
             // Set agent tab flag from preset definition
             if (tab_def.agent) {
                 if (self.pane_data.get(actual_id)) |pd| {
@@ -855,7 +843,27 @@ pub fn activatePreset(self: *App, preset: *const LayoutPreset.LayoutPreset) void
     if (first_new_tab_idx) |idx| {
         self.tab_manager.switchTab(idx);
     }
+    // Resize PTYs to actual pane bounds BEFORE writing startup commands.
+    // Otherwise the spawned child (e.g. `claude`) reads the initial full-window
+    // COLS/ROWS and renders overflowing until the user triggers a manual resize.
     resizeAllPanes(self);
+
+    // Execute startup commands now that every pane PTY is sized correctly.
+    for (preset.tabs, 0..) |tab_def, tab_i| {
+        const target_idx = (first_new_tab_idx orelse 0) + tab_i;
+        if (target_idx >= self.tab_manager.tabs.items.len) break;
+        const tab = &self.tab_manager.tabs.items[target_idx];
+        const leaves = tree_ops.collectLeaves(tab.root, self.allocator) catch continue;
+        defer self.allocator.free(leaves);
+        for (leaves, 0..) |pid, i| {
+            if (i >= tab_def.panes.len) break;
+            const cmd = tab_def.panes[i].cmd orelse continue;
+            if (self.pane_data.get(pid)) |pd| {
+                pd.termio.writeInput(cmd) catch {};
+                pd.termio.writeInput("\n") catch {};
+            }
+        }
+    }
     _ = updateTabTitles(self);
     self.requestFrame();
 }
