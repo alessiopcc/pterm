@@ -253,10 +253,11 @@ pub const ConPty = struct {
             _ = CloseHandle(output_write);
         }
 
-        // Create the pseudo console
+        // Create the pseudo console. Clamp dims to >=1 — OpenConsole can divide
+        // by zero internally on a 0-dim size, corrupting the host.
         const size = COORD{
-            .X = @intCast(config.cols),
-            .Y = @intCast(config.rows),
+            .X = @intCast(@max(@as(u16, 1), config.cols)),
+            .Y = @intCast(@max(@as(u16, 1), config.rows)),
         };
 
         var hpc: HPCON = INVALID_HANDLE_VALUE;

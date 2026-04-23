@@ -97,9 +97,13 @@ pub fn framebufferSizeCallback(handle: *glfw.Window, width: c_int, height: c_int
     }
     // Suppress agent state transitions immediately — before any render thread
     // processes the resize and triggers PTY output that would flip state to working
-    var pd_iter = app.pane_data.iterator();
-    while (pd_iter.next()) |entry| {
-        entry.value_ptr.*.suppress_agent_output.store(true, .release);
+    {
+        app.pane_mutex.lock();
+        defer app.pane_mutex.unlock();
+        var pd_iter = app.pane_data.iterator();
+        while (pd_iter.next()) |entry| {
+            entry.value_ptr.*.suppress_agent_output.store(true, .release);
+        }
     }
     app.new_fb_width.store(@intCast(width), .release);
     app.new_fb_height.store(@intCast(height), .release);
@@ -125,6 +129,8 @@ pub fn focusCallback(handle: *glfw.Window, focused: glfw.Bool) callconv(.c) void
         app.cursor_visible = true;
         // Invalidate row caches to force full redraw after minimize/restore.
         // This avoids triggering pending_resize which would reflow the terminal.
+        app.pane_mutex.lock();
+        defer app.pane_mutex.unlock();
         var pd_iter = app.pane_data.iterator();
         while (pd_iter.next()) |entry| {
             entry.value_ptr.*.row_cache.invalidate();
