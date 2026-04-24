@@ -45,6 +45,16 @@ const process_monitor = @import("process_monitor");
 
 /// Dispatch a keybinding action.
 pub fn dispatchAction(self: *App, action: keybindings.Action) void {
+    // While agent focus mode is active, structural mutations that would
+    // change tabs/panes underfoot are ignored. User must exit agent mode
+    // first (Esc or the toggle hotkey).
+    if (self.tab_manager.agent_mode_active) {
+        switch (action) {
+            .close_pane, .close_tab, .new_tab, .split_horizontal, .split_vertical,
+            .break_out_pane, .zoom_pane, .rotate_split, .equalize_panes => return,
+            else => {},
+        }
+    }
     switch (action) {
         .copy => if (getFocusedPaneData(self)) |pd| pd.surface.copySelection(pd.scroll_offset),
         .paste => if (getFocusedPaneData(self)) |pd| pd.surface.pasteFromClipboard(),
