@@ -898,6 +898,15 @@ pub const App = struct {
     pub fn resizeAllPanes(self: *App) void {
         actions.resizeAllPanes(self);
     }
+    pub fn enterAgentMode(self: *App) void {
+        actions.enterAgentMode(self);
+    }
+    pub fn exitAgentMode(self: *App) void {
+        actions.exitAgentMode(self);
+    }
+    pub fn advanceAgentSource(self: *App) void {
+        actions.advanceAgentSource(self);
+    }
     pub fn updateTabTitles(self: *App) bool {
         return actions.updateTabTitles(self);
     }

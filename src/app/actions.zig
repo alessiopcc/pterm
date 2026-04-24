@@ -163,6 +163,18 @@ pub fn dispatchAction(self: *App, action: keybindings.Action) void {
                 self.requestFrame();
             }
         },
+        .agent_focus_toggle => {
+            if (self.tab_manager.agent_mode_active) {
+                exitAgentMode(self);
+            } else {
+                enterAgentMode(self);
+            }
+        },
+        .agent_focus_next => {
+            if (self.tab_manager.agent_mode_active) {
+                advanceAgentSource(self);
+            }
+        },
         // Shell switching
         .change_shell => actionOpenShellPicker(self),
         .scroll_to_top, .scroll_to_bottom => {},
@@ -261,6 +273,10 @@ pub fn actionCloseTabByIndex(self: *App, idx: usize) void {
 pub fn switchToTab(self: *App, idx: usize) void {
     // Close overlays on tab switch (Pitfall 3: prevent acting on wrong pane)
     closeShellPicker(self);
+    // Exit agent focus mode when user explicitly picks a numbered tab
+    if (self.tab_manager.agent_mode_active) {
+        exitAgentMode(self);
+    }
     self.tab_manager.switchTab(idx);
     // Clear activity on the now-active tab
     if (self.tab_manager.getActiveTab()) |tab| {
@@ -364,6 +380,15 @@ pub fn actionClosePane(self: *App) void {
 /// Close the pane with the given id (may be in any tab). If it was the last
 /// pane in its tab, close that tab too. Used to reap panes whose process has exited.
 pub fn actionClosePaneById(self: *App, pane_id: u32) void {
+    // If the agent focus source is being closed, drop the reference now.
+    // Re-pick a source on the next user advance / re-enter.
+    if (self.tab_manager.agent_source) |src| {
+        if (src.pane_id == pane_id) {
+            self.tab_manager.agent_mode_active = false;
+            self.tab_manager.agent_source = null;
+        }
+    }
+
     self.pane_mutex.lock();
     defer self.pane_mutex.unlock();
 
@@ -518,17 +543,12 @@ pub fn resizeAllPanes(self: *App) void {
     while (pd_iter.next()) |entry| {
         entry.value_ptr.*.suppressAgentOutputUntil(deadline);
     }
-    const tab = self.tab_manager.getActiveTab() orelse {
-        std.log.warn("resizeAllPanes: no active tab", .{});
-        return;
-    };
     const metrics = self.font_grid.getMetrics();
     const tab_bar_height = TabBarRenderer.computeHeight(self.chrome_cell_height);
     const status_bar_height: u32 = if (self.config.status_bar.visible)
         StatusBarRenderer.statusBarHeight(self.chrome_cell_height)
     else
         0;
-
     const content_y: i32 = @intCast(tab_bar_height);
     const total_chrome = tab_bar_height + status_bar_height;
     const content_h: u32 = if (fb.height > total_chrome) fb.height - total_chrome else 0;
@@ -538,6 +558,27 @@ pub fn resizeAllPanes(self: *App) void {
         .w = fb.width,
         .h = content_h,
     };
+    const padding = self.config.grid_padding();
+
+    // Agent focus mode: only the source pane is visible, sized to the full
+    // content rect. Skip the active-tab tree walk entirely.
+    if (self.tab_manager.agent_mode_active) {
+        if (self.tab_manager.agent_source) |src| {
+            if (self.pane_data.get(src.pane_id)) |pd| {
+                const usable_w: f32 = @as(f32, @floatFromInt(available.w)) - 2.0 * padding;
+                const usable_h: f32 = @as(f32, @floatFromInt(available.h)) - 2.0 * padding;
+                const cols: u16 = @intFromFloat(@min(500.0, @max(1.0, usable_w / metrics.cell_width)));
+                const rows: u16 = @intFromFloat(@min(500.0, @max(1.0, usable_h / metrics.cell_height)));
+                pd.termio.resize(cols, rows) catch {};
+            }
+        }
+        return;
+    }
+
+    const tab = self.tab_manager.getActiveTab() orelse {
+        std.log.warn("resizeAllPanes: no active tab", .{});
+        return;
+    };
 
     tree_ops.computeBounds(tab.root, available, metrics.cell_width, metrics.cell_height, 1);
 
@@ -545,7 +586,6 @@ pub fn resizeAllPanes(self: *App) void {
     const leaves = tree_ops.collectLeaves(tab.root, std.heap.page_allocator) catch return;
     defer std.heap.page_allocator.free(leaves);
 
-    const padding = self.config.grid_padding();
     for (leaves) |pid| {
         if (self.pane_data.get(pid)) |pd| {
             if (tree_ops.findLeaf(tab.root, pid)) |leaf_node| {
@@ -558,6 +598,120 @@ pub fn resizeAllPanes(self: *App) void {
             }
         }
     }
+}
+
+// ── Agent focus mode ─────────────────────────────────────────
+
+/// True if the pane's foreground process is in `config.agent.processes`.
+fn paneIsAgentEligible(self: *App, pd: *PaneData) bool {
+    const name = pd.process_name[0..pd.process_name_len];
+    if (name.len == 0) return false;
+    return process_monitor.nameMatchesList(name, self.config.agent.processes);
+}
+
+const Eligible = struct { tab_idx: usize, pane_id: u32, state: AgentState.State };
+
+/// Walk all tabs in (tab_idx, pane_id) order and collect eligible panes.
+/// Caller owns the returned slice (frame_arena).
+fn collectEligible(self: *App, alloc: std.mem.Allocator) []Eligible {
+    var list = std.ArrayListUnmanaged(Eligible){};
+    for (self.tab_manager.tabs.items, 0..) |*tab, ti| {
+        const leaves = tree_ops.collectLeaves(tab.root, alloc) catch continue;
+        defer alloc.free(leaves);
+        for (leaves) |pid| {
+            const pd = self.pane_data.get(pid) orelse continue;
+            if (!paneIsAgentEligible(self, pd)) continue;
+            list.append(alloc, .{
+                .tab_idx = ti,
+                .pane_id = pid,
+                .state = pd.agent_state.state.load(.acquire),
+            }) catch break;
+        }
+    }
+    return list.toOwnedSlice(alloc) catch &.{};
+}
+
+/// Pick the best eligible pane: first .waiting, else first .working, else null.
+fn pickFirstEligible(eligibles: []const Eligible) ?Eligible {
+    for (eligibles) |e| if (e.state == .waiting) return e;
+    for (eligibles) |e| if (e.state == .working) return e;
+    return null;
+}
+
+/// Pick the next eligible pane after `current`, with wrap-around. Prefers
+/// .waiting over .working in the round.
+fn pickNextEligible(eligibles: []const Eligible, current: AgentSource) ?Eligible {
+    if (eligibles.len == 0) return null;
+    var start: usize = 0;
+    for (eligibles, 0..) |e, i| {
+        if (e.tab_idx == current.tab_idx and e.pane_id == current.pane_id) {
+            start = (i + 1) % eligibles.len;
+            break;
+        }
+    }
+    // Walk forward with wrap, preferring waiting first.
+    var i: usize = 0;
+    while (i < eligibles.len) : (i += 1) {
+        const e = eligibles[(start + i) % eligibles.len];
+        if (e.state == .waiting) return e;
+    }
+    i = 0;
+    while (i < eligibles.len) : (i += 1) {
+        const e = eligibles[(start + i) % eligibles.len];
+        if (e.state == .working) return e;
+    }
+    return null;
+}
+
+const AgentSource = layout_mod.TabManager.AgentSource;
+
+/// Activate the source: switch active tab + focus, set agent_mode_active,
+/// resize the source pane to fullscreen.
+fn activateSource(self: *App, src: AgentSource) void {
+    self.tab_manager.agent_source = src;
+    self.tab_manager.agent_mode_active = true;
+    self.tab_manager.switchTab(src.tab_idx);
+    if (self.tab_manager.getActiveTab()) |t| {
+        t.focused_pane_id = src.pane_id;
+    }
+    resizeAllPanes(self);
+    self.requestFrame();
+}
+
+/// Enter agent focus mode. Picks the first eligible pane (waiting > working).
+/// No-op if no agent process is running anywhere.
+pub fn enterAgentMode(self: *App) void {
+    self.pane_mutex.lock();
+    defer self.pane_mutex.unlock();
+    if (self.tab_manager.agent_mode_active) return;
+
+    const arena = self.frame_arena.allocator();
+    const eligibles = collectEligible(self, arena);
+    const pick = pickFirstEligible(eligibles) orelse return;
+    activateSource(self, .{ .tab_idx = pick.tab_idx, .pane_id = pick.pane_id });
+}
+
+/// Advance to the next eligible pane. No-op if not in agent mode or no other
+/// eligible pane exists.
+pub fn advanceAgentSource(self: *App) void {
+    self.pane_mutex.lock();
+    defer self.pane_mutex.unlock();
+    if (!self.tab_manager.agent_mode_active) return;
+    const current = self.tab_manager.agent_source orelse return;
+    const arena = self.frame_arena.allocator();
+    const eligibles = collectEligible(self, arena);
+    const pick = pickNextEligible(eligibles, current) orelse return;
+    if (pick.tab_idx == current.tab_idx and pick.pane_id == current.pane_id) return;
+    activateSource(self, .{ .tab_idx = pick.tab_idx, .pane_id = pick.pane_id });
+}
+
+/// Exit agent focus mode. Resizes the (now-active) tab's panes back to tiled.
+pub fn exitAgentMode(self: *App) void {
+    if (!self.tab_manager.agent_mode_active) return;
+    self.tab_manager.agent_mode_active = false;
+    self.tab_manager.agent_source = null;
+    resizeAllPanes(self);
+    self.requestFrame();
 }
 
 /// Update tab titles from focused pane CWD and process name.

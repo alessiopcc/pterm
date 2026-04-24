@@ -30,10 +30,14 @@ tools like Claude Code are waiting for input.
   with keyboard shortcuts. No external multiplexer needed.
 - **Layout presets** -- Define named multi-tab, multi-pane layouts in your config
   and load them with a picker or `--layout <name>`.
-- **Agent monitoring** -- Scans terminal output for prompt patterns from Claude
-  Code, Copilot CLI, Aider, and others. Sends desktop notifications when an
-  agent is waiting. Configurable presets (`conservative` / `broad`) and custom
-  patterns.
+- **Agent monitoring** -- Process-based detection: when the foreground process
+  inside a pane matches the configured list (`claude`, `codex`, `opencode` by
+  default), the pane is tracked as an agent. Recent PTY output = `working`;
+  quiet + agent process = `waiting` (desktop notification fires).
+- **Agent focus mode** -- `Ctrl+Alt+A` (or the `A` square at the leading edge
+  of the tab bar) takes over the window with the first waiting agent pane at
+  full size. `Ctrl+Alt+N` advances to the next waiting pane. `Esc` restores
+  the tiled layout.
 - **HarfBuzz text shaping** -- Ligatures, kerning, and font fallback chains.
   FreeType on Linux/Windows, CoreText on macOS.
 - **8 built-in color themes** -- default, dracula, solarized-dark,
@@ -202,7 +206,9 @@ reserved and cannot be overridden.
 | Scroll page up/down | `Shift+PageUp/PageDown` |
 | Scroll to top/bottom | `Ctrl+Shift+Home/End` |
 | Layout picker | `Ctrl+Shift+L` |
-| Toggle agent tab | `Ctrl+Shift+A` |
+| Toggle agent tab marker | `Ctrl+Shift+A` |
+| Agent focus mode toggle | `Ctrl+Alt+A` |
+| Agent focus next waiting | `Ctrl+Alt+N` |
 | Change shell | `Ctrl+Shift+S` |
 | Font size +/−/reset | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` |
 | Copy / Paste | `Ctrl+C` / `Ctrl+V` |

@@ -13,10 +13,22 @@ pub const CloseResult = enum {
     last_tab_closed,
 };
 
+/// Source pane currently displayed by the agent focus mode.
+pub const AgentSource = struct {
+    tab_idx: usize,
+    pane_id: u32,
+};
+
 pub const TabManager = struct {
     tabs: std.ArrayListUnmanaged(Tab),
     active_idx: usize,
     allocator: std.mem.Allocator,
+
+    /// Agent focus mode: when true, render only `agent_source`'s pane at full
+    /// window size. Toggled by user (hotkey or `A` chrome button); never
+    /// auto-activated. Source pane advances on user request only.
+    agent_mode_active: bool = false,
+    agent_source: ?AgentSource = null,
 
     pub fn init(allocator: std.mem.Allocator) TabManager {
         return .{

@@ -44,6 +44,9 @@ pub const TabBarConfig = struct {
     /// Per-tab agent tab flags (any pane in tab has is_agent_tab).
     /// null means no agent tab info available (skip rendering).
     tab_is_agent: ?[]const bool = null,
+
+    /// True when agent focus mode is active — highlight the leading "A" square.
+    agent_mode_active: bool = false,
 };
 
 // Control button colors
@@ -197,10 +200,27 @@ pub const TabBarRenderer = struct {
         const tab_count = tab_manager.tabCount();
         if (tab_count == 0) return;
 
+        // ── Agent focus square (leading edge, before tab 1) ──
+        const agent_btn_w: u32 = tab_h; // square
+        const agent_btn_w_i: i32 = @intCast(agent_btn_w);
+        {
+            const bg = if (config.agent_mode_active) config.agent_alert else config.tab_inactive;
+            draw_rect_fn(.{ .x = 0, .y = tab_y, .w = agent_btn_w, .h = tab_h }, bg, draw_ctx);
+            // Centered "A" glyph
+            const ch_int: i32 = @intFromFloat(config.cell_height * config.text_scale);
+            const cw_int: i32 = @intFromFloat(config.cell_width * config.text_scale);
+            const ax: i32 = @divFloor(agent_btn_w_i - cw_int, 2);
+            const ay: i32 = tab_y + @divFloor(@as(i32, @intCast(tab_h)) - ch_int, 2);
+            const fg = if (config.agent_mode_active) config.tab_bar_bg else config.fg_color;
+            draw_text_fn("A", ax, ay, fg, draw_ctx);
+        }
+
         // ── Compute tab widths ───────────────────────────
         // Tabs fill available space equally, no max cap — only shrink when crowded
         const new_tab_button_w: u32 = @intFromFloat(config.cell_width * 3.0);
-        const available_w: u32 = if (window_width > new_tab_button_w) window_width - new_tab_button_w else window_width;
+        const tabs_origin_x: i32 = agent_btn_w_i;
+        const reserved: u32 = new_tab_button_w + agent_btn_w;
+        const available_w: u32 = if (window_width > reserved) window_width - reserved else 0;
         const tab_w: u32 = if (tab_count > 0) available_w / @as(u32, @intCast(tab_count)) else available_w;
 
         // Vertically center scaled text in tab bar
@@ -210,7 +230,7 @@ pub const TabBarRenderer = struct {
 
         // ── Render each tab ──────────────────────────────
         for (tab_manager.tabs.items, 0..) |tab, idx| {
-            const tab_x: i32 = @intCast(@as(u32, @intCast(idx)) * tab_w);
+            const tab_x: i32 = tabs_origin_x + @as(i32, @intCast(@as(u32, @intCast(idx)) * tab_w));
             const is_active = idx == tab_manager.active_idx;
 
             const tab_bg_color = if (is_active) config.tab_active else config.tab_inactive;
@@ -307,7 +327,7 @@ pub const TabBarRenderer = struct {
         // "+" new tab button — blue geometric plus
         {
             const color_plus: ColorU32 = 0x5899F0FF; // soft blue
-            const plus_btn_x: i32 = @intCast(@as(u32, @intCast(tab_count)) * tab_w);
+            const plus_btn_x: i32 = tabs_origin_x + @as(i32, @intCast(@as(u32, @intCast(tab_count)) * tab_w));
             const plus_cx = plus_btn_x + @divFloor(@as(i32, @intCast(new_tab_button_w)), 2);
             const plus_cy = tab_y + @divFloor(@as(i32, @intCast(tab_h)), 2);
             const arm: u32 = @intFromFloat(config.cell_height * 0.25);
@@ -326,6 +346,7 @@ pub const TabBarRenderer = struct {
         tab: usize,
         close_tab: usize,
         new_tab: void,
+        agent_button: void,
         window_minimize: void,
         window_maximize: void,
         window_close: void,
@@ -357,22 +378,29 @@ pub const TabBarRenderer = struct {
         // ── Tab bar region ───────────────────────────────
         if (y >= total_h) return .{ .none = {} };
 
+        // Leading agent-focus square
+        const agent_btn_w_i: i32 = @intCast(tabBarHeight(cell_height));
+        if (x >= 0 and x < agent_btn_w_i) return .{ .agent_button = {} };
+
         if (tab_count == 0) return .{ .drag_region = {} };
 
         const new_tab_button_w: u32 = @intFromFloat(cell_width * 3.0);
-        const available_w: u32 = if (window_width > new_tab_button_w) window_width - new_tab_button_w else window_width;
+        const reserved: u32 = new_tab_button_w + @as(u32, @intCast(agent_btn_w_i));
+        const available_w: u32 = if (window_width > reserved) window_width - reserved else 0;
         const tab_w: u32 = if (tab_count > 0) available_w / @as(u32, @intCast(tab_count)) else available_w;
-        const total_tabs_w: i32 = @intCast(@as(u32, @intCast(tab_count)) * tab_w);
+        const tabs_origin_x: i32 = agent_btn_w_i;
+        const total_tabs_w: i32 = tabs_origin_x + @as(i32, @intCast(@as(u32, @intCast(tab_count)) * tab_w));
         const cell_w_int: i32 = @intFromFloat(cell_width);
 
         if (x >= total_tabs_w and x < total_tabs_w + @as(i32, @intCast(new_tab_button_w))) {
             return .{ .new_tab = {} };
         }
 
-        if (x >= 0 and x < total_tabs_w) {
-            const tab_idx: usize = @intCast(@divFloor(x, @as(i32, @intCast(tab_w))));
+        if (x >= tabs_origin_x and x < total_tabs_w and tab_w > 0) {
+            const rel_x: i32 = x - tabs_origin_x;
+            const tab_idx: usize = @intCast(@divFloor(rel_x, @as(i32, @intCast(tab_w))));
             if (tab_idx < tab_count) {
-                const tab_right: i32 = @intCast(@as(u32, @intCast(tab_idx + 1)) * tab_w);
+                const tab_right: i32 = tabs_origin_x + @as(i32, @intCast(@as(u32, @intCast(tab_idx + 1)) * tab_w));
                 if (x >= tab_right - cell_w_int * 2) {
                     return .{ .close_tab = tab_idx };
                 }

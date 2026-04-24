@@ -28,6 +28,13 @@ pub fn handleKeyInput(self: *App, key: glfw.Key, action: glfw.Action, mods: glfw
 
     self.last_mods = utils.glfwModsToModifiers(mods);
 
+    // Esc exits agent focus mode (and consumes the key so the source pane
+    // doesn't also receive it).
+    if (key == .escape and action == .press and self.tab_manager.agent_mode_active) {
+        self.exitAgentMode();
+        return;
+    }
+
     // Clear text selection on any keypress except clipboard keys (Esc or typing deselects)
     if (self.getFocusedPaneData()) |pd| {
         if (pd.surface.selection.range != null) {
@@ -285,6 +292,13 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
             },
             .new_tab => {
                 self.actionNewTab();
+            },
+            .agent_button => {
+                if (self.tab_manager.agent_mode_active) {
+                    self.exitAgentMode();
+                } else {
+                    self.enterAgentMode();
+                }
             },
             .window_minimize => self.window.iconify(),
             .window_maximize => self.window.toggleMaximize(),

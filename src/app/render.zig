@@ -244,6 +244,24 @@ pub fn renderThreadMain(self: *App) void {
                 }
             }
 
+            // Poll foreground process and update agent state for ALL panes,
+            // not just the active tab's. Background agents still transition
+            // working→waiting so the agent focus picker and tab badges see
+            // accurate state.
+            {
+                self.pane_mutex.lock();
+                defer self.pane_mutex.unlock();
+                const now_ns = std.time.nanoTimestamp();
+                var pit = self.pane_data.iterator();
+                while (pit.next()) |pe| {
+                    const pd = pe.value_ptr.*;
+                    pollForegroundProcess(self, pd);
+                    if (self.config.agent.enabled and !pd.isAgentOutputSuppressed(now_ns)) {
+                        updateAgentStateFromProcess(self, pd);
+                    }
+                }
+            }
+
             // Build per-tab bell badge and agent badge flags for TabBarRenderer
             var bell_badges_buf: [64]bool = [_]bool{false} ** 64;
             var agent_badges_buf: [64]bool = [_]bool{false} ** 64;
@@ -291,6 +309,7 @@ pub fn renderThreadMain(self: *App) void {
                     .tab_bell_badges = bell_badges_buf[0..badge_count],
                     .tab_agent_badges = agent_badges_buf[0..badge_count],
                     .tab_is_agent = agent_tab_buf[0..badge_count],
+                    .agent_mode_active = self.tab_manager.agent_mode_active,
                 },
                 fb.width,
                 drawFilledRectCallback,
@@ -324,10 +343,20 @@ pub fn renderThreadMain(self: *App) void {
                     .h = content_h,
                 }, self.renderer_palette.default_bg);
 
-                tree_ops.computeBounds(active_tab.root, available, metrics.cell_width, metrics.cell_height, 1);
-
-                // Render each pane (single tree walk, no re-lookup per leaf)
-                const leaf_infos = tree_ops.collectLeafInfos(active_tab.root, self.frame_arena.allocator()) catch &.{};
+                // Agent focus mode: render only the source pane at full content rect.
+                // Build a synthetic single-leaf list with overridden bounds so the
+                // existing per-pane render code doesn't change.
+                const agent_active = self.tab_manager.agent_mode_active;
+                var agent_leaf_buf: [1]tree_ops.LeafBounds = undefined;
+                const leaf_infos: []const tree_ops.LeafBounds = if (agent_active) blk: {
+                    const src = self.tab_manager.agent_source orelse break :blk &.{};
+                    if (self.pane_data.get(src.pane_id) == null) break :blk &.{};
+                    agent_leaf_buf[0] = .{ .pane_id = src.pane_id, .bounds = available };
+                    break :blk agent_leaf_buf[0..1];
+                } else lbl: {
+                    tree_ops.computeBounds(active_tab.root, available, metrics.cell_width, metrics.cell_height, 1);
+                    break :lbl tree_ops.collectLeafInfos(active_tab.root, self.frame_arena.allocator()) catch &.{};
+                };
 
                 self.pane_mutex.lock();
                 for (leaf_infos) |info| {
@@ -346,14 +375,6 @@ pub fn renderThreadMain(self: *App) void {
                                 } else {
                                     self.requestFrame(); // keep rendering until debounce fires
                                 }
-                            }
-
-                            // Always poll the foreground process (for title + debug
-                            // log). State-machine transitions are gated on
-                            // agent.enabled and suppress_agent_output.
-                            pollForegroundProcess(self, pd);
-                            if (self.config.agent.enabled and !pd.isAgentOutputSuppressed(std.time.nanoTimestamp())) {
-                                updateAgentStateFromProcess(self, pd);
                             }
 
                             // Snapshot under mutex
@@ -380,8 +401,10 @@ pub fn renderThreadMain(self: *App) void {
                                 &pd.row_cache,
                             ) catch continue;
 
-                            // Cursor visibility — hide when scrolled into history
-                            const is_focused = info.pane_id == active_tab.focused_pane_id;
+                            // Cursor visibility — hide when scrolled into history.
+                            // In agent focus mode the source pane is always treated
+                            // as focused (it's the only thing on screen).
+                            const is_focused = agent_active or info.pane_id == active_tab.focused_pane_id;
                             const blink_vis = if (self.config.cursor.blink) self.cursor_visible else true;
                             rs.cursor.visible = snap.cursor_visible and blink_vis and self.focused and is_focused and pd.scroll_offset == 0;
                             // Apply configured cursor style
@@ -571,9 +594,12 @@ pub fn renderThreadMain(self: *App) void {
                         }
                     }
                 }
-                // Render pane borders (after all panes, full viewport, no scissor)
+                // Render pane borders (after all panes, full viewport, no scissor).
+                // Skip in agent focus mode — only one pane visible.
                 backend.setFullViewport();
-                renderPaneBorders(active_tab.root, active_tab.focused_pane_id, &backend, &self.renderer_palette, &self.pane_data);
+                if (!agent_active) {
+                    renderPaneBorders(active_tab.root, active_tab.focused_pane_id, &backend, &self.renderer_palette, &self.pane_data);
+                }
                 self.pane_mutex.unlock();
 
                 // Re-draw tab bar bottom separator on top of pane content

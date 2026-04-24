@@ -558,6 +558,8 @@ pub const Surface = struct {
             .scroll_to_top, .scroll_to_bottom => {},
             .search => {},
             .toggle_agent_tab => {}, // handled in App.dispatchAction
+            .agent_focus_toggle => {}, // handled in App.dispatchAction
+            .agent_focus_next => {}, // handled in App.dispatchAction
             .change_shell => {}, // handled in App.dispatchAction
             .none => {},
         }
