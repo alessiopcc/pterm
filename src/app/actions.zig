@@ -50,8 +50,7 @@ pub fn dispatchAction(self: *App, action: keybindings.Action) void {
     // first (Esc or the toggle hotkey).
     if (self.tab_manager.agent_mode_active) {
         switch (action) {
-            .close_pane, .close_tab, .new_tab, .split_horizontal, .split_vertical,
-            .break_out_pane, .zoom_pane, .rotate_split, .equalize_panes => return,
+            .close_pane, .close_tab, .new_tab, .split_horizontal, .split_vertical, .break_out_pane, .zoom_pane, .rotate_split, .equalize_panes => return,
             else => {},
         }
     }

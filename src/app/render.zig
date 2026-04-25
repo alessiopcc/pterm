@@ -58,7 +58,6 @@ pub fn pollForegroundProcess(self: *App, pd: *PaneData) void {
             pd.process_name_len = @intCast(n);
         }
     }
-
 }
 
 /// Per-pane state derivation. Call AFTER pollForegroundProcess.
@@ -1140,4 +1139,3 @@ pub fn processAgentFlashForPane(self: *App, pd: *PaneData, bounds: RendererRect,
         self.requestFrame();
     }
 }
-
