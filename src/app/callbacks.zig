@@ -48,8 +48,7 @@ fn sendMouseEvent(pd: *PaneData, event: mouse.MouseEvent) void {
 /// Returns null if outside pane or metrics are zero.
 fn pixelToCell(app: *App, fb_x: i32, fb_y: i32) ?struct { col: u16, row: u16 } {
     const active_tab = app.tab_manager.getActiveTab() orelse return null;
-    const leaf_node = tree_ops.findLeaf(active_tab.root, active_tab.focused_pane_id) orelse return null;
-    const bounds = leaf_node.leaf.bounds;
+    const bounds = app.getEffectivePaneBounds(active_tab.focused_pane_id) orelse return null;
     if (!bounds.contains(fb_x, fb_y)) return null;
     const m = app.font_grid.getMetrics();
     const cw: u32 = @intFromFloat(m.cell_width);

@@ -970,6 +970,34 @@ pub const App = struct {
         return self.pane_data.get(tab.focused_pane_id);
     }
 
+    /// Full content rect (window minus tab bar minus status bar). Used by the
+    /// agent focus mode to size and hit-test the source pane fullscreen.
+    pub fn contentRect(self: *App) Rect {
+        const fb = self.window.getFramebufferSize();
+        const tab_bar_h = TabBarRenderer.computeHeight(self.chrome_cell_height);
+        const sb_h: u32 = if (self.config.status_bar.visible)
+            @import("status_bar_renderer").StatusBarRenderer.statusBarHeight(self.chrome_cell_height)
+        else
+            0;
+        const chrome = tab_bar_h + sb_h;
+        const h: u32 = if (fb.height > chrome) fb.height - chrome else 0;
+        return .{ .x = 0, .y = @intCast(tab_bar_h), .w = fb.width, .h = h };
+    }
+
+    /// Effective on-screen bounds for a pane. In agent focus mode, the source
+    /// pane occupies the full content rect; all other panes are invisible
+    /// (returns null). In normal mode, returns the leaf's tiled bounds.
+    pub fn getEffectivePaneBounds(self: *App, pane_id: u32) ?Rect {
+        if (self.tab_manager.agent_mode_active) {
+            const src = self.tab_manager.agent_source orelse return null;
+            if (src.pane_id != pane_id) return null;
+            return self.contentRect();
+        }
+        const tab = self.tab_manager.getActiveTab() orelse return null;
+        const leaf = tree_ops.findLeaf(tab.root, pane_id) orelse return null;
+        return leaf.leaf.bounds;
+    }
+
     fn renderThreadMain(self: *App) void {
         render.renderThreadMain(self);
     }

@@ -367,17 +367,19 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
 
     // Pane bounds are in framebuffer space (fb_x/fb_y already computed above)
 
-    // Check pane border grab zone (within 4px of border)
+    // Check pane border grab zone (within 4px of border).
+    // Skip in agent focus mode — there are no visible borders.
     const active_tab = self.tab_manager.getActiveTab() orelse return;
-    if (findBorderAtPoint(active_tab.root, fb_x, fb_y)) |border_info| {
-        self.border_drag_active = true;
-        self.border_drag_branch = border_info.branch;
-        self.border_drag_is_vertical = border_info.is_vertical;
-        self.border_drag_start_pos = if (border_info.is_vertical) pos[0] else pos[1];
-        self.border_drag_start_ratio = border_info.branch.branch.ratio;
-        return;
+    if (!self.tab_manager.agent_mode_active) {
+        if (findBorderAtPoint(active_tab.root, fb_x, fb_y)) |border_info| {
+            self.border_drag_active = true;
+            self.border_drag_branch = border_info.branch;
+            self.border_drag_is_vertical = border_info.is_vertical;
+            self.border_drag_start_pos = if (border_info.is_vertical) pos[0] else pos[1];
+            self.border_drag_start_ratio = border_info.branch.branch.ratio;
+            return;
+        }
     }
-
     // Ctrl+Click (Cmd+Click macOS) opens hovered URL
     // Only when url.enabled=true
     if (self.config.url.enabled) {
@@ -427,13 +429,37 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
         }
     }
 
-    // Check pane area: focus the clicked pane
-    const leaves = tree_ops.collectLeaves(active_tab.root, std.heap.page_allocator) catch return;
-    defer std.heap.page_allocator.free(leaves);
+    // Check pane area: focus the clicked pane.
+    // In agent focus mode the only visible pane is the source, mapped to the
+    // full content rect — synthesize a one-entry hit list instead of walking
+    // the active tab's tiled leaves (which point at invisible bounds).
+    const HitEntry = struct { pane_id: u32, bounds: Rect };
+    var agent_hit_buf: [1]HitEntry = undefined;
+    var hit_entries_buf: []HitEntry = &.{};
+    var hit_entries_owned = false;
+    if (self.tab_manager.agent_mode_active) {
+        if (self.tab_manager.agent_source) |src| {
+            agent_hit_buf[0] = .{ .pane_id = src.pane_id, .bounds = self.contentRect() };
+            hit_entries_buf = agent_hit_buf[0..1];
+        }
+    } else {
+        const leaves_arr = tree_ops.collectLeaves(active_tab.root, std.heap.page_allocator) catch return;
+        defer std.heap.page_allocator.free(leaves_arr);
+        const buf = std.heap.page_allocator.alloc(HitEntry, leaves_arr.len) catch return;
+        for (leaves_arr, 0..) |pid, i| {
+            const lb = if (tree_ops.findLeaf(active_tab.root, pid)) |ln| ln.leaf.bounds else Rect{ .x = 0, .y = 0, .w = 0, .h = 0 };
+            buf[i] = .{ .pane_id = pid, .bounds = lb };
+        }
+        hit_entries_buf = buf;
+        hit_entries_owned = true;
+    }
+    defer if (hit_entries_owned) std.heap.page_allocator.free(hit_entries_buf);
 
-    for (leaves) |pane_id| {
-        if (tree_ops.findLeaf(active_tab.root, pane_id)) |leaf_node| {
-            if (leaf_node.leaf.bounds.contains(fb_x, fb_y)) {
+    for (hit_entries_buf) |entry| {
+        const pane_id = entry.pane_id;
+        const eff_bounds = entry.bounds;
+        if (eff_bounds.contains(fb_x, fb_y)) {
+            {
                 active_tab.focused_pane_id = pane_id;
 
                 // Start text selection at click position
@@ -443,7 +469,7 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
                     const cw: u32 = @intFromFloat(m.cell_width);
                     const ch: u32 = @intFromFloat(m.cell_height);
                     if (cw > 0 and ch > 0) {
-                        const bounds = leaf_node.leaf.bounds;
+                        const bounds = eff_bounds;
                         const pad: i32 = @intFromFloat(self.config.grid_padding());
                         const rel_x = fb_x - bounds.x - pad;
                         const rel_y = fb_y - bounds.y - pad;
@@ -569,13 +595,12 @@ pub fn extendTextSelectionAtCursor(self: *App, xpos: f64, ypos: f64) void {
     if (!self.text_select_active) return;
     const pid = self.text_select_pane_id orelse return;
     const pd = self.pane_data.get(pid) orelse return;
-    const active_tab = self.tab_manager.getActiveTab() orelse return;
-    const leaf_node = tree_ops.findLeaf(active_tab.root, pid) orelse return;
+    _ = self.tab_manager.getActiveTab() orelse return;
     const m = self.font_grid.getMetrics();
     const cw: u32 = @intFromFloat(m.cell_width);
     const ch: u32 = @intFromFloat(m.cell_height);
     if (cw == 0 or ch == 0) return;
-    const bounds = leaf_node.leaf.bounds;
+    const bounds = self.getEffectivePaneBounds(pid) orelse return;
     const pad: i32 = @intFromFloat(self.config.grid_padding());
     const rel_x = @as(i32, @intFromFloat(xpos)) - bounds.x - pad;
     const rel_y = @as(i32, @intFromFloat(ypos)) - bounds.y - pad;
@@ -729,9 +754,14 @@ pub fn handleCursorPos(self: *App, xpos: f64, ypos: f64) void {
         return;
     }
 
-    // Pane border cursor shape (pane bounds are in framebuffer space)
+    // Pane border cursor shape (pane bounds are in framebuffer space).
+    // Skip in agent focus mode — there are no visible borders.
     const active_tab = self.tab_manager.getActiveTab() orelse return;
-    if (findBorderAtPoint(active_tab.root, fb_x, fb_y)) |border_info| {
+    const border_hit = if (self.tab_manager.agent_mode_active)
+        @as(?BorderHit, null)
+    else
+        findBorderAtPoint(active_tab.root, fb_x, fb_y);
+    if (border_hit) |border_info| {
         const shape: glfw.Cursor.Shape = if (border_info.is_vertical) .resize_ew else .resize_ns;
         if (glfw.Cursor.createStandard(shape)) |cursor| {
             self.window.handle.setCursor(cursor);
@@ -744,8 +774,7 @@ pub fn handleCursorPos(self: *App, xpos: f64, ypos: f64) void {
                 const cur_m = self.font_grid.getMetrics();
                 const active_t = self.tab_manager.getActiveTab();
                 if (active_t) |at| {
-                    if (tree_ops.findLeaf(at.root, at.focused_pane_id)) |leaf| {
-                        const bounds = leaf.leaf.bounds;
+                    if (self.getEffectivePaneBounds(at.focused_pane_id)) |bounds| {
                         const url_pad: i32 = @intFromFloat(self.config.grid_padding());
                         const rel_x = fb_x - bounds.x - url_pad;
                         const rel_y = fb_y - bounds.y - url_pad;
