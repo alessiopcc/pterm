@@ -41,8 +41,8 @@ const glfw = @import("zglfw");
 /// it once per second. Always safe to call; independent of agent.enabled and
 /// suppress_agent_output so diagnostics keep flowing during resize.
 pub fn pollForegroundProcess(self: *App, pd: *PaneData) void {
-    const now = std.time.nanoTimestamp();
-    const poll_interval_ns: i128 = @as(i128, self.config.agent.poll_interval_ms) * 1_000_000;
+    const now: i64 = @intCast(std.time.nanoTimestamp());
+    const poll_interval_ns: i64 = @as(i64, self.config.agent.poll_interval_ms) * 1_000_000;
 
     if (pd.last_process_poll_ns == 0 or (now - pd.last_process_poll_ns) >= poll_interval_ns) {
         pd.last_process_poll_ns = now;
@@ -62,8 +62,8 @@ pub fn pollForegroundProcess(self: *App, pd: *PaneData) void {
 
 /// Per-pane state derivation. Call AFTER pollForegroundProcess.
 pub fn updateAgentStateFromProcess(self: *App, pd: *PaneData) void {
-    const now = std.time.nanoTimestamp();
-    const quiet_threshold_ns: i128 = @as(i128, self.config.agent.quiet_threshold_ms) * 1_000_000;
+    const now: i64 = @intCast(std.time.nanoTimestamp());
+    const quiet_threshold_ns: i64 = @as(i64, self.config.agent.quiet_threshold_ms) * 1_000_000;
 
     const last_output = pd.last_output_ns.load(.acquire);
     const recent_output = last_output > 0 and (now - last_output) < quiet_threshold_ns;
@@ -250,7 +250,7 @@ pub fn renderThreadMain(self: *App) void {
             {
                 self.pane_mutex.lock();
                 defer self.pane_mutex.unlock();
-                const now_ns = std.time.nanoTimestamp();
+                const now_ns: i64 = @intCast(std.time.nanoTimestamp());
                 var pit = self.pane_data.iterator();
                 while (pit.next()) |pe| {
                     const pd = pe.value_ptr.*;

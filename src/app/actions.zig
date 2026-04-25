@@ -547,7 +547,7 @@ pub fn resizeAllPanes(self: *App) void {
     self.suppress_activity_frames.store(30, .release);
     for (self.tab_manager.tabs.items) |*t| t.has_activity = false;
     // Suppress agent state transitions on ALL panes during resize
-    const deadline = std.time.nanoTimestamp() + app_mod.SUPPRESS_DURATION_NS;
+    const deadline: i64 = @as(i64, @intCast(std.time.nanoTimestamp())) + app_mod.SUPPRESS_DURATION_NS;
     var pd_iter = self.pane_data.iterator();
     while (pd_iter.next()) |entry| {
         entry.value_ptr.*.suppressAgentOutputUntil(deadline);
@@ -932,9 +932,9 @@ pub fn respawnShell(self: *App, pd: *PaneData, shell_name: []const u8) !void {
     pd.url_state = .{};
     pd.bell_state = .{};
     pd.agent_state = .{};
-    pd.last_output_ns = std.atomic.Value(i128).init(0);
+    pd.last_output_ns = std.atomic.Value(i64).init(0);
     pd.last_process_poll_ns = 0;
-    pd.suppress_until_ns = std.atomic.Value(i128).init(0);
+    pd.suppress_until_ns = std.atomic.Value(i64).init(0);
 
     // Wire screen change callback (triggers frame request on terminal output)
     pd.termio.terminal.observer.onScreenChange = &callbacks.screenChangeCallback;

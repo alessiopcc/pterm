@@ -99,7 +99,7 @@ pub fn framebufferSizeCallback(handle: *glfw.Window, width: c_int, height: c_int
     {
         app.pane_mutex.lock();
         defer app.pane_mutex.unlock();
-        const deadline = std.time.nanoTimestamp() + app_mod.SUPPRESS_DURATION_NS;
+        const deadline: i64 = @as(i64, @intCast(std.time.nanoTimestamp())) + app_mod.SUPPRESS_DURATION_NS;
         var pd_iter = app.pane_data.iterator();
         while (pd_iter.next()) |entry| {
             entry.value_ptr.*.suppressAgentOutputUntil(deadline);
@@ -277,7 +277,7 @@ pub fn bellCallback(ctx: ?*anyopaque) void {
 pub fn agentOutputCallback(ctx: ?*anyopaque) void {
     if (ctx) |c| {
         const pd: *PaneData = @ptrCast(@alignCast(c));
-        const now = std.time.nanoTimestamp();
+        const now: i64 = @intCast(std.time.nanoTimestamp());
         pd.last_output_ns.store(now, .release);
         if (pd.isAgentOutputSuppressed(now)) return;
         pd.agent_state.onOutput();

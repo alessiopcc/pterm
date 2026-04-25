@@ -131,10 +131,12 @@ pub const PaneData = struct {
     /// Wall-clock timestamp (ns) of the most recent raw output event.
     /// Used to classify the pane as "working" (recent output) vs quiet.
     /// Written by the parser/reader thread, read by the render thread.
-    last_output_ns: std.atomic.Value(i128) = std.atomic.Value(i128).init(0),
+    /// i64 (not i128) — atomic ops on i128 hit a Zig 0.15.2 backend bug on
+    /// x86_64-linux Debug. i64 nanoseconds gives ~292 years of range.
+    last_output_ns: std.atomic.Value(i64) = std.atomic.Value(i64).init(0),
 
     /// Render-thread only: timestamp of last foreground-process poll.
-    last_process_poll_ns: i128 = 0,
+    last_process_poll_ns: i64 = 0,
 
     /// Suppress agent state transitions during resize (PTY redraws cause
     /// false positives). Time-based: resize sets `suppress_until_ns = now +
@@ -142,23 +144,23 @@ pub const PaneData = struct {
     /// Using a deadline (vs "500ms of PTY silence") means animated TUIs
     /// like claude, whose spinners keep the PTY busy, still un-suppress on
     /// schedule.
-    suppress_until_ns: std.atomic.Value(i128) = std.atomic.Value(i128).init(0),
+    suppress_until_ns: std.atomic.Value(i64) = std.atomic.Value(i64).init(0),
 
     /// Scrollback viewport offset: 0 = live (bottom), >0 = scrolled up N lines into history.
     scroll_offset: u32 = 0,
 
-    pub fn isAgentOutputSuppressed(self: *const PaneData, now_ns: i128) bool {
+    pub fn isAgentOutputSuppressed(self: *const PaneData, now_ns: i64) bool {
         return now_ns < self.suppress_until_ns.load(.acquire);
     }
 
-    pub fn suppressAgentOutputUntil(self: *PaneData, deadline_ns: i128) void {
+    pub fn suppressAgentOutputUntil(self: *PaneData, deadline_ns: i64) void {
         self.suppress_until_ns.store(deadline_ns, .release);
     }
 };
 
 /// Resize-suppression window: agent state transitions are blocked this long
 /// after a resize so PTY redraws don't flip the state to waiting spuriously.
-pub const SUPPRESS_DURATION_NS: i128 = 1_000_000_000; // 1 second
+pub const SUPPRESS_DURATION_NS: i64 = 1_000_000_000; // 1 second
 
 // Static state vars are in callbacks.zig (callbacks.g_reload_app, callbacks.g_screen_change_app).
 
