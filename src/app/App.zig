@@ -219,6 +219,7 @@ pub const App = struct {
 
     // Wall-clock timer for periodic tab title updates
     last_title_update: i64,
+    last_agent_poll_tick: i64 = 0,
 
     // Cursor blink state (global, applies to focused pane)
     cursor_blink_timer: i128,
@@ -815,6 +816,18 @@ pub const App = struct {
             if (now_ms - self.last_title_update >= interval_ms) {
                 self.last_title_update = now_ms;
                 if (self.updateTabTitles()) {
+                    self.requestFrame();
+                }
+            }
+
+            // Periodic frame request so the render thread re-polls foreground
+            // process names even when nothing else is happening. Without this
+            // a pane that becomes an agent while idle stays stuck in `idle`
+            // until the user types or output arrives.
+            if (self.config.agent.enabled) {
+                const agent_poll_ms = @max(100, self.config.agent.poll_interval_ms);
+                if (now_ms - self.last_agent_poll_tick >= agent_poll_ms) {
+                    self.last_agent_poll_tick = now_ms;
                     self.requestFrame();
                 }
             }
