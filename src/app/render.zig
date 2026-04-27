@@ -78,15 +78,23 @@ pub fn updateAgentStateFromProcess(self: *App, pd: *PaneData) void {
     }
 
     // Quiet: decide waiting vs idle based on foreground-process name.
+    //   - matches an agent rule         -> waiting
+    //   - shell only (no nested process) -> idle
+    //   - some other process running    -> stay working (a process is live;
+    //     "idle" implies no work, which is wrong while e.g. a build runs)
     const name = pd.process_name[0..pd.process_name_len];
     const is_agent = process_monitor.nameMatchesList(name, self.config.agent.processes);
+    const is_shell = name.len == 0 or actions.isShellName(name);
 
     if (is_agent) {
         if (current != .waiting) pd.agent_state.triggerWaiting();
         self.requestFrame(); // drive the pulse animation
-    } else {
+    } else if (is_shell) {
         if (current != .idle) pd.agent_state.markIdle();
         // Idle: no frame request. Next output or user input will wake us.
+    } else {
+        if (current != .working) pd.agent_state.onOutput();
+        // Don't request a frame -- the process is quiet, just not "idle".
     }
 }
 

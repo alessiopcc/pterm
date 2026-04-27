@@ -735,7 +735,7 @@ const KNOWN_SHELLS = [_][]const u8{
     "xonsh", "elvish",     "nush",
 };
 
-fn isShellName(name: []const u8) bool {
+pub fn isShellName(name: []const u8) bool {
     // Strip trailing ".exe" so Windows process names match the table.
     var n = name;
     if (n.len > 4 and std.ascii.eqlIgnoreCase(n[n.len - 4 ..], ".exe")) {
