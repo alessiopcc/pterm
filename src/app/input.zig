@@ -376,11 +376,25 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
         return;
     }
 
-    // Middle-click paste in pane area
+    // Middle-click paste in pane area. Like right-click, focus the pane
+    // under the cursor first so a middle-click on an inactive pane pastes
+    // into that pane rather than into whichever pane happened to be
+    // focused.
     if (button == .middle and action == .press) {
+        if (self.tab_manager.getActiveTab()) |active_tab| {
+            const leaf_infos = tree_ops.collectLeafInfos(active_tab.root, self.allocator) catch return;
+            defer self.allocator.free(leaf_infos);
+            for (leaf_infos) |info| {
+                if (info.bounds.contains(fb_x, fb_y)) {
+                    active_tab.focused_pane_id = info.pane_id;
+                    break;
+                }
+            }
+        }
         if (self.getFocusedPaneData()) |pd| {
             pd.surface.pasteFromClipboard();
         }
+        self.requestFrame();
         return;
     }
 
