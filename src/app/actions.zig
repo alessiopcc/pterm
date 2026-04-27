@@ -723,8 +723,33 @@ pub fn exitAgentMode(self: *App) void {
     self.requestFrame();
 }
 
+/// Known shell process names. When the foreground process matches one of
+/// these, the title omits the process and shows just the folder, since
+/// "pwsh@pterm" carries no information when nothing is running on top of
+/// the shell. Comparison is case-insensitive (Windows reports "pwsh.exe"
+/// vs Unix reports "pwsh").
+const KNOWN_SHELLS = [_][]const u8{
+    "pwsh",  "powershell", "cmd",  "nu",
+    "bash",  "zsh",        "fish", "sh",
+    "dash",  "ksh",        "tcsh", "csh",
+    "xonsh", "elvish",     "nush",
+};
+
+fn isShellName(name: []const u8) bool {
+    // Strip trailing ".exe" so Windows process names match the table.
+    var n = name;
+    if (n.len > 4 and std.ascii.eqlIgnoreCase(n[n.len - 4 ..], ".exe")) {
+        n = n[0 .. n.len - 4];
+    }
+    for (KNOWN_SHELLS) |s| {
+        if (std.ascii.eqlIgnoreCase(n, s)) return true;
+    }
+    return false;
+}
+
 /// Update tab titles from focused pane CWD and process name.
-/// Format: "process@basename [count] [Z]" (falls back to basename or process alone)
+/// Format: "basename" when the foreground process is a shell, otherwise
+/// "process@basename [count] [Z]" (falls back to basename or process alone).
 /// Called periodically from the render loop.
 /// Returns true if any tab title changed (caller can avoid a needless redraw).
 pub fn updateTabTitles(self: *App) bool {
@@ -746,8 +771,13 @@ pub fn updateTabTitles(self: *App) bool {
 
             const pname_slice: []const u8 = pd.process_name[0..pd.process_name_len];
             const base_slice: ?[]const u8 = if (cwd_slice) |cwd| std.fs.path.basename(cwd) else null;
+            // When the foreground process is just the shell itself, drop it
+            // from the title — "pwsh@pterm" is noise when nothing's running
+            // inside the shell. Show "pwsh@pterm" only when the user is
+            // actually running something on top of the shell.
+            const show_process = pname_slice.len > 0 and !isShellName(pname_slice);
 
-            if (pname_slice.len > 0) {
+            if (show_process) {
                 const pn_len = @min(pname_slice.len, title_buf.len - offset);
                 @memcpy(title_buf[offset .. offset + pn_len], pname_slice[0..pn_len]);
                 offset += pn_len;
@@ -762,6 +792,12 @@ pub fn updateTabTitles(self: *App) bool {
                 const b_len = @min(base.len, title_buf.len - offset);
                 @memcpy(title_buf[offset .. offset + b_len], base[0..b_len]);
                 offset += b_len;
+            } else if (pname_slice.len > 0) {
+                // No CWD available — fall back to bare process name even if
+                // it's a shell, so the title isn't empty.
+                const pn_len = @min(pname_slice.len, title_buf.len - offset);
+                @memcpy(title_buf[offset .. offset + pn_len], pname_slice[0..pn_len]);
+                offset += pn_len;
             }
         }
 
