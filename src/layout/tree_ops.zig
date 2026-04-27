@@ -142,7 +142,12 @@ pub fn computeBounds(node: *PaneNode, available: Rect, cell_w: f32, cell_h: f32,
             }
         },
         .leaf => |*l| {
-            l.bounds = available.snapToGrid(cell_w, cell_h);
+            // Don't snap to cell grid — the surface uses floor(w/cell_w) for
+            // column count anyway, and snapping each leaf independently
+            // dropped up to (cell-1) px per side, leaving visible gaps near
+            // the window edge after a resize. Keeping full pixel bounds lets
+            // partial cells render as pane background, with no dead space.
+            l.bounds = available;
         },
     }
 }
