@@ -322,9 +322,30 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
                     .tab => |idx| @as(?usize, idx),
                     else => null,
                 };
-                const wpos = self.window.getPos();
-                self.window_drag_screen_x = wpos.x + win_x;
-                self.window_drag_screen_y = wpos.y + win_y;
+
+                // If maximized, restore to floating so the OS allows repositioning
+                // (and so the user can drag onto another monitor). Reposition the
+                // restored window so the cursor stays on the title-bar region.
+                if (self.window.isMaximized()) {
+                    const max_size = self.window.getSize();
+                    const screen_x: i32 = self.window.getPos().x + win_x;
+                    const screen_y: i32 = self.window.getPos().y + win_y;
+                    self.window.toggleMaximize();
+                    const restored = self.window.getSize();
+                    const frac_x: f32 = if (max_size.width > 0)
+                        @as(f32, @floatFromInt(win_x)) / @as(f32, @floatFromInt(max_size.width))
+                    else
+                        0.5;
+                    const new_x = screen_x - @as(i32, @intFromFloat(frac_x * @as(f32, @floatFromInt(restored.width))));
+                    const new_y = screen_y - @min(win_y, 16);
+                    self.window.setPos(new_x, new_y);
+                    self.window_drag_screen_x = screen_x;
+                    self.window_drag_screen_y = screen_y;
+                } else {
+                    const wpos = self.window.getPos();
+                    self.window_drag_screen_x = wpos.x + win_x;
+                    self.window_drag_screen_y = wpos.y + win_y;
+                }
             },
         }
         return;
