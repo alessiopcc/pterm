@@ -168,6 +168,19 @@ pub fn renderThreadMain(self: *App) void {
                 backend.resize(@intCast(fb2.width), @intCast(fb2.height));
 
                 actions.resizeAllPanes(self);
+
+                // GLFW delivers contentScale and framebufferSize callbacks
+                // independently when the window crosses a DPI boundary, and
+                // the framebuffer size we read above may still reflect the
+                // old monitor. Seed the resize atomics from the framebuffer
+                // we just read and force a follow-up resize pass on the next
+                // frame so the chrome bars (tab/status) re-render against
+                // the up-to-date framebuffer, otherwise they look fuzzy
+                // until the user nudges the window again.
+                self.new_fb_width.store(@intCast(fb2.width), .release);
+                self.new_fb_height.store(@intCast(fb2.height), .release);
+                self.pending_resize.store(true, .release);
+                self.frame_requested.store(true, .release);
             }
 
             // Handle pending font size change
