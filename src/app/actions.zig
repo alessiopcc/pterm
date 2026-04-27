@@ -724,7 +724,7 @@ pub fn exitAgentMode(self: *App) void {
 }
 
 /// Update tab titles from focused pane CWD and process name.
-/// Format: "N: basename: process [count] [Z]"
+/// Format: "process@basename [count] [Z]" (falls back to basename or process alone)
 /// Called periodically from the render loop.
 /// Returns true if any tab title changed (caller can avoid a needless redraw).
 pub fn updateTabTitles(self: *App) bool {
@@ -744,25 +744,24 @@ pub fn updateTabTitles(self: *App) bool {
                 break :blk if (cwd_l > 0) pd.cwd[0..cwd_l] else null;
             };
 
-            // When an agent process is live in the pane, prefer its name in
-            // the title so users can see "claude" / "codex" at a glance.
             const pname_slice: []const u8 = pd.process_name[0..pd.process_name_len];
-            const is_agent = pname_slice.len > 0 and
-                process_monitor.nameMatchesList(pname_slice, self.config.agent.processes);
+            const base_slice: ?[]const u8 = if (cwd_slice) |cwd| std.fs.path.basename(cwd) else null;
 
-            if (is_agent) {
-                const copy_len = @min(pname_slice.len, title_buf.len - offset);
-                @memcpy(title_buf[offset .. offset + copy_len], pname_slice[0..copy_len]);
-                offset += copy_len;
-            } else if (cwd_slice) |cwd| {
-                const base = std.fs.path.basename(cwd);
-                const copy_len = @min(base.len, title_buf.len - offset);
-                @memcpy(title_buf[offset .. offset + copy_len], base[0..copy_len]);
-                offset += copy_len;
-            } else if (pname_slice.len > 0) {
-                const copy_len = @min(pname_slice.len, title_buf.len - offset);
-                @memcpy(title_buf[offset .. offset + copy_len], pname_slice[0..copy_len]);
-                offset += copy_len;
+            if (pname_slice.len > 0) {
+                const pn_len = @min(pname_slice.len, title_buf.len - offset);
+                @memcpy(title_buf[offset .. offset + pn_len], pname_slice[0..pn_len]);
+                offset += pn_len;
+                if (base_slice) |base| if (base.len > 0 and offset + 1 < title_buf.len) {
+                    title_buf[offset] = '@';
+                    offset += 1;
+                    const b_len = @min(base.len, title_buf.len - offset);
+                    @memcpy(title_buf[offset .. offset + b_len], base[0..b_len]);
+                    offset += b_len;
+                };
+            } else if (base_slice) |base| {
+                const b_len = @min(base.len, title_buf.len - offset);
+                @memcpy(title_buf[offset .. offset + b_len], base[0..b_len]);
+                offset += b_len;
             }
         }
 
