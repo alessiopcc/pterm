@@ -1137,6 +1137,24 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    if (target.result.os.tag == .windows) {
+        notification_mod.addCSourceFile(.{
+            .file = b.path("src/platform/win_toast.cpp"),
+            .flags = &.{"-std=c++17"},
+        });
+        notification_mod.addIncludePath(b.path("src/platform"));
+        notification_mod.linkSystemLibrary("ole32", .{});
+        notification_mod.linkSystemLibrary("shell32", .{});
+        notification_mod.linkSystemLibrary("propsys", .{});
+        notification_mod.linkSystemLibrary("oleaut32", .{});
+        notification_mod.linkSystemLibrary("shlwapi", .{});
+        // WinRT entry points (RoActivateInstance, RoGetActivationFactory,
+        // WindowsCreateStringReference) are resolved at runtime via
+        // LoadLibrary("combase.dll") in win_toast.cpp — Zig's bundled MinGW
+        // doesn't ship runtimeobject.lib / windowsapp.lib import libs, and
+        // the SDK's WinRT C++ headers depend on MSVC-only attributes. The
+        // few interfaces we use are declared as raw COM vtables instead.
+    }
 
     const notification_manager_mod = b.createModule(.{
         .root_source_file = b.path("src/agent/notification_manager.zig"),

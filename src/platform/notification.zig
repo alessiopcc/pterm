@@ -65,45 +65,48 @@ pub fn sendNotification(title: []const u8, body: []const u8, play_sound: bool) v
     }
 }
 
-/// PowerShell AppUserModelID for toast notifications (registered system app).
-const PS_AUMID = "{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe";
+/// PTerm's stable AppUserModelID. Registered with the OS via a Start-menu
+/// shortcut on first launch so the toast is attributed to PTerm (not
+/// PowerShell, as the previous shell-out approach had it).
+const PTERM_AUMID = "dev.pterm.PTerm";
+const PTERM_DISPLAY = "PTerm";
 
-/// Windows: PowerShell toast notification via WinRT.
+const win_toast = if (builtin.os.tag == .windows) @cImport({
+    @cInclude("win_toast.h");
+}) else struct {};
+
+var win_toast_init_done: std.atomic.Value(u8) = std.atomic.Value(u8).init(0);
+var win_toast_init_ok: bool = false;
+
+fn ensureWindowsToastInit() bool {
+    if (win_toast_init_done.load(.acquire) != 0) return win_toast_init_ok;
+    // First-call init: register AUMID and (if missing) create Start-menu
+    // shortcut. Idempotent on subsequent runs.
+    const rc = win_toast.pterm_notify_init(PTERM_AUMID, PTERM_DISPLAY);
+    win_toast_init_ok = (rc == 0);
+    win_toast_init_done.store(1, .release);
+    return win_toast_init_ok;
+}
+
+/// Windows: native WinRT toast notification (no external process).
 fn sendWindows(title: []const u8, body: []const u8, play_sound: bool) void {
-    const sound_attr = if (play_sound) "src=\"ms-winsoundevent:Notification.Default\"" else "silent=\"true\"";
+    if (!ensureWindowsToastInit()) return;
 
-    // Build PowerShell script as a single command string.
-    // Title and body are embedded in XML -- strip any quotes to prevent injection.
-    var script_buf: [2048]u8 = undefined;
-    var script_stream = std.io.fixedBufferStream(&script_buf);
-    const sw = script_stream.writer();
+    // Native side expects null-terminated UTF-8.
+    var title_buf: [256]u8 = undefined;
+    var body_buf: [1024]u8 = undefined;
+    const tlen = @min(title.len, title_buf.len - 1);
+    const blen = @min(body.len, body_buf.len - 1);
+    @memcpy(title_buf[0..tlen], title[0..tlen]);
+    title_buf[tlen] = 0;
+    @memcpy(body_buf[0..blen], body[0..blen]);
+    body_buf[blen] = 0;
 
-    sw.print(
-        "[Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime] | Out-Null; " ++
-            "[Windows.Data.Xml.Dom.XmlDocument,Windows.Data,ContentType=WindowsRuntime] | Out-Null; " ++
-            "$template = '<toast duration=\"short\"><visual><binding template=\"ToastGeneric\"><text>{s}</text><text>{s}</text></binding></visual><audio {s}/></toast>'; " ++
-            "$xml = New-Object Windows.Data.Xml.Dom.XmlDocument; " ++
-            "$xml.LoadXml($template); " ++
-            "$toast = [Windows.UI.Notifications.ToastNotification]::new($xml); " ++
-            "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{s}').Show($toast);",
-        .{ title, body, sound_attr, PS_AUMID },
-    ) catch return;
-
-    const script_len = script_stream.pos;
-    const script_slice = script_buf[0..script_len];
-
-    var argv_buf: [8][]const u8 = undefined;
-    argv_buf[0] = "powershell.exe";
-    argv_buf[1] = "-NoProfile";
-    argv_buf[2] = "-NonInteractive";
-    argv_buf[3] = "-WindowStyle";
-    argv_buf[4] = "Hidden";
-    argv_buf[5] = "-Command";
-    argv_buf[6] = script_slice;
-
-    var child = std.process.Child.init(argv_buf[0..7], std.heap.page_allocator);
-    _ = child.spawn() catch return;
-    // Fire and forget
+    _ = win_toast.pterm_notify_send(
+        @ptrCast(&title_buf),
+        @ptrCast(&body_buf),
+        if (play_sound) 1 else 0,
+    );
 }
 
 /// macOS: osascript display notification.
