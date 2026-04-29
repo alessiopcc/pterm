@@ -70,7 +70,7 @@ pub fn handleKeyInput(self: *App, key: glfw.Key, action: glfw.Action, mods: glfw
 
     // Intercept input when preset picker is visible
     if (self.preset_picker.visible) {
-        handlePickerInput(self, key);
+        handlePickerInput(self, key, mods);
         return;
     }
 
@@ -878,7 +878,10 @@ pub fn handleSearchKeyInput(self: *App, pd: *PaneData, key: glfw.Key, mods: glfw
 }
 
 /// Handle keyboard input while the preset picker overlay is visible.
-pub fn handlePickerInput(self: *App, key: glfw.Key) void {
+/// Enter activates the preset additively (preserving existing tabs).
+/// Shift+Enter activates with replace semantics — existing tabs are closed
+/// so the layout's tabs become the only tabs.
+pub fn handlePickerInput(self: *App, key: glfw.Key, mods: glfw.Mods) void {
     switch (key) {
         .up => {
             self.preset_picker.moveUp();
@@ -891,7 +894,7 @@ pub fn handlePickerInput(self: *App, key: glfw.Key) void {
         .enter, .kp_enter => {
             const idx = self.preset_picker.getSelectedIndex();
             if (idx < self.config.layouts.len) {
-                self.activatePreset(&self.config.layouts[idx]);
+                self.activatePreset(&self.config.layouts[idx], mods.shift);
             }
             self.preset_picker.close();
             self.requestFrame();
