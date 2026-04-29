@@ -934,8 +934,8 @@ pub const App = struct {
     pub fn respawnShell(self: *App, pd: *PaneData, shell_name: []const u8) !void {
         try actions.respawnShell(self, pd, shell_name);
     }
-    pub fn activatePreset(self: *App, preset: *const LayoutPreset.LayoutPreset) void {
-        actions.activatePreset(self, preset);
+    pub fn activatePreset(self: *App, preset: *const LayoutPreset.LayoutPreset, replace: bool) void {
+        actions.activatePreset(self, preset, replace);
     }
     pub fn activatePresetByName(self: *App, name: []const u8) void {
         actions.activatePresetByName(self, name);

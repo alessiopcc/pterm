@@ -967,14 +967,34 @@ pub fn respawnShell(self: *App, pd: *PaneData, shell_name: []const u8) !void {
 }
 
 /// Activate a layout preset: create new tabs with the preset's pane tree.
-/// Non-destructive: opens in new tab(s), preserving existing tabs.
-pub fn activatePreset(self: *App, preset: *const LayoutPreset.LayoutPreset) void {
+/// When `replace` is false, opens in new tab(s) preserving existing tabs.
+/// When `replace` is true, destroys all existing tabs and panes first so the
+/// preset's tabs become the only tabs.
+pub fn activatePreset(self: *App, preset: *const LayoutPreset.LayoutPreset, replace: bool) void {
     // Hold pane_mutex across structural mutations so the render thread
     // doesn't walk freed tab trees or observe half-built pane_data entries.
     // Must wrap tree replacement, pane creation, and the initial resize —
     // release before blocking on startup-command writes (those can back up
     // on the TermIO writer if the child hasn't read yet).
     self.pane_mutex.lock();
+
+    if (replace) {
+        // Tear down every existing tab's panes, then drop the tabs themselves.
+        // Done under pane_mutex so the render thread never walks freed state.
+        // Exit agent focus mode if active — its source pane is about to die.
+        self.tab_manager.agent_mode_active = false;
+        self.tab_manager.agent_source = null;
+        for (self.tab_manager.tabs.items) |*tab| {
+            const leaves = tree_ops.collectLeaves(tab.root, self.allocator) catch &.{};
+            defer if (leaves.len > 0) self.allocator.free(leaves);
+            for (leaves) |pane_id| {
+                self.destroyPane(pane_id);
+            }
+            tab.deinit();
+        }
+        self.tab_manager.tabs.clearRetainingCapacity();
+        self.tab_manager.active_idx = 0;
+    }
 
     var first_new_tab_idx: ?usize = null;
 
@@ -1082,7 +1102,7 @@ pub fn activatePreset(self: *App, preset: *const LayoutPreset.LayoutPreset) void
 pub fn activatePresetByName(self: *App, name: []const u8) void {
     for (self.config.layouts) |*preset| {
         if (std.mem.eql(u8, preset.name, name)) {
-            activatePreset(self, preset);
+            activatePreset(self, preset, false);
             return;
         }
     }

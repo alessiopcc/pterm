@@ -279,26 +279,27 @@ pub fn renderThreadMain(self: *App) void {
             var agent_tab_buf: [64]bool = [_]bool{false} ** 64;
             const tab_count = self.tab_manager.tabCount();
             const badge_count = @min(tab_count, 64);
-            {
-                self.pane_mutex.lock();
-                defer self.pane_mutex.unlock();
-                for (self.tab_manager.tabs.items, 0..) |tab, ti| {
-                    if (ti >= 64) break;
-                    // Check if any pane in this tab has show_badge or agent state
-                    const leaf_infos = tree_ops.collectLeafInfos(tab.root, self.frame_arena.allocator()) catch &.{};
-                    for (leaf_infos) |info| {
-                        if (self.pane_data.getPtr(info.pane_id)) |pd_ptr| {
-                            if (pd_ptr.*.bell_state.show_badge) {
-                                bell_badges_buf[ti] = true;
-                            }
-                            // Agent waiting badge
-                            if (pd_ptr.*.agent_state.show_badge) {
-                                agent_badges_buf[ti] = true;
-                            }
-                            // Agent tab icon
-                            if (pd_ptr.*.agent_state.is_agent_tab.load(.acquire)) {
-                                agent_tab_buf[ti] = true;
-                            }
+            // Hold pane_mutex across both badge collection AND TabBarRenderer.render
+            // so a concurrent activatePreset can't realloc tabs.items / free Tab
+            // memory mid-iteration. Releasing between the two blocks let the
+            // renderer walk freed Tab structs whose title_len was poisoned (0xAA).
+            self.pane_mutex.lock();
+            for (self.tab_manager.tabs.items, 0..) |tab, ti| {
+                if (ti >= 64) break;
+                // Check if any pane in this tab has show_badge or agent state
+                const leaf_infos = tree_ops.collectLeafInfos(tab.root, self.frame_arena.allocator()) catch &.{};
+                for (leaf_infos) |info| {
+                    if (self.pane_data.getPtr(info.pane_id)) |pd_ptr| {
+                        if (pd_ptr.*.bell_state.show_badge) {
+                            bell_badges_buf[ti] = true;
+                        }
+                        // Agent waiting badge
+                        if (pd_ptr.*.agent_state.show_badge) {
+                            agent_badges_buf[ti] = true;
+                        }
+                        // Agent tab icon
+                        if (pd_ptr.*.agent_state.is_agent_tab.load(.acquire)) {
+                            agent_tab_buf[ti] = true;
                         }
                     }
                 }
@@ -328,6 +329,7 @@ pub fn renderThreadMain(self: *App) void {
                 drawIconCallback,
                 @ptrCast(&tab_bar_ctx),
             );
+            self.pane_mutex.unlock();
 
             // Render panes in active tab
             const status_bar_height: u32 = if (self.config.status_bar.visible)
