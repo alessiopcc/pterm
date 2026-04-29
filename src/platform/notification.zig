@@ -65,9 +65,6 @@ pub fn sendNotification(title: []const u8, body: []const u8, play_sound: bool) v
     }
 }
 
-/// PTerm's stable AppUserModelID. Registered with the OS via a Start-menu
-/// shortcut on first launch so the toast is attributed to PTerm (not
-/// PowerShell, as the previous shell-out approach had it).
 const PTERM_AUMID = "dev.pterm.PTerm";
 const PTERM_DISPLAY = "PTerm";
 
@@ -80,8 +77,6 @@ var win_toast_init_ok: bool = false;
 
 fn ensureWindowsToastInit() bool {
     if (win_toast_init_done.load(.acquire) != 0) return win_toast_init_ok;
-    // First-call init: register AUMID and (if missing) create Start-menu
-    // shortcut. Idempotent on subsequent runs.
     const rc = win_toast.pterm_notify_init(PTERM_AUMID, PTERM_DISPLAY);
     win_toast_init_ok = (rc == 0);
     win_toast_init_done.store(1, .release);

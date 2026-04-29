@@ -1148,12 +1148,8 @@ pub fn build(b: *std.Build) void {
         notification_mod.linkSystemLibrary("propsys", .{});
         notification_mod.linkSystemLibrary("oleaut32", .{});
         notification_mod.linkSystemLibrary("shlwapi", .{});
-        // WinRT entry points (RoActivateInstance, RoGetActivationFactory,
-        // WindowsCreateStringReference) are resolved at runtime via
-        // LoadLibrary("combase.dll") in win_toast.cpp — Zig's bundled MinGW
-        // doesn't ship runtimeobject.lib / windowsapp.lib import libs, and
-        // the SDK's WinRT C++ headers depend on MSVC-only attributes. The
-        // few interfaces we use are declared as raw COM vtables instead.
+        // WinRT entry points are loaded at runtime from combase.dll;
+        // see win_toast.cpp for the rationale.
     }
 
     const notification_manager_mod = b.createModule(.{

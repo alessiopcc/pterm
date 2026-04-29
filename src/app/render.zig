@@ -77,24 +77,19 @@ pub fn updateAgentStateFromProcess(self: *App, pd: *PaneData) void {
         return;
     }
 
-    // Quiet: decide waiting vs idle based on foreground-process name.
-    //   - matches an agent rule         -> waiting
-    //   - shell only (no nested process) -> idle
-    //   - some other process running    -> stay working (a process is live;
-    //     "idle" implies no work, which is wrong while e.g. a build runs)
     const name = pd.process_name[0..pd.process_name_len];
     const is_agent = process_monitor.nameMatchesList(name, self.config.agent.processes);
     const is_shell = name.len == 0 or actions.isShellName(name);
 
     if (is_agent) {
         if (current != .waiting) pd.agent_state.triggerWaiting();
-        self.requestFrame(); // drive the pulse animation
+        self.requestFrame();
     } else if (is_shell) {
         if (current != .idle) pd.agent_state.markIdle();
-        // Idle: no frame request. Next output or user input will wake us.
     } else {
+        // Quiet but not idle (e.g. a build is running). Don't request a
+        // frame — next output wakes us.
         if (current != .working) pd.agent_state.onOutput();
-        // Don't request a frame -- the process is quiet, just not "idle".
     }
 }
 
@@ -178,13 +173,9 @@ pub fn renderThreadMain(self: *App) void {
                 actions.resizeAllPanes(self);
 
                 // GLFW delivers contentScale and framebufferSize callbacks
-                // independently when the window crosses a DPI boundary, and
-                // the framebuffer size we read above may still reflect the
-                // old monitor. Seed the resize atomics from the framebuffer
-                // we just read and force a follow-up resize pass on the next
-                // frame so the chrome bars (tab/status) re-render against
-                // the up-to-date framebuffer, otherwise they look fuzzy
-                // until the user nudges the window again.
+                // independently when crossing a DPI boundary, so the fb we
+                // just read may still reflect the old monitor. Force a
+                // follow-up resize against the next fb update.
                 self.new_fb_width.store(@intCast(fb2.width), .release);
                 self.new_fb_height.store(@intCast(fb2.height), .release);
                 self.pending_resize.store(true, .release);

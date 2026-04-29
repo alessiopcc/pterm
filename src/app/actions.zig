@@ -723,11 +723,7 @@ pub fn exitAgentMode(self: *App) void {
     self.requestFrame();
 }
 
-/// Known shell process names. When the foreground process matches one of
-/// these, the title omits the process and shows just the folder, since
-/// "pwsh@pterm" carries no information when nothing is running on top of
-/// the shell. Comparison is case-insensitive (Windows reports "pwsh.exe"
-/// vs Unix reports "pwsh").
+/// Known shell process names; comparison is case-insensitive.
 const KNOWN_SHELLS = [_][]const u8{
     "pwsh",  "powershell", "cmd",  "nu",
     "bash",  "zsh",        "fish", "sh",
@@ -736,7 +732,6 @@ const KNOWN_SHELLS = [_][]const u8{
 };
 
 pub fn isShellName(name: []const u8) bool {
-    // Strip trailing ".exe" so Windows process names match the table.
     var n = name;
     if (n.len > 4 and std.ascii.eqlIgnoreCase(n[n.len - 4 ..], ".exe")) {
         n = n[0 .. n.len - 4];
@@ -749,19 +744,15 @@ pub fn isShellName(name: []const u8) bool {
 
 /// Update tab titles from focused pane CWD and process name.
 /// Format: "basename" when the foreground process is a shell, otherwise
-/// "process@basename [count] [Z]" (falls back to basename or process alone).
-/// Called periodically from the render loop.
-/// Returns true if any tab title changed (caller can avoid a needless redraw).
+/// "process@basename [count] [Z]". Returns true if any title changed.
 pub fn updateTabTitles(self: *App) bool {
     var any_changed = false;
     for (self.tab_manager.tabs.items) |*tab| {
         var title_buf: [128]u8 = undefined;
         var offset: usize = 0;
 
-        // Prefer live CWD from child process; fall back to tracked CWD, then process name.
-        // The live query is the source of truth -- the tracked CWD only updates when the
-        // shell emits OSC-7, which many setups don't have configured, so a stale tracked
-        // value would mask `cd` until the next OSC-7.
+        // Prefer live CWD over tracked CWD: the tracked value only updates on
+        // OSC-7, which many shells don't emit, so it can mask `cd` indefinitely.
         if (self.pane_data.get(tab.focused_pane_id)) |pd| {
             var cwd_query_buf: [512]u8 = undefined;
             const cwd_slice: ?[]const u8 = pd.pty.getChildCwd(&cwd_query_buf) orelse blk: {
@@ -771,10 +762,6 @@ pub fn updateTabTitles(self: *App) bool {
 
             const pname_slice: []const u8 = pd.process_name[0..pd.process_name_len];
             const base_slice: ?[]const u8 = if (cwd_slice) |cwd| std.fs.path.basename(cwd) else null;
-            // When the foreground process is just the shell itself, drop it
-            // from the title — "pwsh@pterm" is noise when nothing's running
-            // inside the shell. Show "pwsh@pterm" only when the user is
-            // actually running something on top of the shell.
             const show_process = pname_slice.len > 0 and !isShellName(pname_slice);
 
             if (show_process) {
@@ -793,8 +780,6 @@ pub fn updateTabTitles(self: *App) bool {
                 @memcpy(title_buf[offset .. offset + b_len], base[0..b_len]);
                 offset += b_len;
             } else if (pname_slice.len > 0) {
-                // No CWD available — fall back to bare process name even if
-                // it's a shell, so the title isn't empty.
                 const pn_len = @min(pname_slice.len, title_buf.len - offset);
                 @memcpy(title_buf[offset .. offset + pn_len], pname_slice[0..pn_len]);
                 offset += pn_len;
