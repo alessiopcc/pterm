@@ -723,20 +723,36 @@ pub fn exitAgentMode(self: *App) void {
     self.requestFrame();
 }
 
+/// Known shell process names; comparison is case-insensitive.
+const KNOWN_SHELLS = [_][]const u8{
+    "pwsh",  "powershell", "cmd",  "nu",
+    "bash",  "zsh",        "fish", "sh",
+    "dash",  "ksh",        "tcsh", "csh",
+    "xonsh", "elvish",     "nush",
+};
+
+pub fn isShellName(name: []const u8) bool {
+    var n = name;
+    if (n.len > 4 and std.ascii.eqlIgnoreCase(n[n.len - 4 ..], ".exe")) {
+        n = n[0 .. n.len - 4];
+    }
+    for (KNOWN_SHELLS) |s| {
+        if (std.ascii.eqlIgnoreCase(n, s)) return true;
+    }
+    return false;
+}
+
 /// Update tab titles from focused pane CWD and process name.
-/// Format: "N: basename: process [count] [Z]"
-/// Called periodically from the render loop.
-/// Returns true if any tab title changed (caller can avoid a needless redraw).
+/// Format: "basename" when the foreground process is a shell, otherwise
+/// "process@basename [count] [Z]". Returns true if any title changed.
 pub fn updateTabTitles(self: *App) bool {
     var any_changed = false;
     for (self.tab_manager.tabs.items) |*tab| {
         var title_buf: [128]u8 = undefined;
         var offset: usize = 0;
 
-        // Prefer live CWD from child process; fall back to tracked CWD, then process name.
-        // The live query is the source of truth -- the tracked CWD only updates when the
-        // shell emits OSC-7, which many setups don't have configured, so a stale tracked
-        // value would mask `cd` until the next OSC-7.
+        // Prefer live CWD over tracked CWD: the tracked value only updates on
+        // OSC-7, which many shells don't emit, so it can mask `cd` indefinitely.
         if (self.pane_data.get(tab.focused_pane_id)) |pd| {
             var cwd_query_buf: [512]u8 = undefined;
             const cwd_slice: ?[]const u8 = pd.pty.getChildCwd(&cwd_query_buf) orelse blk: {
@@ -744,25 +760,29 @@ pub fn updateTabTitles(self: *App) bool {
                 break :blk if (cwd_l > 0) pd.cwd[0..cwd_l] else null;
             };
 
-            // When an agent process is live in the pane, prefer its name in
-            // the title so users can see "claude" / "codex" at a glance.
             const pname_slice: []const u8 = pd.process_name[0..pd.process_name_len];
-            const is_agent = pname_slice.len > 0 and
-                process_monitor.nameMatchesList(pname_slice, self.config.agent.processes);
+            const base_slice: ?[]const u8 = if (cwd_slice) |cwd| std.fs.path.basename(cwd) else null;
+            const show_process = pname_slice.len > 0 and !isShellName(pname_slice);
 
-            if (is_agent) {
-                const copy_len = @min(pname_slice.len, title_buf.len - offset);
-                @memcpy(title_buf[offset .. offset + copy_len], pname_slice[0..copy_len]);
-                offset += copy_len;
-            } else if (cwd_slice) |cwd| {
-                const base = std.fs.path.basename(cwd);
-                const copy_len = @min(base.len, title_buf.len - offset);
-                @memcpy(title_buf[offset .. offset + copy_len], base[0..copy_len]);
-                offset += copy_len;
+            if (show_process) {
+                const pn_len = @min(pname_slice.len, title_buf.len - offset);
+                @memcpy(title_buf[offset .. offset + pn_len], pname_slice[0..pn_len]);
+                offset += pn_len;
+                if (base_slice) |base| if (base.len > 0 and offset + 1 < title_buf.len) {
+                    title_buf[offset] = '@';
+                    offset += 1;
+                    const b_len = @min(base.len, title_buf.len - offset);
+                    @memcpy(title_buf[offset .. offset + b_len], base[0..b_len]);
+                    offset += b_len;
+                };
+            } else if (base_slice) |base| {
+                const b_len = @min(base.len, title_buf.len - offset);
+                @memcpy(title_buf[offset .. offset + b_len], base[0..b_len]);
+                offset += b_len;
             } else if (pname_slice.len > 0) {
-                const copy_len = @min(pname_slice.len, title_buf.len - offset);
-                @memcpy(title_buf[offset .. offset + copy_len], pname_slice[0..copy_len]);
-                offset += copy_len;
+                const pn_len = @min(pname_slice.len, title_buf.len - offset);
+                @memcpy(title_buf[offset .. offset + pn_len], pname_slice[0..pn_len]);
+                offset += pn_len;
             }
         }
 

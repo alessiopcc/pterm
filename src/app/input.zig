@@ -322,6 +322,10 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
                     .tab => |idx| @as(?usize, idx),
                     else => null,
                 };
+
+                // Don't restore here — clicking a tab on a maximized window
+                // would unmaximize before release recognizes the tab click.
+                // The cursor-move handler restores on the first real drag.
                 const wpos = self.window.getPos();
                 self.window_drag_screen_x = wpos.x + win_x;
                 self.window_drag_screen_y = wpos.y + win_y;
@@ -330,23 +334,11 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
         return;
     }
 
-    // Right-click context-sensitive copy/paste in pane area
     if (button == .right and action == .press) {
-        // Focus the pane under the mouse cursor first
-        if (self.tab_manager.getActiveTab()) |active_tab| {
-            const leaf_infos = tree_ops.collectLeafInfos(active_tab.root, self.allocator) catch return;
-            defer self.allocator.free(leaf_infos);
-            for (leaf_infos) |info| {
-                if (info.bounds.contains(fb_x, fb_y)) {
-                    active_tab.focused_pane_id = info.pane_id;
-                    break;
-                }
-            }
-        }
+        focusPaneUnderCursor(self, fb_x, fb_y);
         if (self.getFocusedPaneData()) |pd| {
             if (pd.surface.selection.range != null) {
                 pd.surface.copySelection(pd.scroll_offset);
-                // copySelection already clears selection
             } else {
                 pd.surface.pasteFromClipboard();
             }
@@ -355,11 +347,12 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
         return;
     }
 
-    // Middle-click paste in pane area
     if (button == .middle and action == .press) {
+        focusPaneUnderCursor(self, fb_x, fb_y);
         if (self.getFocusedPaneData()) |pd| {
             pd.surface.pasteFromClipboard();
         }
+        self.requestFrame();
         return;
     }
 
@@ -665,10 +658,26 @@ pub fn handleCursorPos(self: *App, xpos: f64, ypos: f64) void {
         const screen_y: i32 = wpos.y + @as(i32, @intFromFloat(ypos));
         const dx = screen_x - self.window_drag_screen_x;
         const dy = screen_y - self.window_drag_screen_y;
-        // Only move if there's actual movement (distinguishes click from drag)
         if (dx != 0 or dy != 0) {
+            // First real movement on a maximized window: restore to floating
+            // and reposition so the cursor stays on the title bar.
+            if (!self.window_drag_moved and self.window.isMaximized()) {
+                const max_size = self.window.getSize();
+                const win_x_now: i32 = @intFromFloat(xpos);
+                const win_y_now: i32 = @intFromFloat(ypos);
+                self.window.toggleMaximize();
+                const restored = self.window.getSize();
+                const frac_x: f32 = if (max_size.width > 0)
+                    @as(f32, @floatFromInt(win_x_now)) / @as(f32, @floatFromInt(max_size.width))
+                else
+                    0.5;
+                const new_x = screen_x - @as(i32, @intFromFloat(frac_x * @as(f32, @floatFromInt(restored.width))));
+                const new_y = screen_y - @min(win_y_now, 16);
+                self.window.setPos(new_x, new_y);
+            } else {
+                self.window.setPos(wpos.x + dx, wpos.y + dy);
+            }
             self.window_drag_moved = true;
-            self.window.setPos(wpos.x + dx, wpos.y + dy);
             self.window_drag_screen_x = screen_x;
             self.window_drag_screen_y = screen_y;
         }
@@ -926,6 +935,18 @@ pub fn handleShellPickerInput(self: *App, key: glfw.Key) void {
             self.requestFrame();
         },
         else => {},
+    }
+}
+
+fn focusPaneUnderCursor(self: *App, fb_x: i32, fb_y: i32) void {
+    const active_tab = self.tab_manager.getActiveTab() orelse return;
+    const leaf_infos = tree_ops.collectLeafInfos(active_tab.root, self.allocator) catch return;
+    defer self.allocator.free(leaf_infos);
+    for (leaf_infos) |info| {
+        if (info.bounds.contains(fb_x, fb_y)) {
+            active_tab.focused_pane_id = info.pane_id;
+            return;
+        }
     }
 }
 

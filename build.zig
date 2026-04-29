@@ -1136,7 +1136,24 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/platform/notification.zig"),
         .target = target,
         .optimize = optimize,
+        // libc is required for the bundled MinGW <windows.h> on Windows;
+        // without it the test build can't find the SDK headers.
+        .link_libc = target.result.os.tag == .windows,
     });
+    if (target.result.os.tag == .windows) {
+        notification_mod.addCSourceFile(.{
+            .file = b.path("src/platform/win_toast.cpp"),
+            .flags = &.{"-std=c++17"},
+        });
+        notification_mod.addIncludePath(b.path("src/platform"));
+        notification_mod.linkSystemLibrary("ole32", .{});
+        notification_mod.linkSystemLibrary("shell32", .{});
+        notification_mod.linkSystemLibrary("propsys", .{});
+        notification_mod.linkSystemLibrary("oleaut32", .{});
+        notification_mod.linkSystemLibrary("shlwapi", .{});
+        // WinRT entry points are loaded at runtime from combase.dll;
+        // see win_toast.cpp for the rationale.
+    }
 
     const notification_manager_mod = b.createModule(.{
         .root_source_file = b.path("src/agent/notification_manager.zig"),

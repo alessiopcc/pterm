@@ -77,16 +77,19 @@ pub fn updateAgentStateFromProcess(self: *App, pd: *PaneData) void {
         return;
     }
 
-    // Quiet: decide waiting vs idle based on foreground-process name.
     const name = pd.process_name[0..pd.process_name_len];
     const is_agent = process_monitor.nameMatchesList(name, self.config.agent.processes);
+    const is_shell = name.len == 0 or actions.isShellName(name);
 
     if (is_agent) {
         if (current != .waiting) pd.agent_state.triggerWaiting();
-        self.requestFrame(); // drive the pulse animation
-    } else {
+        self.requestFrame();
+    } else if (is_shell) {
         if (current != .idle) pd.agent_state.markIdle();
-        // Idle: no frame request. Next output or user input will wake us.
+    } else {
+        // Quiet but not idle (e.g. a build is running). Don't request a
+        // frame — next output wakes us.
+        if (current != .working) pd.agent_state.onOutput();
     }
 }
 
@@ -168,6 +171,15 @@ pub fn renderThreadMain(self: *App) void {
                 backend.resize(@intCast(fb2.width), @intCast(fb2.height));
 
                 actions.resizeAllPanes(self);
+
+                // GLFW delivers contentScale and framebufferSize callbacks
+                // independently when crossing a DPI boundary, so the fb we
+                // just read may still reflect the old monitor. Force a
+                // follow-up resize against the next fb update.
+                self.new_fb_width.store(@intCast(fb2.width), .release);
+                self.new_fb_height.store(@intCast(fb2.height), .release);
+                self.pending_resize.store(true, .release);
+                self.frame_requested.store(true, .release);
             }
 
             // Handle pending font size change
