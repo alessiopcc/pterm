@@ -135,6 +135,7 @@ pub fn main() !void {
         .perf_logging = cli_args.perf_logging,
         .debug_keys = cli_args.debug_keys,
         .layout_name = cli_args.layout,
+        .version = build_options.version,
     });
     defer app.deinit();
 

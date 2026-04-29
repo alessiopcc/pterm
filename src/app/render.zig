@@ -688,6 +688,17 @@ pub fn renderThreadMain(self: *App) void {
                         .font_grid = self.font_grid,
                         .chrome_font_grid = self.chrome_font_grid,
                     };
+
+                    var update_text_buf: [48]u8 = undefined;
+                    const update_info: ?status_bar_mod.UpdateInfo = if (self.version_check.isUpdateAvailable()) blk: {
+                        const latest = self.version_check.latestVersion();
+                        const text = std.fmt.bufPrint(&update_text_buf, "Update v{s}", .{latest}) catch break :blk null;
+                        break :blk .{
+                            .text = text,
+                            .color = self.renderer_palette.ui_agent_alert.toU32(),
+                        };
+                    } else null;
+
                     StatusBarRenderer.render(
                         pane_infos[0..pane_count],
                         sb_config,
@@ -695,6 +706,7 @@ pub fn renderThreadMain(self: *App) void {
                         sb_y_offset,
                         self.chrome_cell_height,
                         bg_waiting,
+                        update_info,
                         statusBarDrawRect,
                         statusBarDrawText,
                         @ptrCast(&sb_render_ctx),

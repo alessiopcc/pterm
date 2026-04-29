@@ -60,6 +60,8 @@ const url_mod = @import("url");
 const UrlDetector = url_mod.UrlDetector;
 const UrlState = url_mod.UrlState.UrlState;
 const open_url = @import("open_url");
+const version_check_mod = @import("version_check");
+const VersionCheck = version_check_mod.VersionCheck;
 
 const bell_state_mod = @import("bell_state");
 const BellState = bell_state_mod.BellState;
@@ -92,6 +94,8 @@ pub const AppOptions = struct {
     perf_logging: bool = false,
     debug_keys: bool = false,
     layout_name: ?[]const u8 = null,
+    /// Current build version (e.g., "1.1.0"). Used by the GitHub release checker.
+    version: []const u8 = "",
 };
 
 /// Per-pane data: holds the TermIO, PTY, and Surface state for one terminal pane.
@@ -301,6 +305,16 @@ pub const App = struct {
     window_resize_start_win_w: u32,
     window_resize_start_win_h: u32,
 
+    /// GitHub release checker: background thread sets a flag when a newer
+    /// version is available. Painted as a clickable notification in the
+    /// status bar's bottom-right.
+    version_check: VersionCheck,
+    /// Stable storage for the running build's version string (passed via
+    /// AppOptions). VersionCheck holds a slice into this so it must outlive
+    /// the worker thread.
+    version_string_buf: [32]u8,
+    version_string_len: u32,
+
     pub const WindowEdge = packed struct {
         left: bool = false,
         right: bool = false,
@@ -388,6 +402,11 @@ pub const App = struct {
         // Build compositor
         const compositor = Compositor.init(allocator);
 
+        // Copy the version string into stable storage owned by the App.
+        var version_string_buf: [32]u8 = [_]u8{0} ** 32;
+        const version_copy_len = @min(options.version.len, version_string_buf.len);
+        @memcpy(version_string_buf[0..version_copy_len], options.version[0..version_copy_len]);
+
         // NOTE: Do NOT set GLFW callbacks or start threads here.
         // Call app.start() after init returns to set up callbacks at stable addresses.
 
@@ -472,6 +491,9 @@ pub const App = struct {
             .window_resize_start_win_y = 0,
             .window_resize_start_win_w = 0,
             .window_resize_start_win_h = 0,
+            .version_check = .{},
+            .version_string_buf = version_string_buf,
+            .version_string_len = @intCast(version_copy_len),
         };
     }
 
@@ -533,6 +555,14 @@ pub const App = struct {
             try pane.termio.start();
             pane.termio.terminal.observer.onScreenChange = &callbacks.screenChangeCallback;
             pane.termio.terminal.observer.screen_change_ctx = @ptrCast(pane);
+        }
+
+        // Kick off the GitHub release version check on a detached worker thread.
+        if (self.version_string_len > 0) {
+            self.version_check.start(
+                self.allocator,
+                self.version_string_buf[0..self.version_string_len],
+            );
         }
 
         // Initialize config file watcher
@@ -738,6 +768,9 @@ pub const App = struct {
     }
 
     pub fn deinit(self: *App) void {
+        // Detach version-check worker so a stuck network fetch doesn't block exit.
+        self.version_check.deinit();
+
         // Free cached shell list
         self.closeShellPicker();
 

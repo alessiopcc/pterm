@@ -31,6 +31,12 @@ pub const StatusBarConfig = struct {
     focused_bg_color: ColorU32, // status_bar_bg lightened 15%
 };
 
+/// Optional "update available" notification rendered at the right edge.
+pub const UpdateInfo = struct {
+    text: []const u8, // e.g. "Update v1.2.0"
+    color: ColorU32,
+};
+
 pub const StatusBarRenderer = struct {
 
     // ── Dimensions ───────────────────────────────────────
@@ -49,6 +55,7 @@ pub const StatusBarRenderer = struct {
         y_offset: u32,
         cell_height: f32,
         background_waiting_count: u32,
+        update_info: ?UpdateInfo,
         draw_rect_fn: *const fn (x: i32, y: i32, w: u32, h: u32, color: ColorU32, ctx: *anyopaque) void,
         draw_text_fn: *const fn (text: []const u8, x: i32, y: i32, color: ColorU32, scale: f32, ctx: *anyopaque) void,
         draw_ctx: *anyopaque,
@@ -96,14 +103,44 @@ pub const StatusBarRenderer = struct {
             x_cursor += @as(i32, @intCast(text_width)) + 8; // 8px gap
         }
 
-        // 4. Background tab waiting summary (right-aligned)
+        // 4. Right-aligned: update notification (rightmost), then "N waiting" to its left.
+        var right_x: i32 = @as(i32, @intCast(window_width)) - 8;
+
+        if (update_info) |ui| {
+            const ui_width = estimateTextWidth(ui.text.len, cell_height);
+            const ui_x: i32 = right_x - @as(i32, @intCast(ui_width));
+            draw_text_fn(ui.text, ui_x, text_y, ui.color, text_scale, draw_ctx);
+            right_x = ui_x - 12; // gap before next right-aligned element
+        }
+
         if (background_waiting_count > 0) {
             var summary_buf: [32]u8 = undefined;
             const summary = formatSummary(&summary_buf, background_waiting_count);
             const summary_width = estimateTextWidth(summary.len, cell_height);
-            const summary_x: i32 = @as(i32, @intCast(window_width)) - @as(i32, @intCast(summary_width)) - 8;
+            const summary_x: i32 = right_x - @as(i32, @intCast(summary_width));
             draw_text_fn(summary, summary_x, text_y, config.waiting_color, text_scale, draw_ctx);
         }
+    }
+
+    /// Hit test the update-notification region in the status bar.
+    /// `click_x`/`click_y` are framebuffer coords; `y_offset` is the status bar's
+    /// top edge (same value passed to `render`).
+    pub fn hitTestUpdate(
+        update_info: ?UpdateInfo,
+        window_width: u32,
+        y_offset: u32,
+        click_x: i32,
+        click_y: i32,
+        cell_height: f32,
+    ) bool {
+        const ui = update_info orelse return false;
+        const h = statusBarHeight(cell_height);
+        const top: i32 = @intCast(y_offset);
+        if (click_y < top or click_y >= top + @as(i32, @intCast(h))) return false;
+        const w = estimateTextWidth(ui.text.len, cell_height);
+        const x_right: i32 = @as(i32, @intCast(window_width)) - 8;
+        const x_left: i32 = x_right - @as(i32, @intCast(w));
+        return click_x >= x_left - 4 and click_x < x_right + 4;
     }
 
     // ── Hit testing ───────────────────────────────────────
@@ -266,6 +303,7 @@ test "render empty pane_states draws only background and border" {
         575,
         17.0,
         0,
+        null,
         &testDrawRect,
         &testDrawText,
         @ptrCast(&ctx),
@@ -300,6 +338,7 @@ test "render single focused idle pane" {
         575,
         17.0,
         0,
+        null,
         &testDrawRect,
         &testDrawText,
         @ptrCast(&ctx),
@@ -332,6 +371,7 @@ test "render two panes with correct colors" {
         575,
         17.0,
         0,
+        null,
         &testDrawRect,
         &testDrawText,
         @ptrCast(&ctx),
@@ -363,6 +403,7 @@ test "render background waiting count draws summary" {
         575,
         17.0,
         2,
+        null,
         &testDrawRect,
         &testDrawText,
         @ptrCast(&ctx),
@@ -392,6 +433,7 @@ test "render zero background waiting count does not draw summary" {
         575,
         17.0,
         0,
+        null,
         &testDrawRect,
         &testDrawText,
         @ptrCast(&ctx),
@@ -417,6 +459,7 @@ test "segment x positions use 8px gap" {
         575,
         17.0,
         0,
+        null,
         &testDrawRect,
         &testDrawText,
         @ptrCast(&ctx),
@@ -444,6 +487,7 @@ test "text scale is 0.75" {
         575,
         17.0,
         0,
+        null,
         &testDrawRect,
         &testDrawText,
         @ptrCast(&ctx),
