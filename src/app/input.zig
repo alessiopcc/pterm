@@ -392,6 +392,29 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
         const sb_height = StatusBarRenderer.statusBarHeight(self.chrome_cell_height);
         const sb_top: i32 = @intCast(if (fb.height > sb_height) fb.height - sb_height else 0);
         if (fb_y >= sb_top) {
+            // Update notification: clicking opens the GitHub release page.
+            if (self.version_check.isUpdateAvailable()) {
+                var update_text_buf: [48]u8 = undefined;
+                const latest = self.version_check.latestVersion();
+                if (std.fmt.bufPrint(&update_text_buf, "Update v{s}", .{latest})) |update_text| {
+                    const ui = status_bar_mod.UpdateInfo{
+                        .text = update_text,
+                        .color = 0,
+                    };
+                    if (StatusBarRenderer.hitTestUpdate(
+                        ui,
+                        fb.width,
+                        @intCast(sb_top),
+                        fb_x,
+                        fb_y,
+                        self.chrome_cell_height,
+                    )) {
+                        open_url.openUrl(@import("version_check").RELEASE_URL);
+                        return;
+                    }
+                } else |_| {}
+            }
+
             // Build the same pane_number->pane_id mapping used in render
             const leaf_infos = tree_ops.collectLeafInfos(active_tab.root, std.heap.page_allocator) catch &.{};
             defer if (leaf_infos.len > 0) std.heap.page_allocator.free(leaf_infos);

@@ -1040,6 +1040,17 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const version_check_mod = b.createModule(.{
+        .root_source_file = b.path("src/platform/version_check.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    app_mod.addImport("version_check", version_check_mod);
+
+    const version_check_tests = b.addTest(.{ .root_module = version_check_mod });
+    const run_version_check_tests = b.addRunArtifact(version_check_tests);
+    test_step.dependOn(&run_version_check_tests.step);
+
     // Barrel module for app import
     const url_mod = b.createModule(.{
         .root_source_file = b.path("src/url/url.zig"),
