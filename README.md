@@ -47,6 +47,9 @@ tools like Claude Code are waiting for input.
   counter and navigation.
 - **URL detection** -- Hover-highlight clickable URLs, open with your OS handler.
 - **Config hot-reload** -- Edit your config file and changes apply immediately.
+- **Update notifier** -- The status bar shows a clickable `Update vX.Y.Z` in the
+  bottom-right when a newer GitHub release is available; clicking opens the
+  release page in your browser.
 - **Customizable keybindings** -- Remap any action in TOML or use the built-in
   interactive keybinding editor (`--set-keybindings`).
 - **Cross-platform** -- Windows (ConPTY), macOS (CoreText), Linux (fontconfig,
@@ -253,7 +256,9 @@ Load a layout at startup:
 pterm --layout dev
 ```
 
-Or press `Ctrl+Shift+L` at any time to open the layout picker.
+Or press `Ctrl+Shift+L` at any time to open the layout picker. Press `Enter`
+to merge the preset's tabs into the current session, or `Shift+Enter` to
+replace existing tabs with the preset.
 
 Each pane supports:
 
