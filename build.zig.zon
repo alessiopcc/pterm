@@ -1,7 +1,7 @@
 .{
     .fingerprint = 0xbbbb2f437addc811,
     .name = .pterm,
-    .version = "1.0.0",
+    .version = "1.1.0",
     .minimum_zig_version = "0.15.1",
     .dependencies = .{
         .ghostty = .{

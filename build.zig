@@ -18,7 +18,7 @@ pub fn build(b: *std.Build) void {
 
     // Build options: version string injected at compile time
     const options = b.addOptions();
-    const version_str = b.option([]const u8, "version", "Version string") orelse "1.0.0";
+    const version_str = b.option([]const u8, "version", "Version string") orelse "1.1.0";
     options.addOption([]const u8, "version", version_str);
     const console = b.option(bool, "console", "Keep console window attached (dev mode)") orelse false;
     exe_mod.addOptions("build_options", options);
