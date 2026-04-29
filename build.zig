@@ -1136,6 +1136,9 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/platform/notification.zig"),
         .target = target,
         .optimize = optimize,
+        // libc is required for the bundled MinGW <windows.h> on Windows;
+        // without it the test build can't find the SDK headers.
+        .link_libc = target.result.os.tag == .windows,
     });
     if (target.result.os.tag == .windows) {
         notification_mod.addCSourceFile(.{
