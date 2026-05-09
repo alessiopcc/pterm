@@ -7,8 +7,18 @@ const Config = config_mod.Config;
 const cli_mod = @import("cli");
 const defaults_mod = @import("defaults");
 const keybinding_tui = @import("keybinding_tui");
+const crash = @import("crash");
+
+pub const panic = std.debug.FullPanic(crash.panicHandler);
+
+// Disable stdlib's vectored segfault handler so our SEH unhandled-exception
+// filter sees the original ACCESS_VIOLATION (otherwise stdlib catches it first
+// and traps, leaving us with a useless BREAKPOINT exception code).
+pub const std_options: std.Options = .{ .enable_segfault_handler = false };
 
 pub fn main() !void {
+    crash.install();
+
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();

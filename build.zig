@@ -665,6 +665,14 @@ pub fn build(b: *std.Build) void {
     // Wire keybinding TUI into main executable
     exe_mod.addImport("keybinding_tui", keybinding_tui_mod);
 
+    // Crash handler module (Zig panic log + Windows SEH minidump)
+    const crash_mod = b.createModule(.{
+        .root_source_file = b.path("src/platform/crash.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    exe_mod.addImport("crash", crash_mod);
+
     // Test step
     const test_step = b.step("test", "Run unit tests");
 
