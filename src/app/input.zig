@@ -304,14 +304,23 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
             .window_maximize => self.window.toggleMaximize(),
             .window_close => self.window.requestClose(),
             else => {
-                // Double-click on title bar area -> maximize/restore
-                const now = std.time.nanoTimestamp();
-                const elapsed_ns = now - self.titlebar_last_click_time;
-                self.titlebar_last_click_time = now;
-                if (elapsed_ns > 0 and elapsed_ns < 400_000_000) { // 400ms threshold
-                    self.window.toggleMaximize();
-                    self.titlebar_last_click_time = 0; // Reset to prevent triple-click trigger
-                    return;
+                // Double-click on title bar area -> maximize/restore.
+                // Only the title-bar row qualifies; the tab-bar row (tabs +
+                // empty space between them) must not trigger maximize.
+                const title_h: i32 = @intCast(TabBarRenderer.titleBarHeight(self.chrome_cell_height));
+                if (fb_y < title_h) {
+                    const now = std.time.nanoTimestamp();
+                    const elapsed_ns = now - self.titlebar_last_click_time;
+                    self.titlebar_last_click_time = now;
+                    if (elapsed_ns > 0 and elapsed_ns < 400_000_000) { // 400ms threshold
+                        self.window.toggleMaximize();
+                        self.titlebar_last_click_time = 0; // Reset to prevent triple-click trigger
+                        return;
+                    }
+                } else {
+                    // Reset so a click on the title bar after a tab click
+                    // doesn't accidentally satisfy the double-click window.
+                    self.titlebar_last_click_time = 0;
                 }
 
                 // Tab clicks, drag region, empty space — all start a drag.
