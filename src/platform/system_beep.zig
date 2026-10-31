@@ -17,7 +17,7 @@ pub fn beep() void {
             // Write BEL (0x07) to /dev/tty to trigger system bell on macOS/Linux.
             if (std.Io.Dir.openFileAbsolute(pio.io, "/dev/tty", .{ .mode = .write_only })) |tty| {
                 defer tty.close(pio.io);
-                _ = tty.write("\x07") catch {};
+                tty.writeStreamingAll(pio.io, "\x07") catch {};
             } else |_| {}
         },
     }

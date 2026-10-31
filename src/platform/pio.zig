@@ -64,6 +64,12 @@ fn currentEnviron() std.process.Environ {
     return if (builtin.is_test) std.testing.environ else environ;
 }
 
+/// POSIX only: borrow an environment variable from the process block (valid
+/// for the process lifetime, NUL-terminated). No allocation.
+pub fn getEnvPosix(key: []const u8) ?[:0]const u8 {
+    return currentEnviron().getPosix(key);
+}
+
 pub const GetEnvVarError = error{ OutOfMemory, EnvironmentVariableMissing };
 
 /// Caller owns the returned memory. Avoids building a full environment map,

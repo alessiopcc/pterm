@@ -45,7 +45,7 @@ pub fn detectShell() ShellConfig {
 }
 
 fn detectUnixShell() ShellConfig {
-    if (std.posix.getenv("SHELL")) |shell_env| {
+    if (pio.getEnvPosix("SHELL")) |shell_env| {
         // Find the shell name (last component of path)
         const name = extractShellName(shell_env);
         // We need a sentinel-terminated pointer; the env var is already null-terminated in C

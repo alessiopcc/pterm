@@ -68,7 +68,7 @@ fn readProcComm(pid: i32, out: *ProcessName) bool {
     const file = std.Io.Dir.openFileAbsolute(pio.io, path, .{}) catch return false;
     defer file.close(pio.io);
     var read_buf: [MAX_NAME + 1]u8 = undefined;
-    const n = file.read(&read_buf) catch return false;
+    const n = file.readStreaming(pio.io, &.{&read_buf}) catch return false;
     // Strip trailing newline
     var end = n;
     while (end > 0 and (read_buf[end - 1] == '\n' or read_buf[end - 1] == 0)) : (end -= 1) {}
