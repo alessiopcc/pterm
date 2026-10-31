@@ -78,6 +78,10 @@ pub const VersionCheck = struct {
         child.stdout_behavior = .Pipe;
         child.stderr_behavior = .Ignore;
         child.stdin_behavior = .Ignore;
+        // pterm runs without a console (GUI subsystem), so spawning the curl
+        // console process would otherwise pop a fleeting black console window.
+        // CREATE_NO_WINDOW suppresses it. Windows-only field; ignored elsewhere.
+        child.create_no_window = true;
         try child.spawn();
         const data = (child.stdout orelse {
             _ = child.wait() catch {};
