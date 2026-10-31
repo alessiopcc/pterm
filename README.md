@@ -199,6 +199,7 @@ reserved and cannot be overridden.
 | Split vertical | `Ctrl+Shift+V` |
 | Close pane | `Ctrl+Shift+X` |
 | Focus pane (direction) | `Ctrl+Shift+Arrow` |
+| Focus next/previous pane | `Ctrl+Shift+]` / `Ctrl+Shift+[` |
 | Resize pane (direction) | `Ctrl+Alt+Arrow` |
 | Swap pane (direction) | `Ctrl+Alt+Shift+Arrow` |
 | Zoom pane | `Ctrl+Shift+Z` |
