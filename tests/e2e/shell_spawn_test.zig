@@ -8,6 +8,7 @@
 ///   * blocking: test failure = overall failure
 ///   * warning_only: log warning, don't fail
 const std = @import("std");
+const pio = @import("pio");
 const builtin = @import("builtin");
 const testing = std.testing;
 const harness = @import("e2e_harness");
@@ -62,7 +63,7 @@ fn testShellEcho(allocator: std.mem.Allocator, shell: harness.ShellInfo) !void {
     defer app.deinit();
 
     // Wait briefly for shell to initialize
-    std.Thread.sleep(200 * std.time.ns_per_ms);
+    pio.sleep(200 * std.time.ns_per_ms);
 
     // Send echo command appropriate for the shell
     const echo_cmd = if (comptime builtin.os.tag == .windows)

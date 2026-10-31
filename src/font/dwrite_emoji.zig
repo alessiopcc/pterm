@@ -9,9 +9,7 @@ const font_types = @import("font_types");
 
 const GlyphBitmap = font_types.GlyphBitmap;
 
-const c = if (builtin.os.tag == .windows) @cImport({
-    @cInclude("dwrite_emoji.h");
-}) else struct {};
+const c = @import("c");
 
 /// Initialize the DirectWrite emoji renderer. Call once at startup.
 pub fn init(font_size_pt: f32, dpi: f32) bool {

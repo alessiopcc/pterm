@@ -3,6 +3,7 @@
 /// Naming convention: PTERM_{SECTION}_{FIELD} in uppercase.
 /// Env vars override config file values but not CLI flags (tier 3 of 4).
 const std = @import("std");
+const pio = @import("pio");
 const Config = @import("Config.zig").Config;
 
 /// Apply PTERM_* environment variable overrides to config.
@@ -24,13 +25,13 @@ pub fn applyOverrides(config: Config) Config {
 
 fn getEnvFloat(name: []const u8) ?f32 {
     // Use page_allocator for env var lookup (small, infrequent)
-    const val = std.process.getEnvVarOwned(std.heap.page_allocator, name) catch return null;
+    const val = pio.getEnvVarOwned(std.heap.page_allocator, name) catch return null;
     defer std.heap.page_allocator.free(val);
     return std.fmt.parseFloat(f32, val) catch null;
 }
 
 fn getEnvI64(name: []const u8) ?i64 {
-    const val = std.process.getEnvVarOwned(std.heap.page_allocator, name) catch return null;
+    const val = pio.getEnvVarOwned(std.heap.page_allocator, name) catch return null;
     defer std.heap.page_allocator.free(val);
     return std.fmt.parseInt(i64, val, 10) catch null;
 }

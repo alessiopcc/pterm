@@ -16,13 +16,17 @@
 // - https://learn.microsoft.com/en-us/windows/console/createpseudoconsole
 
 const std = @import("std");
+const pio = @import("pio");
 const windows = std.os.windows;
 
 const HANDLE = windows.HANDLE;
 const INVALID_HANDLE_VALUE = windows.INVALID_HANDLE_VALUE;
 const DWORD = windows.DWORD;
-const BOOL = windows.BOOL;
-const HRESULT = windows.HRESULT;
+// Win32 BOOL as a plain int (std's BOOL is now an enum); same ABI.
+const BOOL = c_int;
+
+const STARTF_USESTDHANDLES: DWORD = 0x00000100;
+const HRESULT = c_long;
 
 const COORD = extern struct {
     X: i16,
@@ -346,8 +350,11 @@ pub const ConPty = struct {
             break :blk wd_buf[0..wd_len :0];
         } else null;
 
+        // STARTF_USESTDHANDLES with null handles: without it, a child whose
+        // parent has redirected stdio (pipes, e.g. under `zig build test`)
+        // inherits those handles and writes there instead of the pseudoconsole.
         var startup_info = STARTUPINFOEXW{
-            .StartupInfo = .{ .cb = @sizeOf(STARTUPINFOEXW) },
+            .StartupInfo = .{ .cb = @sizeOf(STARTUPINFOEXW), .dwFlags = STARTF_USESTDHANDLES },
             .lpAttributeList = attr_list,
         };
 
@@ -556,15 +563,15 @@ pub const ConPty = struct {
         if (self.output_read != INVALID_HANDLE_VALUE) {
             var drain_buf: [4096]u8 = undefined;
             var bytes_read: DWORD = 0;
-            const drain_deadline = std.time.milliTimestamp() + 5000;
-            while (std.time.milliTimestamp() < drain_deadline) {
+            const drain_deadline = pio.milliTimestamp() + 5000;
+            while (pio.milliTimestamp() < drain_deadline) {
                 var avail: DWORD = 0;
                 if (PeekNamedPipe(self.output_read, null, 0, null, &avail, null) == 0) break; // pipe broken
                 if (avail > 0) {
                     if (ReadFile(self.output_read, &drain_buf, drain_buf.len, &bytes_read, null) == 0) break;
                     if (bytes_read == 0) break;
                 } else {
-                    std.Thread.sleep(10 * std.time.ns_per_ms);
+                    pio.sleep(10 * std.time.ns_per_ms);
                 }
             }
             _ = CloseHandle(self.output_read);

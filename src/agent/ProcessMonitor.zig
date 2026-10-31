@@ -12,12 +12,13 @@
 ///     process list via CreateToolhelp32Snapshot and walk descendants of the
 ///     shell PID, picking the most-recently-started leaf.
 const std = @import("std");
+const pio = @import("pio");
 const builtin = @import("builtin");
 
 pub const MAX_NAME = 64;
 
 pub const ProcessName = struct {
-    buf: [MAX_NAME]u8 = [_]u8{0} ** MAX_NAME,
+    buf: [MAX_NAME]u8 = @as([MAX_NAME]u8, @splat(0)),
     len: u32 = 0,
 
     pub fn slice(self: *const ProcessName) []const u8 {
@@ -64,10 +65,10 @@ fn queryLinux(in: QueryInput, out: *ProcessName) bool {
 fn readProcComm(pid: i32, out: *ProcessName) bool {
     var path_buf: [64]u8 = undefined;
     const path = std.fmt.bufPrint(&path_buf, "/proc/{d}/comm", .{pid}) catch return false;
-    const file = std.fs.openFileAbsolute(path, .{}) catch return false;
-    defer file.close();
+    const file = std.Io.Dir.openFileAbsolute(pio.io, path, .{}) catch return false;
+    defer file.close(pio.io);
     var read_buf: [MAX_NAME + 1]u8 = undefined;
-    const n = file.read(&read_buf) catch return false;
+    const n = file.readStreaming(pio.io, &.{&read_buf}) catch return false;
     // Strip trailing newline
     var end = n;
     while (end > 0 and (read_buf[end - 1] == '\n' or read_buf[end - 1] == 0)) : (end -= 1) {}
@@ -99,7 +100,8 @@ const windows = std.os.windows;
 
 const DWORD = windows.DWORD;
 const HANDLE = windows.HANDLE;
-const BOOL = windows.BOOL;
+// Win32 BOOL as a plain int (std's BOOL is now an enum); same ABI.
+const BOOL = c_int;
 const FILETIME = extern struct { low: DWORD, high: DWORD };
 
 const INVALID_HANDLE_VALUE: HANDLE = @ptrFromInt(std.math.maxInt(usize));

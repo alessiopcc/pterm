@@ -133,16 +133,16 @@ pub const ScrollbackBuffer = struct {
     /// Deserialize a buffer from a reader.
     /// Full implementation deferred to v2 session persistence.
     pub fn deserialize(allocator: std.mem.Allocator, reader: anytype) !ScrollbackBuffer {
-        const line_count = try reader.readInt(u32, .little);
+        const line_count = try reader.takeInt(u32, .little);
         var buffer = try ScrollbackBuffer.init(allocator, if (line_count > 0) line_count else 1);
 
         var i: u32 = 0;
         while (i < line_count) : (i += 1) {
-            const len = try reader.readInt(u32, .little);
+            const len = try reader.takeInt(u32, .little);
             const codepoints = try allocator.alloc(u21, len);
             defer allocator.free(codepoints);
             for (codepoints) |*cp| {
-                cp.* = @intCast(try reader.readInt(u32, .little));
+                cp.* = @intCast(try reader.takeInt(u32, .little));
             }
             buffer.pushLine(codepoints);
         }

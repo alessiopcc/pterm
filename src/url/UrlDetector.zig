@@ -37,7 +37,7 @@ fn isUrlTerminator(cp: u21) bool {
 /// `start_row` is the row offset added to UrlRange.row for each line.
 /// Caller owns the returned slice.
 pub fn detectUrls(lines: []const []const u21, start_row: u32, allocator: std.mem.Allocator) ![]UrlRange {
-    var results = std.ArrayListUnmanaged(UrlRange){};
+    var results = std.ArrayListUnmanaged(UrlRange).empty;
     errdefer results.deinit(allocator);
 
     for (lines, 0..) |line, line_idx| {

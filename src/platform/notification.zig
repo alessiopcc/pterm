@@ -10,6 +10,7 @@
 ///   Linux:   notify-send (libnotify)
 const builtin = @import("builtin");
 const std = @import("std");
+const pio = @import("pio");
 
 /// Default notification title.
 pub const TITLE = "PTerm -- Agent waiting";
@@ -34,8 +35,8 @@ const MAX_TEXT_LEN: usize = 80;
 /// suffix if longer.
 pub fn formatBody(pane_identity: []const u8, matched_text: ?[]const u8) FormattedBody {
     var result = FormattedBody{ .buf = undefined, .len = 0 };
-    var stream = std.io.fixedBufferStream(&result.buf);
-    const writer = stream.writer();
+    var fixed_writer: std.Io.Writer = .fixed(&result.buf);
+    const writer = &fixed_writer;
 
     if (matched_text) |text| {
         if (text.len > MAX_TEXT_LEN) {
@@ -47,7 +48,7 @@ pub fn formatBody(pane_identity: []const u8, matched_text: ?[]const u8) Formatte
         writer.print("{s}: Output idle", .{pane_identity}) catch {};
     }
 
-    result.len = stream.pos;
+    result.len = fixed_writer.end;
     return result;
 }
 
@@ -68,9 +69,7 @@ pub fn sendNotification(title: []const u8, body: []const u8, play_sound: bool) v
 const PTERM_AUMID = "dev.pterm.PTerm";
 const PTERM_DISPLAY = "PTerm";
 
-const win_toast = if (builtin.os.tag == .windows) @cImport({
-    @cInclude("win_toast.h");
-}) else struct {};
+const win_toast = @import("c_win_toast");
 
 var win_toast_init_done: std.atomic.Value(u8) = std.atomic.Value(u8).init(0);
 var win_toast_init_ok: bool = false;
@@ -107,8 +106,8 @@ fn sendWindows(title: []const u8, body: []const u8, play_sound: bool) void {
 /// macOS: osascript display notification.
 fn sendMacOS(title: []const u8, body: []const u8, play_sound: bool) void {
     var script_buf: [512]u8 = undefined;
-    var script_stream = std.io.fixedBufferStream(&script_buf);
-    const sw = script_stream.writer();
+    var script_writer: std.Io.Writer = .fixed(&script_buf);
+    const sw = &script_writer;
 
     if (play_sound) {
         sw.print("display notification \"{s}\" with title \"{s}\" sound name \"default\"", .{ body, title }) catch return;
@@ -116,16 +115,14 @@ fn sendMacOS(title: []const u8, body: []const u8, play_sound: bool) void {
         sw.print("display notification \"{s}\" with title \"{s}\"", .{ body, title }) catch return;
     }
 
-    const script_len = script_stream.pos;
-    const script_slice = script_buf[0..script_len];
+    const script_slice = script_writer.buffered();
 
     var argv_buf: [4][]const u8 = undefined;
     argv_buf[0] = "/usr/bin/osascript";
     argv_buf[1] = "-e";
     argv_buf[2] = script_slice;
 
-    var child = std.process.Child.init(argv_buf[0..3], std.heap.page_allocator);
-    _ = child.spawn() catch return;
+    _ = std.process.spawn(pio.io, .{ .argv = argv_buf[0..3] }) catch return;
     // Fire and forget
 }
 
@@ -151,8 +148,7 @@ fn sendLinux(title: []const u8, body: []const u8, play_sound: bool) void {
     argv_buf[argc] = body;
     argc += 1;
 
-    var child = std.process.Child.init(argv_buf[0..argc], std.heap.page_allocator);
-    _ = child.spawn() catch return;
+    _ = std.process.spawn(pio.io, .{ .argv = argv_buf[0..argc] }) catch return;
     // Fire and forget
 }
 
@@ -166,9 +162,9 @@ test "formatBody with matched text" {
 }
 
 test "formatBody with text longer than 80 chars truncates with ellipsis" {
-    const long_text = "A" ** 100;
-    const result = formatBody("Tab 1, Pane 1", long_text);
-    const expected_prefix = "Tab 1, Pane 1: " ++ "A" ** 80 ++ "...";
+    const long_text: [100]u8 = @splat('A');
+    const result = formatBody("Tab 1, Pane 1", &long_text);
+    const expected_prefix = "Tab 1, Pane 1: " ++ @as([80]u8, @splat('A')) ++ "...";
     try std.testing.expectEqualStrings(expected_prefix, result.slice());
 }
 
@@ -178,9 +174,9 @@ test "formatBody with null matched_text returns idle message" {
 }
 
 test "formatBody with exactly 80 char text does not truncate" {
-    const exact_text = "B" ** 80;
-    const result = formatBody("P", exact_text);
-    const expected = "P: " ++ "B" ** 80;
+    const exact_text: [80]u8 = @splat('B');
+    const result = formatBody("P", &exact_text);
+    const expected = "P: " ++ @as([80]u8, @splat('B'));
     try std.testing.expectEqualStrings(expected, result.slice());
 }
 

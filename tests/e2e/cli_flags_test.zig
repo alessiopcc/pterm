@@ -3,6 +3,7 @@
 /// Spawns the pterm binary with each flag and verifies output/behavior.
 /// These tests require the pterm binary to be built first.
 const std = @import("std");
+const pio = @import("pio");
 const builtin = @import("builtin");
 const testing = std.testing;
 
@@ -14,22 +15,13 @@ test "cli flag --version prints version and exits 0" {
     };
     defer allocator.free(pterm_path);
 
-    var child = std.process.Child.init(
-        &.{ pterm_path, "--version" },
-        allocator,
-    );
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-
-    try child.spawn();
-
-    const stdout = child.stdout.?.readToEndAlloc(allocator, 16 * 1024) catch "";
-    defer if (stdout.len > 0) allocator.free(stdout);
-
-    const result = try child.wait();
+    const result = try runPterm(allocator, &.{ pterm_path, "--version" }, null);
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+    const stdout = result.stdout;
 
     // Should exit cleanly
-    try testing.expectEqual(@as(u32, 0), result.Exited);
+    try testing.expectEqual(@as(?u8, 0), exitCode(result.term));
 
     // Output should contain "pterm" and a version-like string
     if (stdout.len > 0) {
@@ -46,24 +38,14 @@ test "cli flag --help prints usage and exits 0" {
     };
     defer allocator.free(pterm_path);
 
-    var child = std.process.Child.init(
-        &.{ pterm_path, "--help" },
-        allocator,
-    );
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-
-    try child.spawn();
-
-    const stdout = child.stdout.?.readToEndAlloc(allocator, 16 * 1024) catch "";
-    defer if (stdout.len > 0) allocator.free(stdout);
-
+    const result = try runPterm(allocator, &.{ pterm_path, "--help" }, null);
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+    const stdout = result.stdout;
     // stderr may contain usage info on some programs
-    const stderr = child.stderr.?.readToEndAlloc(allocator, 16 * 1024) catch "";
-    defer if (stderr.len > 0) allocator.free(stderr);
+    const stderr = result.stderr;
 
-    const result = try child.wait();
-    try testing.expectEqual(@as(u32, 0), result.Exited);
+    try testing.expectEqual(@as(?u8, 0), exitCode(result.term));
 
     // Combined output should contain usage-related text
     const combined = if (stdout.len > 0) stdout else stderr;
@@ -89,11 +71,11 @@ test "cli flag --init-config creates config file" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const tmp_path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp_dir.dir.realPathFileAlloc(pio.io, ".", allocator);
     defer allocator.free(tmp_path);
 
     // Spawn pterm with --init-config using temp home directory
-    var env_map = std.process.EnvMap.init(allocator);
+    var env_map = std.process.Environ.Map.init(allocator);
     defer env_map.deinit();
 
     // Set home directory to temp dir to isolate config creation
@@ -105,23 +87,12 @@ test "cli flag --init-config creates config file" {
         try env_map.put("XDG_CONFIG_HOME", tmp_path);
     }
 
-    var child = std.process.Child.init(
-        &.{ pterm_path, "--init-config" },
-        allocator,
-    );
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    child.env_map = &env_map;
-
-    child.spawn() catch |err| {
-        std.log.warn("failed to spawn pterm --init-config: {}", .{err});
+    const result = runPterm(allocator, &.{ pterm_path, "--init-config" }, &env_map) catch |err| {
+        std.log.warn("failed to run pterm --init-config: {}", .{err});
         return;
     };
-
-    _ = child.wait() catch {
-        std.log.warn("pterm --init-config did not complete", .{});
-        return;
-    };
+    allocator.free(result.stdout);
+    allocator.free(result.stderr);
 
     // Verify a config file was created somewhere in the temp dir
     // The exact path depends on platform config path logic
@@ -144,10 +115,10 @@ test "cli flag --init-config fails if config already exists" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const tmp_path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp_dir.dir.realPathFileAlloc(pio.io, ".", allocator);
     defer allocator.free(tmp_path);
 
-    var env_map = std.process.EnvMap.init(allocator);
+    var env_map = std.process.Environ.Map.init(allocator);
     defer env_map.deinit();
 
     if (comptime builtin.os.tag == .windows) {
@@ -160,32 +131,20 @@ test "cli flag --init-config fails if config already exists" {
 
     // First run: should succeed
     {
-        var child = std.process.Child.init(
-            &.{ pterm_path, "--init-config" },
-            allocator,
-        );
-        child.stdout_behavior = .Pipe;
-        child.stderr_behavior = .Pipe;
-        child.env_map = &env_map;
-        child.spawn() catch return;
-        _ = child.wait() catch return;
+        const result = runPterm(allocator, &.{ pterm_path, "--init-config" }, &env_map) catch return;
+        allocator.free(result.stdout);
+        allocator.free(result.stderr);
     }
 
     // Second run: should fail or warn (file already exists)
     {
-        var child = std.process.Child.init(
-            &.{ pterm_path, "--init-config" },
-            allocator,
-        );
-        child.stdout_behavior = .Pipe;
-        child.stderr_behavior = .Pipe;
-        child.env_map = &env_map;
-        child.spawn() catch return;
-        const result = child.wait() catch return;
+        const result = runPterm(allocator, &.{ pterm_path, "--init-config" }, &env_map) catch return;
+        allocator.free(result.stdout);
+        allocator.free(result.stderr);
 
         // Non-zero exit or stderr output indicates "already exists" handling
-        if (result.Exited != 0) {
-            std.log.info("PASS: --init-config correctly fails on duplicate (exit {})", .{result.Exited});
+        if (exitCode(result.term) != 0) {
+            std.log.info("PASS: --init-config correctly fails on duplicate ({f})", .{result.term});
         } else {
             std.log.warn("--init-config did not fail on duplicate -- may overwrite", .{});
         }
@@ -200,7 +159,7 @@ fn findPtermBinary(allocator: std.mem.Allocator) ?[]u8 {
         [_][]const u8{ "zig-out/bin/pterm", "./zig-out/bin/pterm" };
 
     for (&candidates) |path| {
-        if (std.fs.cwd().access(path, .{})) |_| {
+        if (std.Io.Dir.cwd().access(pio.io, path, .{})) |_| {
             return allocator.dupe(u8, path) catch null;
         } else |_| {}
     }
@@ -208,10 +167,32 @@ fn findPtermBinary(allocator: std.mem.Allocator) ?[]u8 {
 }
 
 /// Check if a config file was created anywhere in the directory tree.
-fn checkConfigCreated(dir: std.fs.Dir) bool {
+fn checkConfigCreated(dir: std.Io.Dir) bool {
     // Check common locations: pterm/config.toml, .config/pterm/config.toml
-    if (dir.access("pterm/config.toml", .{})) |_| return true else |_| {}
-    if (dir.access(".config/pterm/config.toml", .{})) |_| return true else |_| {}
-    if (dir.access("config.toml", .{})) |_| return true else |_| {}
+    if (dir.access(pio.io, "pterm/config.toml", .{})) |_| return true else |_| {}
+    if (dir.access(pio.io, ".config/pterm/config.toml", .{})) |_| return true else |_| {}
+    if (dir.access(pio.io, "config.toml", .{})) |_| return true else |_| {}
     return false;
+}
+
+/// Run pterm to completion, capturing stdout/stderr. Caller frees both.
+fn runPterm(
+    allocator: std.mem.Allocator,
+    argv: []const []const u8,
+    environ_map: ?*const std.process.Environ.Map,
+) !std.process.RunResult {
+    return std.process.run(allocator, pio.io, .{
+        .argv = argv,
+        .environ_map = environ_map,
+        .stdout_limit = .limited(64 * 1024),
+        .stderr_limit = .limited(64 * 1024),
+    });
+}
+
+/// Exit code of a finished process, or null if it did not exit normally.
+fn exitCode(term: std.process.Child.Term) ?u8 {
+    return switch (term) {
+        .exited => |code| code,
+        else => null,
+    };
 }

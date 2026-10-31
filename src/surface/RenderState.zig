@@ -117,7 +117,7 @@ pub fn snapshotCells(
     while (row < rows) : (row += 1) {
         var col: u16 = 0;
         while (col < cols) : (col += 1) {
-            const empty_grapheme = [_]u21{0} ** cell_mod.MAX_GRAPHEME_CODEPOINTS;
+            const empty_grapheme = @as([cell_mod.MAX_GRAPHEME_CODEPOINTS]u21, @splat(0));
 
             // When scrolled back, use screen coordinates; otherwise use active
             const pin = if (clamped_offset > 0)
@@ -167,7 +167,7 @@ pub fn snapshotCells(
             // bg" and emitBg drops them, leaking the terminal's default bg.
             switch (cell.content_tag) {
                 .bg_color_palette => {
-                    const idx = cell.content.color_palette;
+                    const idx = cell.content.color_palette.data;
                     bg = if (pal) |p| p.resolve256(idx) else palette.resolve256(idx);
                 },
                 .bg_color_rgb => {

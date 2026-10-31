@@ -8,6 +8,7 @@
 ///
 /// Driven by RenderState snapshots from the terminal double-buffer swap.
 const std = @import("std");
+const pio = @import("pio");
 const gl = @import("gl");
 const shaders = @import("shaders");
 const Program = @import("Program.zig").Program;
@@ -394,7 +395,7 @@ pub const OpenGLBackend = struct {
     /// Four-pass pipeline: backgrounds, text, block elements, cursor.
     /// Accepts an optional background color for clear; uses default palette if null.
     pub fn drawFrame(self: *OpenGLBackend, state: *const types.RenderState, bg_color: ?Color) void {
-        const start_ns = std.time.nanoTimestamp();
+        const start_ns = pio.nanoTimestamp();
 
         // Set clear color from config palette (if provided) or keep init-time default
         if (bg_color) |bg| {
@@ -539,7 +540,7 @@ pub const OpenGLBackend = struct {
         gl.BindVertexArray(0);
 
         // Record frame timing
-        const end_ns = std.time.nanoTimestamp();
+        const end_ns = pio.nanoTimestamp();
         const elapsed_ns = end_ns - start_ns;
         self.diag.frame_time_us = if (elapsed_ns > 0)
             @intCast(@divFloor(elapsed_ns, 1000))

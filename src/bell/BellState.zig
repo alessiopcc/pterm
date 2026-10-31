@@ -8,6 +8,7 @@
 ///   - flash duration 120ms
 ///   - rate limit 500ms
 const std = @import("std");
+const pio = @import("pio");
 
 pub const BellState = struct {
     /// Set by read thread (Observer.onBell), read by render thread.
@@ -29,7 +30,7 @@ pub const BellState = struct {
     /// Called from read thread when BEL detected. Thread-safe via atomic.
     /// Returns true if bell was accepted (not rate-limited).
     pub fn trigger(self: *BellState) bool {
-        return self.triggerWithTimestamp(std.time.nanoTimestamp());
+        return self.triggerWithTimestamp(pio.nanoTimestamp());
     }
 
     /// Testable variant that accepts explicit timestamp.
@@ -47,7 +48,7 @@ pub const BellState = struct {
         if (self.triggered.load(.acquire)) {
             self.triggered.store(false, .release);
             self.flash_active = true;
-            self.flash_start_ns = std.time.nanoTimestamp();
+            self.flash_start_ns = pio.nanoTimestamp();
             return true;
         }
         return false;
@@ -67,7 +68,7 @@ pub const BellState = struct {
     /// Called from render thread each frame to update flash state.
     pub fn updateFlash(self: *BellState) void {
         if (!self.flash_active) return;
-        const elapsed = std.time.nanoTimestamp() - self.flash_start_ns;
+        const elapsed = pio.nanoTimestamp() - self.flash_start_ns;
         if (elapsed >= FLASH_DURATION_NS) {
             self.flash_active = false;
         }

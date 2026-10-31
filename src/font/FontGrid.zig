@@ -117,7 +117,7 @@ pub const FontGrid = struct {
         // Create HarfBuzz shaper from the primary font face (fail-fast: a terminal
         // without text shaping cannot render correctly).
         // Use @ptrCast to bridge FT_Face types from different cimport modules
-        // (rasterizer and shaper each have their own @cImport of freetype).
+        // (rasterizer and shaper each have their own translate-c import of freetype).
         const raw_face = fonts.items[0].rasterizer.getFace();
         var shaper = Shaper.init(allocator, @ptrCast(raw_face));
         errdefer shaper.deinit();
@@ -426,7 +426,7 @@ pub const FontGrid = struct {
 
     fn loadFont(allocator: std.mem.Allocator, result: discovery.DiscoverResult, size_pt: f32, dpi: u32) ?FontEntry {
         // Create a null-terminated path for FreeType.
-        const path_z = allocator.dupeZ(u8, result.path) catch {
+        const path_z = allocator.dupeSentinel(u8, result.path, 0) catch {
             allocator.free(result.path);
             return null;
         };

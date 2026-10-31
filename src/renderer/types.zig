@@ -1,5 +1,6 @@
 /// Shared types for the renderer subsystem.
 const std = @import("std");
+const pio = @import("pio");
 
 /// RGBA color packed into u32 (0xRRGGBBAA).
 pub const Color = struct {
@@ -145,11 +146,11 @@ pub const FrameScheduler = struct {
     idle_threshold_ns: i128 = 100_000_000, // 100ms
 
     pub fn markActive(self: *FrameScheduler) void {
-        self.last_activity_ns = std.time.nanoTimestamp();
+        self.last_activity_ns = pio.nanoTimestamp();
     }
 
     pub fn shouldRender(self: *const FrameScheduler) bool {
-        const now = std.time.nanoTimestamp();
+        const now = pio.nanoTimestamp();
         return (now - self.last_activity_ns) < self.idle_threshold_ns;
     }
 };

@@ -45,10 +45,10 @@ pub fn encodeKey(key: Key, mods: Mods, buf: []u8) EncodeResult {
 
     // Ctrl+letter -> control code (0x01 - 0x1A)
     if (ctrl) {
-        const key_int = @intFromEnum(key);
+        const key_int = @backingInt(key);
         // GLFW keys A-Z are sequential (ASCII-based)
-        const a_int = @intFromEnum(Key.a);
-        const z_int = @intFromEnum(Key.z);
+        const a_int = @backingInt(Key.a);
+        const z_int = @backingInt(Key.z);
         if (key_int >= a_int and key_int <= z_int) {
             buf[0] = @intCast(key_int - a_int + 1);
             return .{ .bytes = buf[0..1] };

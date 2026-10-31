@@ -1,5 +1,6 @@
 /// Action dispatch, pane operations, tab management, overlays.
 const std = @import("std");
+const pio = @import("pio");
 const app_mod = @import("App.zig");
 const App = app_mod.App;
 const PaneData = app_mod.PaneData;
@@ -60,8 +61,8 @@ pub fn dispatchAction(self: *App, action: keybindings.Action) void {
         .increase_font_size => changeFontSize(self, 1.0),
         .decrease_font_size => changeFontSize(self, -1.0),
         .reset_font_size => resetFontSize(self),
-        .scroll_page_up => if (getFocusedPaneData(self)) |pd| pd.surface.scrollPageUp(),
-        .scroll_page_down => if (getFocusedPaneData(self)) |pd| pd.surface.scrollPageDown(),
+        .scroll_page_up => if (getFocusedPaneData(self)) |pd| scrollPage(self, pd, .up),
+        .scroll_page_down => if (getFocusedPaneData(self)) |pd| scrollPage(self, pd, .down),
 
         // Tab operations
         .new_tab => actionNewTab(self),
@@ -547,7 +548,7 @@ pub fn resizeAllPanes(self: *App) void {
     self.suppress_activity_frames.store(30, .release);
     for (self.tab_manager.tabs.items) |*t| t.has_activity = false;
     // Suppress agent state transitions on ALL panes during resize
-    const deadline: i64 = @as(i64, @intCast(std.time.nanoTimestamp())) + app_mod.SUPPRESS_DURATION_NS;
+    const deadline: i64 = @as(i64, @intCast(pio.nanoTimestamp())) + app_mod.SUPPRESS_DURATION_NS;
     var pd_iter = self.pane_data.iterator();
     while (pd_iter.next()) |entry| {
         entry.value_ptr.*.suppressAgentOutputUntil(deadline);
@@ -623,7 +624,7 @@ const Eligible = struct { tab_idx: usize, pane_id: u32, state: AgentState.State 
 /// Walk all tabs in (tab_idx, pane_id) order and collect eligible panes.
 /// Caller owns the returned slice (frame_arena).
 fn collectEligible(self: *App, alloc: std.mem.Allocator) []Eligible {
-    var list = std.ArrayListUnmanaged(Eligible){};
+    var list = std.ArrayListUnmanaged(Eligible).empty;
     for (self.tab_manager.tabs.items, 0..) |*tab, ti| {
         const leaves = tree_ops.collectLeaves(tab.root, alloc) catch continue;
         defer alloc.free(leaves);
@@ -1220,6 +1221,25 @@ pub fn runSearchForPane(pd: *PaneData) void {
 
     pd.search_state.scrollback_offset = max_history;
     pd.search_state.updateMatches(alloc, matches);
+}
+
+/// Scroll the pane's scrollback viewport by one page (the visible row count).
+fn scrollPage(self: *App, pd: *PaneData, dir: enum { up, down }) void {
+    const snap = pd.termio.lockTerminal();
+    const screen = @constCast(snap).getScreens().active;
+    const total_rows = screen.pages.total_rows;
+    const page: u32 = @intCast(screen.pages.rows);
+    pd.termio.unlockTerminal();
+
+    switch (dir) {
+        .up => {
+            const max_scroll: u32 = if (total_rows > page) @intCast(total_rows - page) else 0;
+            pd.scroll_offset = @min(pd.scroll_offset +| page, max_scroll);
+        },
+        .down => pd.scroll_offset -|= page,
+    }
+    pd.surface.scroll_offset = pd.scroll_offset;
+    self.requestFrame();
 }
 
 /// Get PaneData for the currently focused pane.

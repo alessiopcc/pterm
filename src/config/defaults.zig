@@ -5,6 +5,7 @@
 ///   Linux: Respects XDG_CONFIG_HOME if set
 ///   Windows: Uses %USERPROFILE%/.config/pterm/config.toml
 const std = @import("std");
+const pio = @import("pio");
 const builtin = @import("builtin");
 
 /// Return the platform-appropriate default config file path, or null if undetermined.
@@ -24,13 +25,13 @@ fn defaultConfigPathImpl() ?[]const u8 {
 /// All platforms use ~/.config/pterm/config.toml for cross-platform consistency.
 pub fn defaultConfigPathAlloc(allocator: std.mem.Allocator) !?[]const u8 {
     if (builtin.os.tag == .windows) {
-        const home = std.process.getEnvVarOwned(allocator, "USERPROFILE") catch return null;
+        const home = pio.getEnvVarOwned(allocator, "USERPROFILE") catch return null;
         defer allocator.free(home);
         return try std.fmt.allocPrint(allocator, "{s}/.config/pterm/config.toml", .{home});
     } else {
         // macOS + Linux: XDG_CONFIG_HOME or ~/.config
-        const config_home = std.process.getEnvVarOwned(allocator, "XDG_CONFIG_HOME") catch {
-            const home = std.process.getEnvVarOwned(allocator, "HOME") catch return null;
+        const config_home = pio.getEnvVarOwned(allocator, "XDG_CONFIG_HOME") catch {
+            const home = pio.getEnvVarOwned(allocator, "HOME") catch return null;
             defer allocator.free(home);
             return try std.fmt.allocPrint(allocator, "{s}/.config/pterm/config.toml", .{home});
         };
@@ -146,12 +147,12 @@ pub fn dumpConfig() void {
         \\# visible = true
         \\
     ;
-    const stdout_file = std.fs.File.stdout();
-    stdout_file.writeAll(output) catch |err| {
+    const stdout_file = std.Io.File.stdout();
+    stdout_file.writeStreamingAll(pio.io, output) catch |err| {
         std.debug.print("Error writing config: {}\n", .{err});
         std.process.exit(1);
     };
-    stdout_file.writeAll("\n") catch |err| {
+    stdout_file.writeStreamingAll(pio.io, "\n") catch |err| {
         std.debug.print("Error writing config: {}\n", .{err});
         std.process.exit(1);
     };

@@ -4,6 +4,7 @@
 /// without requiring GPU or display. Shell auto-detection with category-based
 /// failure handling (blocking vs warning-only).
 const std = @import("std");
+const pio = @import("pio");
 const builtin = @import("builtin");
 const pty_mod = @import("pty");
 const Pty = pty_mod.Pty;
@@ -40,7 +41,7 @@ pub const TestApp = struct {
 
         // Convert shell_path to sentinel-terminated for spawn.
         // We need a null-terminated copy.
-        const path_z = try allocator.dupeZ(u8, shell_path);
+        const path_z = try allocator.dupeSentinel(u8, shell_path, 0);
         const path_ptr: [*:0]const u8 = path_z.ptr;
 
         try p.spawn(path_ptr, shell_args, null);
@@ -77,9 +78,9 @@ pub const TestApp = struct {
     pub fn expectOutput(self: *TestApp, needle: []const u8, timeout_ms: u64) !bool {
         var accumulated: [16384]u8 = undefined;
         var total: usize = 0;
-        const deadline = std.time.milliTimestamp() + @as(i64, @intCast(timeout_ms));
+        const deadline = pio.milliTimestamp() + @as(i64, @intCast(timeout_ms));
 
-        while (std.time.milliTimestamp() < deadline) {
+        while (pio.milliTimestamp() < deadline) {
             const remaining = accumulated.len - total;
             if (remaining == 0) {
                 // Buffer full, shift down keeping last half
@@ -89,7 +90,7 @@ pub const TestApp = struct {
             }
             const n = self.readOutputTimeout(accumulated[total..], 500) catch |err| {
                 if (err == error.ReadFailed) {
-                    std.Thread.sleep(50 * std.time.ns_per_ms);
+                    pio.sleep(50 * std.time.ns_per_ms);
                     continue;
                 }
                 return err;
@@ -97,7 +98,7 @@ pub const TestApp = struct {
             total += n;
             if (std.mem.indexOf(u8, accumulated[0..total], needle) != null) return true;
             if (n == 0) {
-                std.Thread.sleep(50 * std.time.ns_per_ms);
+                pio.sleep(50 * std.time.ns_per_ms);
             }
         }
         return false;
@@ -116,17 +117,15 @@ pub const TestApp = struct {
     fn posixReadWithTimeout(self: *TestApp, buf: []u8, timeout_ms: u64) !usize {
         if (comptime builtin.os.tag == .windows) unreachable;
         // Use poll() for timeout on Unix
-        const c = @cImport({
-            @cInclude("poll.h");
-        });
-        var fds = [1]c.struct_pollfd{.{
+        const posix = std.posix;
+        var fds = [1]posix.pollfd{.{
             .fd = self.pty.master_fd,
-            .events = c.POLLIN,
+            .events = posix.POLL.IN,
             .revents = 0,
         }};
-        const poll_result = c.poll(&fds, 1, @intCast(timeout_ms));
-        if (poll_result <= 0) return 0; // timeout or error
-        if (fds[0].revents & c.POLLIN != 0) {
+        const poll_result = posix.poll(&fds, @intCast(timeout_ms)) catch return 0;
+        if (poll_result == 0) return 0; // timeout
+        if (fds[0].revents & posix.POLL.IN != 0) {
             return try self.pty.read(buf);
         }
         return 0;
@@ -142,17 +141,17 @@ pub const TestApp = struct {
             ?*std.os.windows.DWORD,
             ?*std.os.windows.DWORD,
             ?*std.os.windows.DWORD,
-        ) callconv(.c) std.os.windows.BOOL, .{ .name = "PeekNamedPipe", .library_name = "kernel32" });
+        ) callconv(.c) c_int, .{ .name = "PeekNamedPipe", .library_name = "kernel32" });
 
-        const deadline = std.time.milliTimestamp() + @as(i64, @intCast(timeout_ms));
-        while (std.time.milliTimestamp() < deadline) {
+        const deadline = pio.milliTimestamp() + @as(i64, @intCast(timeout_ms));
+        while (pio.milliTimestamp() < deadline) {
             var avail: std.os.windows.DWORD = 0;
             const peek_ok = PeekNamedPipe(self.pty.output_read, null, 0, null, &avail, null);
             if (peek_ok != 0 and avail > 0) {
                 return try self.pty.read(buf);
             }
             if (peek_ok == 0) return error.ReadFailed;
-            std.Thread.sleep(50 * std.time.ns_per_ms);
+            pio.sleep(50 * std.time.ns_per_ms);
         }
         return 0; // timeout
     }
@@ -193,7 +192,7 @@ fn tryAddShell(
     category: ShellCategory,
     norc_flag: ?[]const u8,
 ) void {
-    std.fs.cwd().access(path, .{}) catch return;
+    std.Io.Dir.cwd().access(pio.io, path, .{}) catch return;
     const owned_path = allocator.dupe(u8, path) catch return;
     shells.append(allocator, .{
         .name = name,
@@ -213,7 +212,7 @@ fn tryAddShellFromPath(
     category: ShellCategory,
     norc_flag: ?[]const u8,
 ) void {
-    const path_env = std.process.getEnvVarOwned(allocator, "PATH") catch return;
+    const path_env = pio.getEnvVarOwned(allocator, "PATH") catch return;
     defer allocator.free(path_env);
 
     const sep = if (comptime builtin.os.tag == .windows) ';' else ':';
@@ -226,7 +225,7 @@ fn tryAddShellFromPath(
         else
             std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir, name }) catch continue;
 
-        std.fs.cwd().access(exe_name, .{}) catch {
+        std.Io.Dir.cwd().access(pio.io, exe_name, .{}) catch {
             allocator.free(exe_name);
             continue;
         };

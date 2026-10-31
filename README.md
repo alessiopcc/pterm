@@ -75,7 +75,7 @@ Download from the [latest release](https://github.com/alessiopcc/pterm/releases/
 
 ### Build from source
 
-Requires [Zig 0.15.2](https://ziglang.org/download/):
+Requires [Zig 0.17.0](https://ziglang.org/download/):
 
 ```sh
 zig build --release=safe
@@ -199,6 +199,7 @@ reserved and cannot be overridden.
 | Split vertical | `Ctrl+Shift+V` |
 | Close pane | `Ctrl+Shift+X` |
 | Focus pane (direction) | `Ctrl+Shift+Arrow` |
+| Focus next/previous pane | `Ctrl+Shift+]` / `Ctrl+Shift+[` |
 | Resize pane (direction) | `Ctrl+Alt+Arrow` |
 | Swap pane (direction) | `Ctrl+Alt+Shift+Arrow` |
 | Zoom pane | `Ctrl+Shift+Z` |

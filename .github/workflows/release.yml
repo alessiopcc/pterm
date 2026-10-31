@@ -9,7 +9,7 @@ permissions:
   contents: write # Required for creating GitHub releases
 
 env:
-  ZIG_VERSION: "0.15.2"
+  ZIG_VERSION: "0.17.0"
 
 jobs:
   # Job 1: Windows x86_64
@@ -85,7 +85,7 @@ jobs:
 
   # Job 2: macOS ARM64
   build-macos-arm64:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
         with:

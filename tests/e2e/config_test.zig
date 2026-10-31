@@ -5,9 +5,10 @@
 /// 2. Config hot-reload (file watcher detects changes)
 /// 3. Missing config file uses defaults
 ///
-/// Uses std.process.Child to spawn the pterm binary for CLI-level tests,
+/// Uses std.process.run to spawn the pterm binary for CLI-level tests,
 /// and direct module import for unit-level config verification.
 const std = @import("std");
+const pio = @import("pio");
 const testing = std.testing;
 const builtin = @import("builtin");
 
@@ -30,12 +31,12 @@ test "config loading from custom path via CLI" {
         \\title = "PTermTestConfig"
         \\
     ;
-    const config_file = try tmp_dir.dir.createFile("config.toml", .{});
-    try config_file.writeAll(config_content);
-    config_file.close();
+    const config_file = try tmp_dir.dir.createFile(pio.io, "config.toml", .{});
+    try config_file.writeStreamingAll(pio.io, config_content);
+    config_file.close(pio.io);
 
     // Get the temp path as a string
-    const config_path = try tmp_dir.dir.realpathAlloc(allocator, "config.toml");
+    const config_path = try tmp_dir.dir.realPathFileAlloc(pio.io, "config.toml", allocator);
     defer allocator.free(config_path);
 
     // Try to find the pterm binary (may not be built yet)
@@ -46,24 +47,13 @@ test "config loading from custom path via CLI" {
     defer allocator.free(pterm_path);
 
     // Spawn: pterm --config <path> --dump-config
-    var child = std.process.Child.init(
-        &.{ pterm_path, "--config", config_path, "--dump-config" },
-        allocator,
-    );
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-
-    try child.spawn();
-
-    // Read stdout with timeout
-    const stdout = child.stdout.?.readToEndAlloc(allocator, 64 * 1024) catch "";
-    defer if (stdout.len > 0) allocator.free(stdout);
-
-    const result = child.wait() catch {
+    const result = runPterm(allocator, &.{ pterm_path, "--config", config_path, "--dump-config" }, null) catch {
         std.log.warn("pterm process failed to complete", .{});
         return;
     };
-    _ = result;
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+    const stdout = result.stdout;
 
     // If we got output, check for the custom value
     if (stdout.len > 0) {
@@ -87,28 +77,18 @@ test "missing config file uses defaults" {
     defer allocator.free(pterm_path);
 
     // Spawn with a nonexistent config path
-    var child = std.process.Child.init(
-        &.{ pterm_path, "--config", "/tmp/nonexistent_pterm_e2e_config/config.toml", "--dump-config" },
-        allocator,
-    );
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-
-    try child.spawn();
-
-    const stdout = child.stdout.?.readToEndAlloc(allocator, 64 * 1024) catch "";
-    defer if (stdout.len > 0) allocator.free(stdout);
-
-    const result = child.wait() catch {
+    const result = runPterm(allocator, &.{ pterm_path, "--config", "/tmp/nonexistent_pterm_e2e_config/config.toml", "--dump-config" }, null) catch {
         std.log.warn("pterm process failed -- this may be expected if display is required", .{});
         return;
     };
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
 
     // Either exits 0 with defaults, or exits non-zero with error -- both are acceptable
-    if (result.Exited == 0) {
+    if (exitCode(result.term) == 0) {
         std.log.info("PASS: missing config -> defaults (exit code 0)", .{});
     } else {
-        std.log.info("PASS: missing config -> error exit (exit code {})", .{result.Exited});
+        std.log.info("PASS: missing config -> error exit ({f})", .{result.term});
     }
 }
 
@@ -123,11 +103,11 @@ test "config hot-reload detects file changes" {
     defer tmp_dir.cleanup();
 
     const initial_content = "[font]\nsize = 14.0\n";
-    const config_file = try tmp_dir.dir.createFile("config.toml", .{});
-    try config_file.writeAll(initial_content);
-    config_file.close();
+    const config_file = try tmp_dir.dir.createFile(pio.io, "config.toml", .{});
+    try config_file.writeStreamingAll(pio.io, initial_content);
+    config_file.close(pio.io);
 
-    const config_path = try tmp_dir.dir.realpathAlloc(allocator, "config.toml");
+    const config_path = try tmp_dir.dir.realPathFileAlloc(pio.io, "config.toml", allocator);
     defer allocator.free(config_path);
 
     // Track if callback was fired
@@ -136,19 +116,19 @@ test "config hot-reload detects file changes" {
     _ = callback_ptr;
 
     // Verify the file exists and has initial content
-    const read_content = try tmp_dir.dir.readFileAlloc(allocator, "config.toml", 4096);
+    const read_content = try tmp_dir.dir.readFileAlloc(pio.io, "config.toml", allocator, .limited(4096));
     defer allocator.free(read_content);
     try testing.expect(std.mem.indexOf(u8, read_content, "14.0") != null);
 
     // Modify the config file (simulate hot-reload trigger)
-    std.Thread.sleep(100 * std.time.ns_per_ms);
+    pio.sleep(100 * std.time.ns_per_ms);
     const modified_content = "[font]\nsize = 22.0\n";
-    const mod_file = try tmp_dir.dir.createFile("config.toml", .{});
-    try mod_file.writeAll(modified_content);
-    mod_file.close();
+    const mod_file = try tmp_dir.dir.createFile(pio.io, "config.toml", .{});
+    try mod_file.writeStreamingAll(pio.io, modified_content);
+    mod_file.close(pio.io);
 
     // Verify the file was modified
-    const new_content = try tmp_dir.dir.readFileAlloc(allocator, "config.toml", 4096);
+    const new_content = try tmp_dir.dir.readFileAlloc(pio.io, "config.toml", allocator, .limited(4096));
     defer allocator.free(new_content);
     try testing.expect(std.mem.indexOf(u8, new_content, "22.0") != null);
 
@@ -165,9 +145,31 @@ fn findPtermBinary(allocator: std.mem.Allocator) ?[]u8 {
         [_][]const u8{ "zig-out/bin/pterm", "./zig-out/bin/pterm" };
 
     for (&candidates) |path| {
-        if (std.fs.cwd().access(path, .{})) |_| {
+        if (std.Io.Dir.cwd().access(pio.io, path, .{})) |_| {
             return allocator.dupe(u8, path) catch null;
         } else |_| {}
     }
     return null;
+}
+
+/// Run pterm to completion, capturing stdout/stderr. Caller frees both.
+fn runPterm(
+    allocator: std.mem.Allocator,
+    argv: []const []const u8,
+    environ_map: ?*const std.process.Environ.Map,
+) !std.process.RunResult {
+    return std.process.run(allocator, pio.io, .{
+        .argv = argv,
+        .environ_map = environ_map,
+        .stdout_limit = .limited(64 * 1024),
+        .stderr_limit = .limited(64 * 1024),
+    });
+}
+
+/// Exit code of a finished process, or null if it did not exit normally.
+fn exitCode(term: std.process.Child.Term) ?u8 {
+    return switch (term) {
+        .exited => |code| code,
+        else => null,
+    };
 }

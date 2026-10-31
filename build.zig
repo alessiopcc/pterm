@@ -1,16 +1,36 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
-    const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    // Pin the GNU ABI on Windows when none was requested. ghostty defaults an
+    // unspecified Windows ABI to MSVC, which would compile its C deps (wuffs)
+    // against MSVC while pterm links MinGW headers -> mismatched builds.
+    const target = target: {
+        var t = b.standardTargetOptions(.{});
+        if (t.result.os.tag == .windows and t.query.abi == null) {
+            var query = t.query;
+            query.abi = .gnu;
+            t = b.resolveTargetQuery(query);
+        }
+        break :target t;
+    };
+
+    // Process-wide std.Io helpers; imported into every module via createModule.
+    pio_module = b.createModule(.{
+        .root_source_file = b.path("src/platform/pio.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
 
     // Resolve ghostty dependency once (simd disabled for Windows C++ toolchain compat)
     const ghostty_dep = b.lazyDependency("ghostty", .{
+        .target = target,
+        .optimize = optimize,
         .simd = false,
     });
 
     // Main executable
-    const exe_mod = b.createModule(.{
+    const exe_mod = createModule(b, .{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
@@ -32,13 +52,13 @@ pub fn build(b: *std.Build) void {
         .root_module = exe_mod,
     });
     if (target.result.os.tag == .windows) {
-        if (!console) exe.subsystem = .Windows;
+        if (!console) exe.subsystem = .windows;
         // Generate pterm.rc with a VERSIONINFO block sourced from `version_str`
         // so the exe's FileVersion metadata tracks the release version. The MSI
         // binds its ProductVersion to this via !(bind.FileVersion.PTermExe);
         // without it, every build looked like 0.0.0.0 and MajorUpgrade refused.
         const rc_file = generateRcFile(b, version_str);
-        exe.addWin32ResourceFile(.{
+        exe.root_module.addWin32ResourceFile(.{
             .file = rc_file,
             .include_paths = &.{b.path("assets")},
         });
@@ -48,9 +68,7 @@ pub fn build(b: *std.Build) void {
     // Run step
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
+    run_cmd.addPassthruArgs();
     const run_step = b.step("run", "Run the application");
     run_step.dependOn(&run_cmd.step);
 
@@ -58,14 +76,14 @@ pub fn build(b: *std.Build) void {
     const ghostty_vt_mod = if (ghostty_dep) |dep| dep.module("ghostty-vt") else null;
 
     // Core observer module (no ghostty-vt dependency)
-    const observer_mod = b.createModule(.{
+    const observer_mod = createModule(b, .{
         .root_source_file = b.path("src/core/observer.zig"),
         .target = target,
         .optimize = optimize,
     });
 
     // Core cell module (depends on ghostty-vt)
-    const cell_mod = b.createModule(.{
+    const cell_mod = createModule(b, .{
         .root_source_file = b.path("src/core/cell.zig"),
         .target = target,
         .optimize = optimize,
@@ -75,7 +93,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // Core terminal module (depends on ghostty-vt and observer)
-    const terminal_mod = b.createModule(.{
+    const terminal_mod = createModule(b, .{
         .root_source_file = b.path("src/core/terminal.zig"),
         .target = target,
         .optimize = optimize,
@@ -86,35 +104,35 @@ pub fn build(b: *std.Build) void {
     terminal_mod.addImport("observer.zig", observer_mod);
 
     // Core buffer module (scrollback ring buffer)
-    const buffer_mod = b.createModule(.{
+    const buffer_mod = createModule(b, .{
         .root_source_file = b.path("src/core/buffer.zig"),
         .target = target,
         .optimize = optimize,
     });
 
     // Core selection module
-    const selection_mod = b.createModule(.{
+    const selection_mod = createModule(b, .{
         .root_source_file = b.path("src/core/selection.zig"),
         .target = target,
         .optimize = optimize,
     });
 
     // Core mouse module (SGR mouse protocol, CORE-10)
-    const mouse_mod = b.createModule(.{
+    const mouse_mod = createModule(b, .{
         .root_source_file = b.path("src/core/mouse.zig"),
         .target = target,
         .optimize = optimize,
     });
 
     // TermIO mailbox module (SPSC ring buffer)
-    const mailbox_mod = b.createModule(.{
+    const mailbox_mod = createModule(b, .{
         .root_source_file = b.path("src/termio/mailbox.zig"),
         .target = target,
         .optimize = optimize,
     });
 
     // TermIO parser module
-    const parser_mod = b.createModule(.{
+    const parser_mod = createModule(b, .{
         .root_source_file = b.path("src/termio/parser.zig"),
         .target = target,
         .optimize = optimize,
@@ -126,7 +144,7 @@ pub fn build(b: *std.Build) void {
     parser_mod.addImport("mailbox", mailbox_mod);
 
     // TermIO coordinator module
-    const termio_mod = b.createModule(.{
+    const termio_mod = createModule(b, .{
         .root_source_file = b.path("src/termio/termio.zig"),
         .target = target,
         .optimize = optimize,
@@ -140,21 +158,22 @@ pub fn build(b: *std.Build) void {
     termio_mod.addImport("parser", parser_mod);
 
     // Platform modules
-    const platform_pty_mod = b.createModule(.{
+    const platform_pty_mod = createModule(b, .{
         .root_source_file = b.path("src/platform/pty.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
     });
+    addCImport(b, platform_pty_mod, "c_posix_pty", "posix_pty.h", target.result.os.tag != .windows, &.{});
 
-    const platform_shell_mod = b.createModule(.{
+    const platform_shell_mod = createModule(b, .{
         .root_source_file = b.path("src/platform/shell.zig"),
         .target = target,
         .optimize = optimize,
     });
 
     // TermIO reader module (PTY read thread, depends on platform + mailbox)
-    const reader_mod = b.createModule(.{
+    const reader_mod = createModule(b, .{
         .root_source_file = b.path("src/termio/reader.zig"),
         .target = target,
         .optimize = optimize,
@@ -184,27 +203,31 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // freetype: Font rasterization C library
-    const freetype_dep = b.lazyDependency("freetype", .{
+    // freetype + harfbuzz: C libraries with Zig bindings, taken from ghostty's
+    // bundled pkg/ (upstream allyourcodebase packages no longer ship bindings).
+    // enable-libpng matches the freetype instance harfbuzz builds against, so
+    // both resolve to the same artifact.
+    const freetype_dep = if (ghostty_dep) |dep| dep.builder.lazyDependency("freetype", .{
         .target = target,
         .optimize = optimize,
-    });
-
-    // harfbuzz: Text shaping C library
-    const harfbuzz_dep = b.lazyDependency("harfbuzz", .{
+        .@"enable-libpng" = true,
+    }) else null;
+    const harfbuzz_dep = if (ghostty_dep) |dep| dep.builder.lazyDependency("harfbuzz", .{
         .target = target,
         .optimize = optimize,
-    });
+    }) else null;
+    const freetype_lib = if (freetype_dep) |dep| dep.artifact("freetype") else null;
+    const harfbuzz_lib = if (harfbuzz_dep) |dep| dep.artifact("harfbuzz") else null;
 
     // Renderer types module (Color, CellInstance, RenderState, etc.)
-    const renderer_types_mod = b.createModule(.{
+    const renderer_types_mod = createModule(b, .{
         .root_source_file = b.path("src/renderer/types.zig"),
         .target = target,
         .optimize = optimize,
     });
 
     // Renderer interface module (Renderer tagged union)
-    const renderer_mod = b.createModule(.{
+    const renderer_mod = createModule(b, .{
         .root_source_file = b.path("src/renderer/Renderer.zig"),
         .target = target,
         .optimize = optimize,
@@ -212,21 +235,21 @@ pub fn build(b: *std.Build) void {
     renderer_mod.addImport("types", renderer_types_mod);
 
     // Shader source strings module
-    const shaders_mod = b.createModule(.{
+    const shaders_mod = createModule(b, .{
         .root_source_file = b.path("src/renderer/opengl/shaders.zig"),
         .target = target,
         .optimize = optimize,
     });
 
     // Font types module (GlyphBitmap, GlyphKey, AtlasRegion, FontMetrics)
-    const font_types_mod = b.createModule(.{
+    const font_types_mod = createModule(b, .{
         .root_source_file = b.path("src/font/types.zig"),
         .target = target,
         .optimize = optimize,
     });
 
     // Shader program compilation module
-    const program_mod = b.createModule(.{
+    const program_mod = createModule(b, .{
         .root_source_file = b.path("src/renderer/opengl/Program.zig"),
         .target = target,
         .optimize = optimize,
@@ -234,14 +257,14 @@ pub fn build(b: *std.Build) void {
     program_mod.addImport("gl", gl_bindings);
 
     // Layout types module (lightweight Rect duplicate for renderer, avoids circular dep)
-    const layout_types_mod = b.createModule(.{
+    const layout_types_mod = createModule(b, .{
         .root_source_file = b.path("src/renderer/layout_types.zig"),
         .target = target,
         .optimize = optimize,
     });
 
     // OpenGL backend module
-    const opengl_backend_mod = b.createModule(.{
+    const opengl_backend_mod = createModule(b, .{
         .root_source_file = b.path("src/renderer/opengl/Backend.zig"),
         .target = target,
         .optimize = optimize,
@@ -280,24 +303,26 @@ pub fn build(b: *std.Build) void {
     // -------------------------------------------------------
 
     // FreeType rasterizer backend (Linux/Windows)
-    const rasterizer_freetype_mod = b.createModule(.{
+    const rasterizer_freetype_mod = createModule(b, .{
         .root_source_file = b.path("src/font/rasterizer_freetype.zig"),
         .target = target,
         .optimize = optimize,
     });
     rasterizer_freetype_mod.addImport("font_types", font_types_mod);
+    addCImport(b, rasterizer_freetype_mod, "c", "freetype.h", true, &.{freetype_lib});
     if (freetype_dep) |dep| {
         rasterizer_freetype_mod.addImport("freetype", dep.module("freetype"));
         rasterizer_freetype_mod.linkLibrary(dep.artifact("freetype"));
     }
 
     // CoreText rasterizer backend (macOS only -- comptime excluded on other platforms)
-    const rasterizer_coretext_mod = b.createModule(.{
+    const rasterizer_coretext_mod = createModule(b, .{
         .root_source_file = b.path("src/font/rasterizer_coretext.zig"),
         .target = target,
         .optimize = optimize,
     });
     rasterizer_coretext_mod.addImport("font_types", font_types_mod);
+    addCImport(b, rasterizer_coretext_mod, "c", "coretext_freetype.h", target.result.os.tag == .macos, &.{freetype_lib});
     if (freetype_dep) |dep| {
         rasterizer_coretext_mod.linkLibrary(dep.artifact("freetype"));
     }
@@ -308,7 +333,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // Platform-dispatched rasterizer (comptime selects backend)
-    const rasterizer_mod = b.createModule(.{
+    const rasterizer_mod = createModule(b, .{
         .root_source_file = b.path("src/font/Rasterizer.zig"),
         .target = target,
         .optimize = optimize,
@@ -317,7 +342,7 @@ pub fn build(b: *std.Build) void {
     rasterizer_mod.addImport("rasterizer_coretext.zig", rasterizer_coretext_mod);
 
     // GlyphAtlas module (shelf-packed texture atlas)
-    const atlas_mod = b.createModule(.{
+    const atlas_mod = createModule(b, .{
         .root_source_file = b.path("src/font/GlyphAtlas.zig"),
         .target = target,
         .optimize = optimize,
@@ -325,14 +350,14 @@ pub fn build(b: *std.Build) void {
     atlas_mod.addImport("font_types", font_types_mod);
 
     // Windows font discovery module
-    const discovery_windows_mod = b.createModule(.{
+    const discovery_windows_mod = createModule(b, .{
         .root_source_file = b.path("src/font/discovery_windows.zig"),
         .target = target,
         .optimize = optimize,
     });
 
     // Fontconfig font discovery module (Linux)
-    const discovery_fontconfig_mod = b.createModule(.{
+    const discovery_fontconfig_mod = createModule(b, .{
         .root_source_file = b.path("src/font/discovery_fontconfig.zig"),
         .target = target,
         .optimize = optimize,
@@ -340,9 +365,10 @@ pub fn build(b: *std.Build) void {
     if (target.result.os.tag == .linux) {
         discovery_fontconfig_mod.linkSystemLibrary("fontconfig", .{});
     }
+    addCImport(b, discovery_fontconfig_mod, "c", "fontconfig.h", target.result.os.tag == .linux, &.{});
 
     // CoreText font discovery module (macOS)
-    const discovery_coretext_mod = b.createModule(.{
+    const discovery_coretext_mod = createModule(b, .{
         .root_source_file = b.path("src/font/discovery_coretext.zig"),
         .target = target,
         .optimize = optimize,
@@ -351,9 +377,10 @@ pub fn build(b: *std.Build) void {
         discovery_coretext_mod.linkFramework("CoreText", .{});
         discovery_coretext_mod.linkFramework("CoreFoundation", .{});
     }
+    addCImport(b, discovery_coretext_mod, "c", "coretext.h", target.result.os.tag == .macos, &.{});
 
     // Platform-dispatched font discovery
-    const discovery_mod = b.createModule(.{
+    const discovery_mod = createModule(b, .{
         .root_source_file = b.path("src/font/discovery.zig"),
         .target = target,
         .optimize = optimize,
@@ -368,7 +395,7 @@ pub fn build(b: *std.Build) void {
     discovery_coretext_mod.addImport("discovery.zig", discovery_mod);
 
     // Tofu box renderer module
-    const tofu_mod = b.createModule(.{
+    const tofu_mod = createModule(b, .{
         .root_source_file = b.path("src/font/tofu.zig"),
         .target = target,
         .optimize = optimize,
@@ -376,7 +403,7 @@ pub fn build(b: *std.Build) void {
     tofu_mod.addImport("font_types", font_types_mod);
 
     // FontGrid module (font collection with fallback chain)
-    const fontgrid_mod = b.createModule(.{
+    const fontgrid_mod = createModule(b, .{
         .root_source_file = b.path("src/font/FontGrid.zig"),
         .target = target,
         .optimize = optimize,
@@ -387,7 +414,7 @@ pub fn build(b: *std.Build) void {
     fontgrid_mod.addImport("discovery", discovery_mod);
     fontgrid_mod.addImport("tofu", tofu_mod);
     // Bundled Symbols Nerd Font Mono (OFL-licensed) embedded for fallback
-    const bundled_nerd_font_mod = b.createModule(.{
+    const bundled_nerd_font_mod = createModule(b, .{
         .root_source_file = b.path("assets/fonts/bundled_nerd_font.zig"),
         .target = target,
         .optimize = optimize,
@@ -398,12 +425,13 @@ pub fn build(b: *std.Build) void {
     }
 
     // Shaper module (HarfBuzz text shaping)
-    const shaper_mod = b.createModule(.{
+    const shaper_mod = createModule(b, .{
         .root_source_file = b.path("src/font/Shaper.zig"),
         .target = target,
         .optimize = optimize,
     });
     shaper_mod.addImport("font_types", font_types_mod);
+    addCImport(b, shaper_mod, "c", "harfbuzz.h", true, &.{ freetype_lib, harfbuzz_lib });
     if (freetype_dep) |dep| {
         shaper_mod.linkLibrary(dep.artifact("freetype"));
     }
@@ -416,12 +444,13 @@ pub fn build(b: *std.Build) void {
     fontgrid_mod.addImport("shaper", shaper_mod);
 
     // DirectWrite emoji rasterizer (Windows only)
-    const dwrite_emoji_mod = b.createModule(.{
+    const dwrite_emoji_mod = createModule(b, .{
         .root_source_file = b.path("src/font/dwrite_emoji.zig"),
         .target = target,
         .optimize = optimize,
     });
     dwrite_emoji_mod.addImport("font_types", font_types_mod);
+    addCImportFile(b, dwrite_emoji_mod, "c", b.path("src/font/dwrite_emoji.h"), target.result.os.tag == .windows, &.{});
     if (target.result.os.tag == .windows) {
         dwrite_emoji_mod.addCSourceFile(.{
             .file = b.path("src/font/dwrite_emoji.cpp"),
@@ -439,7 +468,7 @@ pub fn build(b: *std.Build) void {
     // -------------------------------------------------------
 
     // GLFW window wrapper
-    const window_mod = b.createModule(.{
+    const window_mod = createModule(b, .{
         .root_source_file = b.path("src/platform/window.zig"),
         .target = target,
         .optimize = optimize,
@@ -450,7 +479,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // Window icon (embedded RGBA pixel data for taskbar/title bar)
-    const icon_mod = b.createModule(.{
+    const icon_mod = createModule(b, .{
         .root_source_file = b.path("src/platform/icon.zig"),
         .target = target,
         .optimize = optimize,
@@ -461,7 +490,7 @@ pub fn build(b: *std.Build) void {
     window_mod.addImport("icon", icon_mod);
 
     // Input encoder (GLFW keys -> VT sequences)
-    const input_encoder_mod = b.createModule(.{
+    const input_encoder_mod = createModule(b, .{
         .root_source_file = b.path("src/surface/InputEncoder.zig"),
         .target = target,
         .optimize = optimize,
@@ -471,7 +500,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // RenderState builder (terminal cells -> GPU instances)
-    const render_state_mod = b.createModule(.{
+    const render_state_mod = createModule(b, .{
         .root_source_file = b.path("src/surface/RenderState.zig"),
         .target = target,
         .optimize = optimize,
@@ -501,7 +530,7 @@ pub fn build(b: *std.Build) void {
     });
 
     // Config loader module (TOML file loading + import chain)
-    const config_loader_mod = b.createModule(.{
+    const config_loader_mod = createModule(b, .{
         .root_source_file = b.path("src/config/loader.zig"),
         .target = target,
         .optimize = optimize,
@@ -511,28 +540,28 @@ pub fn build(b: *std.Build) void {
     }
 
     // Config defaults module (platform path detection + dump-config)
-    const config_defaults_mod = b.createModule(.{
+    const config_defaults_mod = createModule(b, .{
         .root_source_file = b.path("src/config/defaults.zig"),
         .target = target,
         .optimize = optimize,
     });
 
     // Config CLI module (argument parsing + overrides)
-    const config_cli_mod = b.createModule(.{
+    const config_cli_mod = createModule(b, .{
         .root_source_file = b.path("src/config/cli.zig"),
         .target = target,
         .optimize = optimize,
     });
 
     // Config env module (TERMP_* environment variable overrides)
-    const config_env_mod = b.createModule(.{
+    const config_env_mod = createModule(b, .{
         .root_source_file = b.path("src/config/env.zig"),
         .target = target,
         .optimize = optimize,
     });
 
     // App config module (full TOML-based config system)
-    const config_mod = b.createModule(.{
+    const config_mod = createModule(b, .{
         .root_source_file = b.path("src/config/Config.zig"),
         .target = target,
         .optimize = optimize,
@@ -549,7 +578,7 @@ pub fn build(b: *std.Build) void {
     config_env_mod.addImport("Config.zig", config_mod);
 
     // Surface coordinator module (wires TermIO + Renderer + FontGrid + Input)
-    const surface_mod = b.createModule(.{
+    const surface_mod = createModule(b, .{
         .root_source_file = b.path("src/surface/Surface.zig"),
         .target = target,
         .optimize = optimize,
@@ -580,7 +609,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // App lifecycle module (init, run, deinit)
-    const app_mod = b.createModule(.{
+    const app_mod = createModule(b, .{
         .root_source_file = b.path("src/app/App.zig"),
         .target = target,
         .optimize = optimize,
@@ -627,7 +656,7 @@ pub fn build(b: *std.Build) void {
     // Layout module (binary tree pane model, tabs)
     // -------------------------------------------------------
 
-    const layout_mod = b.createModule(.{
+    const layout_mod = createModule(b, .{
         .root_source_file = b.path("src/layout/layout.zig"),
         .target = target,
         .optimize = optimize,
@@ -644,14 +673,14 @@ pub fn build(b: *std.Build) void {
     // -------------------------------------------------------
 
     // Keybinding types, parser, map builder, reserved keys
-    const keybindings_mod = b.createModule(.{
+    const keybindings_mod = createModule(b, .{
         .root_source_file = b.path("src/config/keybindings.zig"),
         .target = target,
         .optimize = optimize,
     });
 
     // Keybinding TUI (interactive configurator)
-    const keybinding_tui_mod = b.createModule(.{
+    const keybinding_tui_mod = createModule(b, .{
         .root_source_file = b.path("src/config/keybinding_tui.zig"),
         .target = target,
         .optimize = optimize,
@@ -666,7 +695,7 @@ pub fn build(b: *std.Build) void {
     exe_mod.addImport("keybinding_tui", keybinding_tui_mod);
 
     // Crash handler module (Zig panic log + Windows SEH minidump)
-    const crash_mod = b.createModule(.{
+    const crash_mod = createModule(b, .{
         .root_source_file = b.path("src/platform/crash.zig"),
         .target = target,
         .optimize = optimize,
@@ -677,7 +706,7 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
 
     // VT compliance tests
-    const test_mod = b.createModule(.{
+    const test_mod = createModule(b, .{
         .root_source_file = b.path("tests/vt_compliance.zig"),
         .target = target,
         .optimize = optimize,
@@ -700,7 +729,7 @@ pub fn build(b: *std.Build) void {
     // PTY tests (separate step due to ConPTY/test-runner interaction on Windows)
     // Run with: zig build test-pty
     const pty_test_step = b.step("test-pty", "Run PTY integration tests");
-    const pty_test_mod = b.createModule(.{
+    const pty_test_mod = createModule(b, .{
         .root_source_file = b.path("tests/pty_test.zig"),
         .target = target,
         .optimize = optimize,
@@ -718,7 +747,7 @@ pub fn build(b: *std.Build) void {
     pty_test_step.dependOn(&run_pty_tests.step);
 
     // Buffer tests (scrollback ring buffer)
-    const buffer_test_mod = b.createModule(.{
+    const buffer_test_mod = createModule(b, .{
         .root_source_file = b.path("tests/buffer_test.zig"),
         .target = target,
         .optimize = optimize,
@@ -732,7 +761,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_buffer_tests.step);
 
     // Mouse and selection tests
-    const mouse_test_mod = b.createModule(.{
+    const mouse_test_mod = createModule(b, .{
         .root_source_file = b.path("tests/mouse_test.zig"),
         .target = target,
         .optimize = optimize,
@@ -748,7 +777,7 @@ pub fn build(b: *std.Build) void {
 
     // Renderer types tests (Color, palette, CellInstance, FrameScheduler)
     const renderer_types_tests = b.addTest(.{
-        .root_module = b.createModule(.{
+        .root_module = createModule(b, .{
             .root_source_file = b.path("src/renderer/types.zig"),
             .target = target,
             .optimize = optimize,
@@ -758,7 +787,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_renderer_types_tests.step);
 
     // Font pipeline tests (GlyphAtlas, Rasterizer)
-    const font_test_mod = b.createModule(.{
+    const font_test_mod = createModule(b, .{
         .root_source_file = b.path("tests/font_test.zig"),
         .target = target,
         .optimize = optimize,
@@ -781,7 +810,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_font_tests.step);
 
     // Renderer tests (ortho projection, CellInstance size, Color, palette)
-    const renderer_test_mod = b.createModule(.{
+    const renderer_test_mod = createModule(b, .{
         .root_source_file = b.path("tests/renderer_test.zig"),
         .target = target,
         .optimize = optimize,
@@ -796,7 +825,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_renderer_tests.step);
 
     // InputEncoder tests (inline tests need zglfw import)
-    const input_encoder_test_mod = b.createModule(.{
+    const input_encoder_test_mod = createModule(b, .{
         .root_source_file = b.path("src/surface/InputEncoder.zig"),
         .target = target,
         .optimize = optimize,
@@ -811,7 +840,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_input_encoder_tests.step);
 
     // Shaper tests (HarfBuzz buffer tests)
-    const shaper_test_mod = b.createModule(.{
+    const shaper_test_mod = createModule(b, .{
         .root_source_file = b.path("tests/shaper_test.zig"),
         .target = target,
         .optimize = optimize,
@@ -830,7 +859,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_shaper_tests.step);
 
     // Config system tests
-    const config_test_mod = b.createModule(.{
+    const config_test_mod = createModule(b, .{
         .root_source_file = b.path("tests/config_test.zig"),
         .target = target,
         .optimize = optimize,
@@ -851,7 +880,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_config_tests.step);
 
     // RenderState tests (shaping-aware rendering)
-    const render_state_test_mod = b.createModule(.{
+    const render_state_test_mod = createModule(b, .{
         .root_source_file = b.path("tests/render_state_test.zig"),
         .target = target,
         .optimize = optimize,
@@ -868,7 +897,7 @@ pub fn build(b: *std.Build) void {
     // -------------------------------------------------------
 
     // Keybinding inline tests (keybindings.zig)
-    const keybinding_inline_test_mod = b.createModule(.{
+    const keybinding_inline_test_mod = createModule(b, .{
         .root_source_file = b.path("src/config/keybindings.zig"),
         .target = target,
         .optimize = optimize,
@@ -878,7 +907,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_keybinding_inline_tests.step);
 
     // Keybinding TUI inline tests (keybinding_tui.zig)
-    const keybinding_tui_test_mod = b.createModule(.{
+    const keybinding_tui_test_mod = createModule(b, .{
         .root_source_file = b.path("src/config/keybinding_tui.zig"),
         .target = target,
         .optimize = optimize,
@@ -889,7 +918,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_keybinding_tui_tests.step);
 
     // Keybinding external tests (tests/keybinding_test.zig)
-    const keybinding_test_mod = b.createModule(.{
+    const keybinding_test_mod = createModule(b, .{
         .root_source_file = b.path("tests/keybinding_test.zig"),
         .target = target,
         .optimize = optimize,
@@ -904,7 +933,7 @@ pub fn build(b: *std.Build) void {
     // Layout tests (binary tree pane model, tabs)
     // -------------------------------------------------------
 
-    const layout_test_mod = b.createModule(.{
+    const layout_test_mod = createModule(b, .{
         .root_source_file = b.path("src/layout/layout.zig"),
         .target = target,
         .optimize = optimize,
@@ -918,7 +947,7 @@ pub fn build(b: *std.Build) void {
     // -------------------------------------------------------
 
     // Theme module (hex parsing, RendererPalette, palette conversion)
-    const theme_mod = b.createModule(.{
+    const theme_mod = createModule(b, .{
         .root_source_file = b.path("src/config/theme.zig"),
         .target = target,
         .optimize = optimize,
@@ -926,7 +955,7 @@ pub fn build(b: *std.Build) void {
     theme_mod.addImport("renderer_types", renderer_types_mod);
 
     // Built-in themes module
-    const builtin_themes_mod = b.createModule(.{
+    const builtin_themes_mod = createModule(b, .{
         .root_source_file = b.path("src/config/builtin_themes.zig"),
         .target = target,
         .optimize = optimize,
@@ -945,14 +974,14 @@ pub fn build(b: *std.Build) void {
     render_state_mod.addImport("theme", theme_mod);
 
     // File watcher module (config hot-reload)
-    const watcher_mod = b.createModule(.{
+    const watcher_mod = createModule(b, .{
         .root_source_file = b.path("src/config/watcher.zig"),
         .target = target,
         .optimize = optimize,
     });
 
     // Theme tests
-    const theme_test_mod = b.createModule(.{
+    const theme_test_mod = createModule(b, .{
         .root_source_file = b.path("tests/theme_test.zig"),
         .target = target,
         .optimize = optimize,
@@ -978,20 +1007,20 @@ pub fn build(b: *std.Build) void {
     // Search modules (scrollback search)
     // -------------------------------------------------------
 
-    const search_state_mod = b.createModule(.{
+    const search_state_mod = createModule(b, .{
         .root_source_file = b.path("src/search/SearchState.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    const search_overlay_mod = b.createModule(.{
+    const search_overlay_mod = createModule(b, .{
         .root_source_file = b.path("src/search/SearchOverlay.zig"),
         .target = target,
         .optimize = optimize,
     });
     search_overlay_mod.addImport("SearchState.zig", search_state_mod);
 
-    const matcher_mod = b.createModule(.{
+    const matcher_mod = createModule(b, .{
         .root_source_file = b.path("src/search/matcher.zig"),
         .target = target,
         .optimize = optimize,
@@ -999,7 +1028,7 @@ pub fn build(b: *std.Build) void {
     matcher_mod.addImport("SearchState.zig", search_state_mod);
 
     // Barrel module for app import
-    const search_mod = b.createModule(.{
+    const search_mod = createModule(b, .{
         .root_source_file = b.path("src/search/search.zig"),
         .target = target,
         .optimize = optimize,
@@ -1029,26 +1058,26 @@ pub fn build(b: *std.Build) void {
     // URL detection modules (clickable URLs)
     // -------------------------------------------------------
 
-    const url_detector_mod = b.createModule(.{
+    const url_detector_mod = createModule(b, .{
         .root_source_file = b.path("src/url/UrlDetector.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    const url_state_mod = b.createModule(.{
+    const url_state_mod = createModule(b, .{
         .root_source_file = b.path("src/url/UrlState.zig"),
         .target = target,
         .optimize = optimize,
     });
     url_state_mod.addImport("UrlDetector.zig", url_detector_mod);
 
-    const open_url_mod = b.createModule(.{
+    const open_url_mod = createModule(b, .{
         .root_source_file = b.path("src/platform/open_url.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    const version_check_mod = b.createModule(.{
+    const version_check_mod = createModule(b, .{
         .root_source_file = b.path("src/platform/version_check.zig"),
         .target = target,
         .optimize = optimize,
@@ -1060,7 +1089,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_version_check_tests.step);
 
     // Barrel module for app import
-    const url_mod = b.createModule(.{
+    const url_mod = createModule(b, .{
         .root_source_file = b.path("src/url/url.zig"),
         .target = target,
         .optimize = optimize,
@@ -1091,13 +1120,13 @@ pub fn build(b: *std.Build) void {
     // Bell notification modules
     // -------------------------------------------------------
 
-    const bell_state_mod = b.createModule(.{
+    const bell_state_mod = createModule(b, .{
         .root_source_file = b.path("src/bell/BellState.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    const system_beep_mod = b.createModule(.{
+    const system_beep_mod = createModule(b, .{
         .root_source_file = b.path("src/platform/system_beep.zig"),
         .target = target,
         .optimize = optimize,
@@ -1121,13 +1150,13 @@ pub fn build(b: *std.Build) void {
     // Agent monitoring modules
     // -------------------------------------------------------
 
-    const agent_state_mod = b.createModule(.{
+    const agent_state_mod = createModule(b, .{
         .root_source_file = b.path("src/agent/AgentState.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    const process_monitor_mod = b.createModule(.{
+    const process_monitor_mod = createModule(b, .{
         .root_source_file = b.path("src/agent/ProcessMonitor.zig"),
         .target = target,
         .optimize = optimize,
@@ -1151,7 +1180,7 @@ pub fn build(b: *std.Build) void {
     // Notification modules
     // -------------------------------------------------------
 
-    const notification_mod = b.createModule(.{
+    const notification_mod = createModule(b, .{
         .root_source_file = b.path("src/platform/notification.zig"),
         .target = target,
         .optimize = optimize,
@@ -1159,6 +1188,7 @@ pub fn build(b: *std.Build) void {
         // without it the test build can't find the SDK headers.
         .link_libc = target.result.os.tag == .windows,
     });
+    addCImportFile(b, notification_mod, "c_win_toast", b.path("src/platform/win_toast.h"), target.result.os.tag == .windows, &.{});
     if (target.result.os.tag == .windows) {
         notification_mod.addCSourceFile(.{
             .file = b.path("src/platform/win_toast.cpp"),
@@ -1174,7 +1204,7 @@ pub fn build(b: *std.Build) void {
         // see win_toast.cpp for the rationale.
     }
 
-    const notification_manager_mod = b.createModule(.{
+    const notification_manager_mod = createModule(b, .{
         .root_source_file = b.path("src/agent/notification_manager.zig"),
         .target = target,
         .optimize = optimize,
@@ -1199,7 +1229,7 @@ pub fn build(b: *std.Build) void {
     // Status bar renderer module
     // -------------------------------------------------------
 
-    const status_bar_renderer_mod = b.createModule(.{
+    const status_bar_renderer_mod = createModule(b, .{
         .root_source_file = b.path("src/layout/StatusBarRenderer.zig"),
         .target = target,
         .optimize = optimize,
@@ -1220,7 +1250,7 @@ pub fn build(b: *std.Build) void {
     const e2e_test_step = b.step("test-e2e", "Run E2E platform tests (spawns real shells)");
 
     // E2E harness module (shared across E2E tests)
-    const e2e_harness_mod = b.createModule(.{
+    const e2e_harness_mod = createModule(b, .{
         .root_source_file = b.path("tests/e2e/e2e_harness.zig"),
         .target = target,
         .optimize = optimize,
@@ -1229,7 +1259,7 @@ pub fn build(b: *std.Build) void {
     e2e_harness_mod.addImport("pty", platform_pty_mod);
 
     // Shell spawn tests
-    const shell_spawn_test_mod = b.createModule(.{
+    const shell_spawn_test_mod = createModule(b, .{
         .root_source_file = b.path("tests/e2e/shell_spawn_test.zig"),
         .target = target,
         .optimize = optimize,
@@ -1241,7 +1271,7 @@ pub fn build(b: *std.Build) void {
     e2e_test_step.dependOn(&run_shell_spawn.step);
 
     // CLI flags tests (spawns pterm binary, needs it built first)
-    const cli_flags_test_mod = b.createModule(.{
+    const cli_flags_test_mod = createModule(b, .{
         .root_source_file = b.path("tests/e2e/cli_flags_test.zig"),
         .target = target,
         .optimize = optimize,
@@ -1252,7 +1282,7 @@ pub fn build(b: *std.Build) void {
     e2e_test_step.dependOn(&run_cli_flags.step);
 
     // Env vars tests
-    const env_vars_test_mod = b.createModule(.{
+    const env_vars_test_mod = createModule(b, .{
         .root_source_file = b.path("tests/e2e/env_vars_test.zig"),
         .target = target,
         .optimize = optimize,
@@ -1264,7 +1294,7 @@ pub fn build(b: *std.Build) void {
     e2e_test_step.dependOn(&run_env_vars.step);
 
     // Platform PTY tests
-    const platform_pty_test_mod = b.createModule(.{
+    const platform_pty_test_mod = createModule(b, .{
         .root_source_file = b.path("tests/e2e/platform_pty_test.zig"),
         .target = target,
         .optimize = optimize,
@@ -1275,7 +1305,7 @@ pub fn build(b: *std.Build) void {
     e2e_test_step.dependOn(&run_platform_pty_e2e.step);
 
     // Stability tests
-    const stability_test_mod = b.createModule(.{
+    const stability_test_mod = createModule(b, .{
         .root_source_file = b.path("tests/e2e/stability_test.zig"),
         .target = target,
         .optimize = optimize,
@@ -1287,7 +1317,7 @@ pub fn build(b: *std.Build) void {
     e2e_test_step.dependOn(&run_stability.step);
 
     // Pane/tab lifecycle tests (headless, no PTY or GPU needed)
-    const pane_tab_test_mod = b.createModule(.{
+    const pane_tab_test_mod = createModule(b, .{
         .root_source_file = b.path("tests/e2e/pane_tab_test.zig"),
         .target = target,
         .optimize = optimize,
@@ -1297,9 +1327,8 @@ pub fn build(b: *std.Build) void {
     const run_pane_tab = b.addRunArtifact(pane_tab_tests);
     e2e_test_step.dependOn(&run_pane_tab.step);
 
-
     // Config loading + hot-reload tests
-    const config_e2e_test_mod = b.createModule(.{
+    const config_e2e_test_mod = createModule(b, .{
         .root_source_file = b.path("tests/e2e/config_test.zig"),
         .target = target,
         .optimize = optimize,
@@ -1366,4 +1395,58 @@ fn generateRcFile(b: *std.Build, version_str: []const u8) std.Build.LazyPath {
 
     const wf = b.addWriteFiles();
     return wf.add("pterm.rc", content);
+}
+
+var pio_module: ?*std.Build.Module = null;
+
+/// `b.createModule` that also makes `@import("pio")` available.
+fn createModule(b: *std.Build, options: std.Build.Module.CreateOptions) *std.Build.Module {
+    const mod = b.createModule(options);
+    mod.addImport("pio", pio_module.?);
+    return mod;
+}
+
+/// Expose the translation of `src/c/<header>` to `mod` as `@import(name)`.
+/// `@cImport` no longer exists, so C headers are translated by the build.
+/// When `enabled` is false (header doesn't apply to this target) an empty
+/// module is bound instead so the import still resolves. `include_libs` are
+/// libraries whose installed headers the translation needs (null entries,
+/// e.g. unresolved lazy deps, are skipped).
+fn addCImport(
+    b: *std.Build,
+    mod: *std.Build.Module,
+    name: []const u8,
+    header: []const u8,
+    enabled: bool,
+    include_libs: []const ?*std.Build.Step.Compile,
+) void {
+    addCImportFile(b, mod, name, b.path(b.fmt("src/c/{s}", .{header})), enabled, include_libs);
+}
+
+fn addCImportFile(
+    b: *std.Build,
+    mod: *std.Build.Module,
+    name: []const u8,
+    header: std.Build.LazyPath,
+    enabled: bool,
+    include_libs: []const ?*std.Build.Step.Compile,
+) void {
+    if (!enabled) {
+        // A file may belong to only one module, so share a single empty one.
+        const empty = b.modules.get("pterm_c_empty") orelse empty: {
+            const m = b.addModule("pterm_c_empty", .{ .root_source_file = b.path("src/c/empty.zig") });
+            break :empty m;
+        };
+        mod.addImport(name, empty);
+        return;
+    }
+    const tc = b.addTranslateC(.{
+        .root_source_file = header,
+        .target = mod.resolved_target.?,
+        .optimize = mod.optimize.?,
+    });
+    for (include_libs) |maybe_lib| {
+        if (maybe_lib) |lib| tc.addIncludePath(lib.getEmittedIncludeTree());
+    }
+    mod.addImport(name, tc.createModule());
 }

@@ -14,6 +14,7 @@
 ///     split = "right"
 ///     ratio = 0.5
 const std = @import("std");
+const pio = @import("pio");
 const PaneTree = @import("PaneTree.zig");
 const PaneNode = PaneTree.PaneNode;
 const SplitDirection = PaneTree.SplitDirection;
@@ -58,7 +59,7 @@ pub const BuildResult = struct {
 /// Scans for `[layout.<name>]` sections and extracts tab/pane definitions.
 /// Layout names are dynamic so we parse manually (same approach as keybindings).
 pub fn parsePresets(allocator: std.mem.Allocator, content: []const u8) ParseError![]LayoutPreset {
-    var presets = std.ArrayListUnmanaged(LayoutPreset){};
+    var presets = std.ArrayListUnmanaged(LayoutPreset).empty;
     errdefer {
         for (presets.items) |preset| {
             freePreset(allocator, preset);
@@ -67,7 +68,7 @@ pub fn parsePresets(allocator: std.mem.Allocator, content: []const u8) ParseErro
     }
 
     // Collect all unique layout names first
-    var layout_names = std.ArrayListUnmanaged([]const u8){};
+    var layout_names = std.ArrayListUnmanaged([]const u8).empty;
     defer layout_names.deinit(allocator);
 
     var lines = std.mem.splitScalar(u8, content, '\n');
@@ -113,7 +114,7 @@ pub fn parsePresets(allocator: std.mem.Allocator, content: []const u8) ParseErro
 
 /// Parse a single layout preset by name from TOML content.
 fn parseOnePreset(allocator: std.mem.Allocator, content: []const u8, name: []const u8) ParseError!LayoutPreset {
-    var tabs = std.ArrayListUnmanaged(PresetTab){};
+    var tabs = std.ArrayListUnmanaged(PresetTab).empty;
     errdefer {
         for (tabs.items) |tab| {
             allocator.free(tab.panes);
@@ -121,7 +122,7 @@ fn parseOnePreset(allocator: std.mem.Allocator, content: []const u8, name: []con
         tabs.deinit(allocator);
     }
 
-    var current_panes = std.ArrayListUnmanaged(PresetPane){};
+    var current_panes = std.ArrayListUnmanaged(PresetPane).empty;
     errdefer current_panes.deinit(allocator);
 
     // Build expected section headers
@@ -251,7 +252,7 @@ fn parseInlineStringArray(allocator: std.mem.Allocator, value: []const u8) !?[]c
     const inner = std.mem.trim(u8, trimmed[1..close], " \t");
     if (inner.len == 0) return null;
 
-    var items = std.ArrayListUnmanaged([]const u8){};
+    var items = std.ArrayListUnmanaged([]const u8).empty;
     errdefer {
         for (items.items) |item| allocator.free(item);
         items.deinit(allocator);
@@ -338,8 +339,8 @@ fn expandPaneDir(allocator: std.mem.Allocator, pane: PresetPane) !PresetPane {
     var result = pane;
     if (pane.dir) |dir| {
         if (dir.len > 0 and dir[0] == '~') {
-            const home = std.process.getEnvVarOwned(allocator, "HOME") catch
-                std.process.getEnvVarOwned(allocator, "USERPROFILE") catch
+            const home = pio.getEnvVarOwned(allocator, "HOME") catch
+                pio.getEnvVarOwned(allocator, "USERPROFILE") catch
                 return result; // can't expand, keep as-is
             defer allocator.free(home);
             const rest = if (dir.len > 1) dir[1..] else "";

@@ -17,7 +17,7 @@ pub const UrlState = struct {
     hovered_url: ?UrlRange = null,
 
     /// UTF-8 string of the hovered URL.
-    hovered_url_str: [2048]u8 = [_]u8{0} ** 2048,
+    hovered_url_str: [2048]u8 = @as([2048]u8, @splat(0)),
     hovered_url_len: u16 = 0,
 
     /// Whether the GLFW cursor is currently set to pointing hand.

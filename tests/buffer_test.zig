@@ -116,13 +116,12 @@ test "serialize stub" {
 
     // Serialize to memory buffer
     var out_buf: [4096]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&out_buf);
-    try buf.serialize(stream.writer());
+    var writer: std.Io.Writer = .fixed(&out_buf);
+    try buf.serialize(&writer);
 
     // Deserialize back
-    const written = stream.pos;
-    var read_stream = std.io.fixedBufferStream(out_buf[0..written]);
-    var restored = try ScrollbackBuffer.deserialize(alloc, read_stream.reader());
+    var reader: std.Io.Reader = .fixed(writer.buffered());
+    var restored = try ScrollbackBuffer.deserialize(alloc, &reader);
     defer restored.deinit();
 
     try std.testing.expectEqual(@as(u32, 2), restored.lineCount());

@@ -13,6 +13,7 @@
 /// Flash fires once on first entry to .waiting state.
 /// Pulse animation runs continuously while in .waiting state.
 const std = @import("std");
+const pio = @import("pio");
 
 pub const AgentState = struct {
     /// Three-state machine: idle, working, waiting.
@@ -69,7 +70,7 @@ pub const AgentState = struct {
     /// Flash fires only on first entry (not re-entry while already waiting)
     /// AND only if FLASH_COOLDOWN_NS has elapsed since the last flash.
     pub fn triggerWaiting(self: *AgentState) void {
-        self.triggerWaitingWithTimestamp(std.time.nanoTimestamp());
+        self.triggerWaitingWithTimestamp(pio.nanoTimestamp());
     }
 
     /// Testable variant with explicit timestamp.
@@ -108,7 +109,7 @@ pub const AgentState = struct {
     /// Consume flash trigger from render thread. Returns true if a flash should start.
     /// Starts the flash timer. Same pattern as BellState.consumeTrigger.
     pub fn consumeFlash(self: *AgentState) bool {
-        return self.consumeFlashWithTimestamp(std.time.nanoTimestamp());
+        return self.consumeFlashWithTimestamp(pio.nanoTimestamp());
     }
 
     /// Testable variant with explicit timestamp.
@@ -124,7 +125,7 @@ pub const AgentState = struct {
 
     /// Update flash state each frame. Clears flash_active after FLASH_DURATION_NS.
     pub fn updateFlash(self: *AgentState) void {
-        self.updateFlashWithTimestamp(std.time.nanoTimestamp());
+        self.updateFlashWithTimestamp(pio.nanoTimestamp());
     }
 
     /// Testable variant with explicit timestamp.

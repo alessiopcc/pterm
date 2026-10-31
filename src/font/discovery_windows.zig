@@ -4,6 +4,7 @@
 /// A simple but reliable approach for v1. DirectWrite enumeration can be
 /// added later for full font collection support.
 const std = @import("std");
+const pio = @import("pio");
 const DiscoverResult = @import("discovery.zig").DiscoverResult;
 
 /// Known monospace font filenames mapped to their family names.
@@ -61,12 +62,12 @@ fn checkFontFile(allocator: std.mem.Allocator, filename: []const u8) ?DiscoverRe
     const full_path = std.fmt.allocPrint(allocator, "{s}{s}", .{ system_font_dir, filename }) catch return null;
 
     // Verify file exists.
-    const file = std.fs.openFileAbsolute(full_path, .{}) catch {
+    const file = std.Io.Dir.openFileAbsolute(pio.io, full_path, .{}) catch {
         allocator.free(full_path);
         // Also check user font directory.
         return checkUserFontFile(allocator, filename);
     };
-    file.close();
+    file.close(pio.io);
 
     return DiscoverResult{
         .path = full_path,
@@ -76,7 +77,7 @@ fn checkFontFile(allocator: std.mem.Allocator, filename: []const u8) ?DiscoverRe
 
 fn checkUserFontFile(allocator: std.mem.Allocator, filename: []const u8) ?DiscoverResult {
     // Get %LOCALAPPDATA%\Microsoft\Windows\Fonts\
-    const local_app_data = std.process.getEnvVarOwned(allocator, "LOCALAPPDATA") catch return null;
+    const local_app_data = pio.getEnvVarOwned(allocator, "LOCALAPPDATA") catch return null;
     defer allocator.free(local_app_data);
 
     const user_path = std.fmt.allocPrint(
@@ -85,11 +86,11 @@ fn checkUserFontFile(allocator: std.mem.Allocator, filename: []const u8) ?Discov
         .{ local_app_data, filename },
     ) catch return null;
 
-    const file = std.fs.openFileAbsolute(user_path, .{}) catch {
+    const file = std.Io.Dir.openFileAbsolute(pio.io, user_path, .{}) catch {
         allocator.free(user_path);
         return null;
     };
-    file.close();
+    file.close(pio.io);
 
     return DiscoverResult{
         .path = user_path,

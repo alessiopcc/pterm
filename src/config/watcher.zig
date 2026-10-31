@@ -7,6 +7,7 @@
 /// Platform-specific watchers (inotify, FSEvents, ReadDirectoryChangesW)
 /// are a future optimization; polling at 1.5s intervals is sufficient for v1.
 const std = @import("std");
+const pio = @import("pio");
 
 pub const FileWatcher = struct {
     allocator: std.mem.Allocator,
@@ -46,7 +47,7 @@ pub const FileWatcher = struct {
             mtimes[i] = getFileMtime(owned_paths[i]) orelse 0;
         }
 
-        const now = std.time.nanoTimestamp();
+        const now = pio.nanoTimestamp();
 
         return FileWatcher{
             .allocator = allocator,
@@ -72,7 +73,7 @@ pub const FileWatcher = struct {
     /// Call from main event loop. Checks if enough time has passed, then polls mtimes.
     /// If any file changed and debounce period elapsed, fires callback.
     pub fn poll(self: *FileWatcher) void {
-        const now = std.time.nanoTimestamp();
+        const now = pio.nanoTimestamp();
 
         // Rate-limit polling
         if (now - self.last_poll < self.poll_interval_ns) return;
@@ -123,8 +124,8 @@ pub const FileWatcher = struct {
 
 /// Get the modification time of a file, or null if the file cannot be accessed.
 fn getFileMtime(path: []const u8) ?i128 {
-    const file = std.fs.cwd().openFile(path, .{}) catch return null;
-    defer file.close();
-    const stat = file.stat() catch return null;
-    return stat.mtime;
+    const file = std.Io.Dir.cwd().openFile(pio.io, path, .{}) catch return null;
+    defer file.close(pio.io);
+    const stat = file.stat(pio.io) catch return null;
+    return stat.mtime.toNanoseconds();
 }

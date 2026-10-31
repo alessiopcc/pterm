@@ -1,5 +1,6 @@
 /// Render thread: GL context, frame loop, draw callbacks, visual effects.
 const std = @import("std");
+const pio = @import("pio");
 const app_mod = @import("App.zig");
 const App = app_mod.App;
 const PaneData = app_mod.PaneData;
@@ -41,7 +42,7 @@ const glfw = @import("zglfw");
 /// it once per second. Always safe to call; independent of agent.enabled and
 /// suppress_agent_output so diagnostics keep flowing during resize.
 pub fn pollForegroundProcess(self: *App, pd: *PaneData) void {
-    const now: i64 = @intCast(std.time.nanoTimestamp());
+    const now: i64 = @intCast(pio.nanoTimestamp());
     const poll_interval_ns: i64 = @as(i64, self.config.agent.poll_interval_ms) * 1_000_000;
 
     if (pd.last_process_poll_ns == 0 or (now - pd.last_process_poll_ns) >= poll_interval_ns) {
@@ -62,7 +63,7 @@ pub fn pollForegroundProcess(self: *App, pd: *PaneData) void {
 
 /// Per-pane state derivation. Call AFTER pollForegroundProcess.
 pub fn updateAgentStateFromProcess(self: *App, pd: *PaneData) void {
-    const now: i64 = @intCast(std.time.nanoTimestamp());
+    const now: i64 = @intCast(pio.nanoTimestamp());
     const quiet_threshold_ns: i64 = @as(i64, self.config.agent.quiet_threshold_ms) * 1_000_000;
 
     const last_output = pd.last_output_ns.load(.acquire);
@@ -136,7 +137,7 @@ pub fn renderThreadMain(self: *App) void {
     actions.resizeAllPanes(self);
 
     const perf_log = if (self.perf_logging)
-        std.fs.cwd().createFile("pterm_perf.log", .{}) catch null
+        std.Io.Dir.cwd().createFile(pio.io, "pterm_perf.log", .{}) catch null
     else
         null;
 
@@ -145,10 +146,10 @@ pub fn renderThreadMain(self: *App) void {
 
     while (!self.should_quit.load(.acquire)) {
         if (self.frame_requested.swap(false, .acq_rel)) {
-            const now = std.time.nanoTimestamp();
+            const now = pio.nanoTimestamp();
             if (now - last_frame_ns < min_frame_ns) {
                 self.frame_requested.store(true, .release);
-                std.Thread.sleep(1_000_000);
+                pio.sleep(1_000_000);
                 continue;
             }
             last_frame_ns = now;
@@ -210,7 +211,7 @@ pub fn renderThreadMain(self: *App) void {
                 self.frame_requested.store(true, .release);
                 self.window.swapBuffers();
                 _ = self.frame_arena.reset(.retain_capacity);
-                std.Thread.sleep(16_000_000); // Sleep 16ms to avoid busy-loop while minimized
+                pio.sleep(16_000_000); // Sleep 16ms to avoid busy-loop while minimized
                 continue;
             }
             const metrics = self.font_grid.getMetrics();
@@ -262,7 +263,7 @@ pub fn renderThreadMain(self: *App) void {
             {
                 self.pane_mutex.lock();
                 defer self.pane_mutex.unlock();
-                const now_ns: i64 = @intCast(std.time.nanoTimestamp());
+                const now_ns: i64 = @intCast(pio.nanoTimestamp());
                 var pit = self.pane_data.iterator();
                 while (pit.next()) |pe| {
                     const pd = pe.value_ptr.*;
@@ -274,9 +275,9 @@ pub fn renderThreadMain(self: *App) void {
             }
 
             // Build per-tab bell badge and agent badge flags for TabBarRenderer
-            var bell_badges_buf: [64]bool = [_]bool{false} ** 64;
-            var agent_badges_buf: [64]bool = [_]bool{false} ** 64;
-            var agent_tab_buf: [64]bool = [_]bool{false} ** 64;
+            var bell_badges_buf: [64]bool = @as([64]bool, @splat(false));
+            var agent_badges_buf: [64]bool = @as([64]bool, @splat(false));
+            var agent_tab_buf: [64]bool = @as([64]bool, @splat(false));
             const tab_count = self.tab_manager.tabCount();
             const badge_count = @min(tab_count, 64);
             // Hold pane_mutex across both badge collection AND TabBarRenderer.render
@@ -380,7 +381,7 @@ pub fn renderThreadMain(self: *App) void {
 
                             // Debounced search: run after 150ms of no input
                             if (pd.search_state.is_open and pd.search_state.query_dirty) {
-                                const search_now = std.time.nanoTimestamp();
+                                const search_now = pio.nanoTimestamp();
                                 const elapsed_ms = @divFloor(search_now - pd.search_state.last_input_ns, 1_000_000);
                                 if (elapsed_ms >= 150) {
                                     pd.search_state.query_dirty = false;
@@ -805,19 +806,19 @@ pub fn renderThreadMain(self: *App) void {
                     const pline = std.fmt.bufPrint(&pbuf, "frame={d} frame_time={d}us draws={d}\n", .{
                         self.frame_count, diag.frame_time_us, diag.draw_calls,
                     }) catch "";
-                    if (pline.len > 0) _ = f.write(pline) catch 0;
+                    if (pline.len > 0) f.writeStreamingAll(pio.io, pline) catch {};
                 }
             }
 
             self.window.swapBuffers();
             _ = self.frame_arena.reset(.retain_capacity);
         } else {
-            std.Thread.sleep(1_000_000);
+            pio.sleep(1_000_000);
         }
     }
 
     // Cleanup
-    if (perf_log) |f| f.close();
+    if (perf_log) |f| f.close(pio.io);
     backend.deinit();
     gl.makeProcTableCurrent(null);
     Window.detachContext();
@@ -1072,7 +1073,7 @@ pub fn updateCursorBlink(self: *App) void {
         self.cursor_visible = true;
         return;
     }
-    const now = std.time.nanoTimestamp();
+    const now = pio.nanoTimestamp();
     const elapsed = now - self.cursor_blink_timer;
     const blink_interval: i128 = 530_000_000;
     if (elapsed >= blink_interval) {
@@ -1132,12 +1133,12 @@ pub fn processAgentFlashForPane(self: *App, pd: *PaneData, bounds: RendererRect,
         pd.agent_state.notification_pending.store(false, .release);
         // Build pane identity string "Tab N, Pane M"
         var identity_buf: [64]u8 = undefined;
-        var identity_stream = std.io.fixedBufferStream(&identity_buf);
-        identity_stream.writer().print("Tab {d}, Pane {d}", .{
+        var identity_writer: std.Io.Writer = .fixed(&identity_buf);
+        identity_writer.print("Tab {d}, Pane {d}", .{
             pd.tab_index + 1,
             pd.pane_id,
         }) catch {};
-        const pane_identity = identity_buf[0..identity_stream.pos];
+        const pane_identity = identity_writer.buffered();
         self.notification_manager.notify(
             self.allocator,
             pd.pane_id,

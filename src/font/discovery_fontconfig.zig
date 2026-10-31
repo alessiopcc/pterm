@@ -4,9 +4,7 @@
 const std = @import("std");
 const DiscoverResult = @import("discovery.zig").DiscoverResult;
 
-const c = @cImport({
-    @cInclude("fontconfig/fontconfig.h");
-});
+const c = @import("c");
 
 /// Discover a font file path by family name.
 /// Returns null if no matching font is found.
@@ -20,7 +18,7 @@ pub fn discover(allocator: std.mem.Allocator, family: []const u8) ?DiscoverResul
     defer c.FcPatternDestroy(pattern);
 
     // Add family name.
-    const family_z = allocator.dupeZ(u8, family) catch return null;
+    const family_z = allocator.dupeSentinel(u8, family, 0) catch return null;
     defer allocator.free(family_z);
     _ = c.FcPatternAddString(pattern, c.FC_FAMILY, @ptrCast(family_z.ptr));
 
@@ -131,7 +129,7 @@ fn discoverNonMono(allocator: std.mem.Allocator, family: []const u8) ?DiscoverRe
     if (pattern == null) return null;
     defer c.FcPatternDestroy(pattern);
 
-    const family_z = allocator.dupeZ(u8, family) catch return null;
+    const family_z = allocator.dupeSentinel(u8, family, 0) catch return null;
     defer allocator.free(family_z);
     _ = c.FcPatternAddString(pattern, c.FC_FAMILY, @ptrCast(family_z.ptr));
 

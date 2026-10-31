@@ -21,7 +21,7 @@ Manual verification before publishing a GitHub Release draft.
 - [ ] Color output works (run `ls --color` or equivalent)
 - [ ] Emoji display correctly (test: echo "Hello World")
 - [ ] Tab creation/close works (Ctrl+Shift+T / Ctrl+Shift+W)
-- [ ] Pane splitting works (Ctrl+Shift+D horizontal, Ctrl+Shift+E vertical)
+- [ ] Pane splitting works (Ctrl+Shift+H horizontal, Ctrl+Shift+V vertical)
 - [ ] Keyboard navigation between panes works
 - [ ] Scrollback works (scroll up through output)
 - [ ] Copy/paste works (Ctrl+C/V or Cmd+C/V)

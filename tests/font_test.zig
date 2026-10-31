@@ -1,5 +1,6 @@
 /// Unit tests for font pipeline: GlyphAtlas, Rasterizer, and FontGrid.
 const std = @import("std");
+const pio = @import("pio");
 const testing = std.testing;
 const font_types = @import("font_types");
 const GlyphAtlas = @import("glyph_atlas").GlyphAtlas;
@@ -224,8 +225,8 @@ fn findTestFont() ?[*:0]const u8 {
         // Use cwd().openFileZ instead of openFileAbsoluteZ to avoid
         // assert panic when encountering non-native path formats
         // (e.g. Windows paths on macOS/Linux).
-        const file = std.fs.cwd().openFileZ(path, .{}) catch continue;
-        file.close();
+        const file = std.Io.Dir.cwd().openFile(pio.io, std.mem.span(path), .{}) catch continue;
+        file.close(pio.io);
         return path;
     }
     return null;

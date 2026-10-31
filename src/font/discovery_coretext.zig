@@ -5,15 +5,12 @@
 const std = @import("std");
 const DiscoverResult = @import("discovery.zig").DiscoverResult;
 
-const c = @cImport({
-    @cInclude("CoreText/CoreText.h");
-    @cInclude("CoreFoundation/CoreFoundation.h");
-});
+const c = @import("c");
 
 /// Discover a font file path by family name.
 /// Returns null if no matching font is found.
 pub fn discover(allocator: std.mem.Allocator, family: []const u8) ?DiscoverResult {
-    const family_z = allocator.dupeZ(u8, family) catch return null;
+    const family_z = allocator.dupeSentinel(u8, family, 0) catch return null;
     defer allocator.free(family_z);
 
     const name_cfstr = c.CFStringCreateWithCString(null, family_z.ptr, c.kCFStringEncodingUTF8);

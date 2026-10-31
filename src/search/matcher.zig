@@ -35,7 +35,7 @@ pub fn matchLine(
     in_scrollback: bool,
     allocator: std.mem.Allocator,
 ) ![]SearchState.Match {
-    var results: std.ArrayListUnmanaged(SearchState.Match) = .{};
+    var results: std.ArrayListUnmanaged(SearchState.Match) = .empty;
     errdefer results.deinit(allocator);
 
     if (query.len == 0 or line.len == 0 or query.len > line.len) {
@@ -94,7 +94,7 @@ pub fn findMatches(
     if (query.len < 2) return allocator.alloc(SearchState.Match, 0);
 
     const case_sensitive = isSmartcaseSensitive(query);
-    var all_matches: std.ArrayListUnmanaged(SearchState.Match) = .{};
+    var all_matches: std.ArrayListUnmanaged(SearchState.Match) = .empty;
     errdefer all_matches.deinit(allocator);
 
     // Scan scrollback lines

@@ -9,6 +9,7 @@
 /// for a once-per-launch check. If curl is missing or the request fails the
 /// flag simply stays false — it is best-effort.
 const std = @import("std");
+const pio = @import("pio");
 const builtin = @import("builtin");
 
 pub const RELEASE_URL = "https://github.com/alessiopcc/pterm/releases/latest";
@@ -16,7 +17,7 @@ const API_URL = "https://api.github.com/repos/alessiopcc/pterm/releases/latest";
 
 pub const VersionCheck = struct {
     update_available: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-    latest_version_buf: [32]u8 = [_]u8{0} ** 32,
+    latest_version_buf: [32]u8 = @as([32]u8, @splat(0)),
     latest_version_len: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     thread: ?std.Thread = null,
     current_version: []const u8 = "",
@@ -74,20 +75,17 @@ pub const VersionCheck = struct {
             "Accept: application/vnd.github+json",
             API_URL,
         };
-        var child = std.process.Child.init(&argv, allocator);
-        child.stdout_behavior = .Pipe;
-        child.stderr_behavior = .Ignore;
-        child.stdin_behavior = .Ignore;
-        try child.spawn();
-        const data = (child.stdout orelse {
-            _ = child.wait() catch {};
-            return error.NoStdout;
-        }).readToEndAlloc(allocator, 1024 * 1024) catch |err| {
-            _ = child.wait() catch {};
-            return err;
-        };
-        _ = child.wait() catch {};
-        return data;
+        const result = try std.process.run(allocator, pio.io, .{
+            .argv = &argv,
+            .stdout_limit = .limited(1024 * 1024),
+            .stderr_limit = .limited(64 * 1024),
+            // pterm runs without a console (GUI subsystem), so spawning the curl
+            // console process would otherwise pop a fleeting black console window.
+            // CREATE_NO_WINDOW suppresses it. Windows-only field; ignored elsewhere.
+            .create_no_window = true,
+        });
+        allocator.free(result.stderr);
+        return result.stdout;
     }
 
     fn parseTagName(json: []const u8) ?[]const u8 {

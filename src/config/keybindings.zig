@@ -157,7 +157,7 @@ pub const KeyCombo = struct {
                 h = @as(u64, c) | (1 << 21);
             },
             .special => |s| {
-                h = @as(u64, @intFromEnum(s)) | (1 << 22);
+                h = @as(u64, @backingInt(s)) | (1 << 22);
             },
         }
         h = h * 31 + @as(u64, self.mods.toInt());
@@ -184,9 +184,9 @@ pub const KeybindingMap = struct {
 
     pub fn init(allocator: Allocator) KeybindingMap {
         return .{
-            .map = .{},
+            .map = .empty,
             .allocator = allocator,
-            .warnings = .{},
+            .warnings = .empty,
         };
     }
 
@@ -420,10 +420,10 @@ pub fn defaultBindings() []const DefaultBinding {
 
 /// Parse an action name string to Action enum.
 pub fn parseAction(name: []const u8) ?Action {
-    const fields = @typeInfo(Action).@"enum".fields;
-    inline for (fields) |field| {
-        if (strEql(name, field.name)) {
-            return @enumFromInt(field.value);
+    const info = @typeInfo(Action).@"enum";
+    inline for (info.field_names, info.field_values) |field_name, value| {
+        if (strEql(name, field_name)) {
+            return @fromBackingInt(@intCast(value));
         }
     }
     return null;
@@ -513,7 +513,7 @@ pub const UserBinding = struct {
 // -- Internal helpers --
 
 fn toLowerBuf(s: []const u8) [64]u8 {
-    var buf: [64]u8 = [_]u8{0} ** 64;
+    var buf: [64]u8 = @as([64]u8, @splat(0));
     const len = @min(s.len, 64);
     for (s[0..len], 0..) |c, i| {
         buf[i] = if (c >= 'A' and c <= 'Z') c + 32 else c;

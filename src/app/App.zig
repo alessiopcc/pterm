@@ -15,6 +15,7 @@
 ///   Mouse clicks -> hit-test tab bar / pane borders / pane area
 const builtin = @import("builtin");
 const std = @import("std");
+const pio = @import("pio");
 const glfw = @import("zglfw");
 const gl = @import("gl");
 const Config = @import("config").Config;
@@ -220,7 +221,7 @@ pub const App = struct {
     // Diagnostics
     perf_logging: bool,
     debug_keys: bool,
-    debug_key_file: ?std.fs.File,
+    debug_key_file: ?std.Io.File,
     frame_count: u64,
 
     // Wall-clock timer for periodic tab title updates
@@ -254,11 +255,11 @@ pub const App = struct {
 
     // Pending pane operations (main thread -> render thread, mutex-protected)
     pending_ops: std.ArrayListUnmanaged(PaneOp),
-    pending_ops_mutex: std.Thread.Mutex,
+    pending_ops_mutex: pio.Mutex,
 
     /// Protects pane_data and tab_manager from concurrent access
     /// between the main thread (input/close) and render thread.
-    pane_mutex: std.Thread.Mutex,
+    pane_mutex: pio.Mutex,
 
     // Border drag state (mouse resize)
     border_drag_active: bool,
@@ -403,7 +404,7 @@ pub const App = struct {
         const compositor = Compositor.init(allocator);
 
         // Copy the version string into stable storage owned by the App.
-        var version_string_buf: [32]u8 = [_]u8{0} ** 32;
+        var version_string_buf: [32]u8 = @as([32]u8, @splat(0));
         const version_copy_len = @min(options.version.len, version_string_buf.len);
         @memcpy(version_string_buf[0..version_copy_len], options.version[0..version_copy_len]);
 
@@ -421,7 +422,7 @@ pub const App = struct {
             .config = config,
             .config_path = null,
             .config_watcher = null,
-            .pane_data = .{},
+            .pane_data = .empty,
             .frame_requested = std.atomic.Value(bool).init(true),
             .should_quit = std.atomic.Value(bool).init(false),
             .render_thread = null,
@@ -441,12 +442,12 @@ pub const App = struct {
             .perf_logging = options.perf_logging,
             .debug_keys = options.debug_keys,
             .debug_key_file = if (options.debug_keys)
-                std.fs.cwd().createFile("pterm_debug.log", .{}) catch null
+                std.Io.Dir.cwd().createFile(pio.io, "pterm_debug.log", .{}) catch null
             else
                 null,
             .frame_count = 0,
-            .last_title_update = std.time.milliTimestamp(),
-            .cursor_blink_timer = std.time.nanoTimestamp(),
+            .last_title_update = pio.milliTimestamp(),
+            .cursor_blink_timer = pio.nanoTimestamp(),
             .cursor_visible = true,
             .focused = true,
             .frame_arena = std.heap.ArenaAllocator.init(allocator),
@@ -459,7 +460,7 @@ pub const App = struct {
             .preset_picker = .{},
             .shell_picker = .{},
             .pending_layout_name = options.layout_name,
-            .pending_ops = .{},
+            .pending_ops = .empty,
             .pending_ops_mutex = .{},
             .pane_mutex = .{},
             .text_select_active = false,
@@ -617,7 +618,7 @@ pub const App = struct {
         if (effective_wd) |wd| {
             if (wd.len > 0 and wd[0] == '~') {
                 const home_env = if (@import("builtin").os.tag == .windows) "USERPROFILE" else "HOME";
-                if (std.process.getEnvVarOwned(self.allocator, home_env)) |home| {
+                if (pio.getEnvVarOwned(self.allocator, home_env)) |home| {
                     defer self.allocator.free(home);
                     const rest = if (wd.len > 1) wd[1..] else "";
                     if (home.len + rest.len < home_buf.len) {
@@ -656,7 +657,7 @@ pub const App = struct {
         });
 
         // Determine process name from shell
-        var proc_name_buf: [64]u8 = [_]u8{0} ** 64;
+        var proc_name_buf: [64]u8 = @as([64]u8, @splat(0));
         var proc_name_len: u32 = 0;
         {
             const shell_path_slice = std.mem.span(shell_config.path);
@@ -678,7 +679,7 @@ pub const App = struct {
         }
 
         // Initialize CWD from working_dir, or detect from current process directory
-        var cwd_buf: [256]u8 = [_]u8{0} ** 256;
+        var cwd_buf: [256]u8 = @as([256]u8, @splat(0));
         var cwd_len: u32 = 0;
         if (expanded_wd) |wd| {
             const copy_len = @min(wd.len, cwd_buf.len);
@@ -686,8 +687,8 @@ pub const App = struct {
             cwd_len = @intCast(copy_len);
         } else {
             // Detect CWD from the current process (shell inherits this)
-            if (std.fs.cwd().realpath(".", &cwd_buf)) |resolved| {
-                cwd_len = @intCast(resolved.len);
+            if (std.Io.Dir.cwd().realPath(pio.io, &cwd_buf)) |resolved_len| {
+                cwd_len = @intCast(resolved_len);
             } else |_| {}
         }
 
@@ -816,7 +817,7 @@ pub const App = struct {
         self.tab_manager.deinit();
         self.compositor.deinit();
         self.keybinding_map.deinit();
-        if (self.debug_key_file) |f| f.close();
+        if (self.debug_key_file) |f| f.close(pio.io);
         self.frame_arena.deinit();
         self.font_grid.deinit();
         self.allocator.destroy(self.font_grid);
@@ -846,7 +847,7 @@ pub const App = struct {
             // Periodic tab title update based on wall-clock timer.
             // Only request a frame when a title actually changed -- avoids
             // waking the renderer at 1Hz forever on idle terminals.
-            const now_ms = std.time.milliTimestamp();
+            const now_ms = pio.milliTimestamp();
             const interval_ms = @max(100, self.config.window.tab_title_interval);
             if (now_ms - self.last_title_update >= interval_ms) {
                 self.last_title_update = now_ms;

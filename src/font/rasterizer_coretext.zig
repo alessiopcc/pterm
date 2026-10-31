@@ -9,13 +9,7 @@ const font_types = @import("font_types");
 const GlyphBitmap = font_types.GlyphBitmap;
 const FontMetrics = font_types.FontMetrics;
 
-const c = @cImport({
-    @cInclude("CoreText/CoreText.h");
-    @cInclude("CoreGraphics/CoreGraphics.h");
-    @cInclude("CoreFoundation/CoreFoundation.h");
-    @cInclude("ft2build.h");
-    @cInclude("freetype/freetype.h");
-});
+const c = @import("c");
 
 pub const CoreTextRasterizer = struct {
     font: c.CTFontRef,
