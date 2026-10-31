@@ -2,35 +2,27 @@
     .fingerprint = 0xbbbb2f437addc811,
     .name = .pterm,
     .version = "1.2.1",
-    .minimum_zig_version = "0.15.1",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .ghostty = .{
-            .url = "https://github.com/ghostty-org/ghostty/archive/0790937d03df6e7a9420c61de91ce520a85fe4ef.tar.gz",
-            .hash = "ghostty-1.3.2-dev-5UdBC5_sAwUBqKuaUfvrQECPGY_XhoKKxs0y8DDRMF9M",
+            .url = "https://github.com/ghostty-org/ghostty/archive/83b57ac5ead868e133adb509f7ef0a4ffa3ffe01.tar.gz",
+            .hash = "ghostty-1.4.1-dev-5UdBC8LDiAU6Zxz7bTA34zOEaiXrgv1mAtekzcflaw6a",
         },
         .zigglgen = .{
-            .url = "git+https://github.com/castholm/zigglgen#6b21369ac50de8826f8af60a7edb33693b4ec7bf",
-            .hash = "zigglgen-0.5.0-zigglr_CLwBs1aABtYVtxNPo1SB8AzgKMVouoqULqkDQ",
+            .url = "git+https://github.com/castholm/zigglgen#38bfc858ce2182fcb9d5d1819210f97beb4a19d3",
+            .hash = "zigglgen-0.5.1-ziggliTOLwAZfmk4DG9VLmHGE2BexC4o_O5yZKW37vfl",
         },
         .zglfw = .{
-            .url = "git+https://github.com/zig-gamedev/zglfw#0dd29d8073487c9fe1e45e6b729b3aac271d5a71",
-            .hash = "zglfw-0.10.0-dev-zgVDNIG4IQBWN_sfMD-xfC9bJS2hbBN2W7jNlDLovcdC",
-        },
-        .freetype = .{
-            .url = "git+https://github.com/allyourcodebase/freetype#1082522e99fcc2554ca849cf5042878a371b5bd2",
-            .hash = "freetype-2.14.1-C3-WdWqKAADJcxSH2bo9uMDiBAoDcIhOSl1-DADGIIM2",
-        },
-        .harfbuzz = .{
-            .url = "git+https://github.com/allyourcodebase/harfbuzz#ad51d895b69c262d3a497e1c3b54116dd8090f04",
-            .hash = "harfbuzz-12.2.0-Ip1VAuGZAACtg3OS6D_eeeoVX5-8Er8x-JzZejxOI8Zp",
+            .url = "git+https://github.com/zig-gamedev/zglfw#2450fe3c4140091287c79cb41e4a8020af73d896",
+            .hash = "zglfw-0.10.0-dev-zgVDNHC7IQAbvGj5whD2Cp5TMmo5G2C9gNYaF-y-EDZ3",
         },
         .zg = .{
-            .url = "git+https://codeberg.org/atman/zg#6ee2b0719052040c979ecde02a74a0cee6253364",
-            .hash = "zg-0.15.3-oGqU3LdJtALmUrI8v7BWf3UcCmebVYZcF0L9aDHnlu7D",
+            .url = "git+https://codeberg.org/atman/zg#fa4953ce78b91b88b045bda8107fb84368534f90",
+            .hash = "zg-0.18.0-oGqU3MjboAJAkIdf1n_G20BmpEZs_f30RMCacLPVlTXU",
         },
         .tomlz = .{
-            .url = "git+https://github.com/sam701/zig-toml#a73c9423d88ed413204b39638fab7e9bccdb83fd",
-            .hash = "toml-0.3.0-bV14Be6EAQDr0fkyURz4jYFyTAMPcwlNN0FEPVjDnXTR",
+            .url = "git+https://github.com/sam701/zig-toml#ad204acbf239a2b819d86845f8ba650532786126",
+            .hash = "toml-0.3.0-bV14BdyjAQDsja1zOCQ5Hpzjasu7EjR7fsR9YZHgtVlE",
         },
     },
     .paths = .{

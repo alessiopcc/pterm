@@ -75,7 +75,7 @@ Download from the [latest release](https://github.com/alessiopcc/pterm/releases/
 
 ### Build from source
 
-Requires [Zig 0.15.2](https://ziglang.org/download/):
+Requires [Zig 0.17.0](https://ziglang.org/download/):
 
 ```sh
 zig build --release=safe
