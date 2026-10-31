@@ -6,6 +6,7 @@
 /// argument prevents title/URL confusion.
 const builtin = @import("builtin");
 const std = @import("std");
+const pio = @import("pio");
 
 /// The base command for each platform (without the URL argument).
 pub const PlatformCommand = struct {
@@ -48,8 +49,7 @@ pub fn openUrl(url: []const u8) void {
     argv_buf[argc] = url;
     argc += 1;
 
-    var child = std.process.Child.init(argv_buf[0..argc], std.heap.page_allocator);
-    _ = child.spawn() catch return;
+    _ = std.process.spawn(pio.io, .{ .argv = argv_buf[0..argc] }) catch return;
     // Fire and forget -- do not wait for child process
 }
 

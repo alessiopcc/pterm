@@ -237,7 +237,7 @@ pub fn equalize(node: *PaneNode) void {
 
 /// Collect all leaf pane_ids in depth-first order.
 pub fn collectLeaves(node: *PaneNode, allocator: std.mem.Allocator) ![]u32 {
-    var list = std.ArrayListUnmanaged(u32){};
+    var list = std.ArrayListUnmanaged(u32).empty;
     errdefer list.deinit(allocator);
     collectLeavesRecursive(node, &list, allocator) catch |err| {
         list.deinit(allocator);
@@ -357,7 +357,7 @@ pub const LeafBounds = struct {
 
 /// Collect all leaf nodes with their bounds in a single tree walk.
 pub fn collectLeafInfos(node: *PaneNode, allocator: std.mem.Allocator) ![]LeafBounds {
-    var list = std.ArrayListUnmanaged(LeafBounds){};
+    var list = std.ArrayListUnmanaged(LeafBounds).empty;
     errdefer list.deinit(allocator);
     try collectLeafBoundsRecursive(node, &list, allocator);
     return list.toOwnedSlice(allocator);

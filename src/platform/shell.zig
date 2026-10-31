@@ -4,6 +4,7 @@
 // (via $COMSPEC, with PowerShell/cmd.exe fallbacks).
 
 const std = @import("std");
+const pio = @import("pio");
 const builtin = @import("builtin");
 
 /// Configuration for launching a shell process.
@@ -62,7 +63,7 @@ fn detectUnixShell() ShellConfig {
 }
 
 fn detectWindowsShell() ShellConfig {
-    if (std.process.getEnvVarOwned(std.heap.page_allocator, "COMSPEC") catch null) |_| {
+    if (pio.getEnvVarOwned(std.heap.page_allocator, "COMSPEC") catch null) |_| {
         // COMSPEC is typically C:\Windows\system32\cmd.exe
         // But we prefer PowerShell if available
         return ShellConfig{
@@ -132,8 +133,8 @@ pub fn findExecutable(allocator: std.mem.Allocator, program: []const u8) ?[*:0]c
 
     if (has_separator) {
         // Direct path -- check if it exists
-        const z_path = allocator.dupeZ(u8, program) catch return null;
-        if (std.fs.cwd().statFile(program)) |_| {
+        const z_path = allocator.dupeSentinel(u8, program, 0) catch return null;
+        if (std.Io.Dir.cwd().statFile(pio.io, program, .{})) |_| {
             return z_path;
         } else |_| {
             allocator.free(z_path);
@@ -142,7 +143,7 @@ pub fn findExecutable(allocator: std.mem.Allocator, program: []const u8) ?[*:0]c
     }
 
     // Bare name -- search PATH
-    const path_env = std.process.getEnvVarOwned(allocator, "PATH") catch return null;
+    const path_env = pio.getEnvVarOwned(allocator, "PATH") catch return null;
     defer allocator.free(path_env);
 
     const sep: u8 = if (comptime builtin.os.tag == .windows) ';' else ':';
@@ -153,9 +154,9 @@ pub fn findExecutable(allocator: std.mem.Allocator, program: []const u8) ?[*:0]c
         // Try the name as-is
         const path_sep = if (comptime builtin.os.tag == .windows) "\\" else "/";
         const full_path = std.fmt.allocPrint(allocator, "{s}" ++ path_sep ++ "{s}", .{ dir, program }) catch continue;
-        if (std.fs.cwd().statFile(full_path)) |_| {
+        if (std.Io.Dir.cwd().statFile(pio.io, full_path, .{})) |_| {
             defer allocator.free(full_path);
-            return allocator.dupeZ(u8, full_path) catch return null;
+            return allocator.dupeSentinel(u8, full_path, 0) catch return null;
         } else |_| {
             allocator.free(full_path);
         }
@@ -163,9 +164,9 @@ pub fn findExecutable(allocator: std.mem.Allocator, program: []const u8) ?[*:0]c
         // On Windows, also try with .exe suffix
         if (comptime builtin.os.tag == .windows) {
             const exe_path = std.fmt.allocPrint(allocator, "{s}" ++ "\\" ++ "{s}.exe", .{ dir, program }) catch continue;
-            if (std.fs.cwd().statFile(exe_path)) |_| {
+            if (std.Io.Dir.cwd().statFile(pio.io, exe_path, .{})) |_| {
                 defer allocator.free(exe_path);
-                return allocator.dupeZ(u8, exe_path) catch return null;
+                return allocator.dupeSentinel(u8, exe_path, 0) catch return null;
             } else |_| {
                 allocator.free(exe_path);
             }
@@ -187,7 +188,7 @@ fn buildArgsArray(
     const argv = allocator.allocSentinel(?[*:0]const u8, total, null) catch return null;
     argv[0] = shell_path;
     for (config_args, 0..) |arg, i| {
-        argv[1 + i] = allocator.dupeZ(u8, arg) catch return null;
+        argv[1 + i] = allocator.dupeSentinel(u8, arg, 0) catch return null;
     }
     return argv;
 }

@@ -5,6 +5,7 @@
 /// pointers passed during TermIO setup. screenChangeCallback and
 /// configReloadCallback use module-level static vars (one App per process).
 const std = @import("std");
+const pio = @import("pio");
 const glfw = @import("zglfw");
 const app_mod = @import("App.zig");
 const App = app_mod.App;
@@ -99,7 +100,7 @@ pub fn framebufferSizeCallback(handle: *glfw.Window, width: c_int, height: c_int
     {
         app.pane_mutex.lock();
         defer app.pane_mutex.unlock();
-        const deadline: i64 = @as(i64, @intCast(std.time.nanoTimestamp())) + app_mod.SUPPRESS_DURATION_NS;
+        const deadline: i64 = @as(i64, @intCast(pio.nanoTimestamp())) + app_mod.SUPPRESS_DURATION_NS;
         var pd_iter = app.pane_data.iterator();
         while (pd_iter.next()) |entry| {
             entry.value_ptr.*.suppressAgentOutputUntil(deadline);
@@ -123,9 +124,9 @@ pub fn contentScaleCallback(handle: *glfw.Window, xscale: f32, _: f32) callconv(
 
 pub fn focusCallback(handle: *glfw.Window, focused: glfw.Bool) callconv(.c) void {
     const app = Window.getUserPointer(App, handle) orelse return;
-    app.focused = @intFromEnum(focused) != 0;
+    app.focused = @backingInt(focused) != 0;
     if (app.focused) {
-        app.cursor_blink_timer = std.time.nanoTimestamp();
+        app.cursor_blink_timer = pio.nanoTimestamp();
         app.cursor_visible = true;
         // Invalidate row caches to force full redraw after minimize/restore.
         // This avoids triggering pending_resize which would reflow the terminal.
@@ -277,7 +278,7 @@ pub fn bellCallback(ctx: ?*anyopaque) void {
 pub fn agentOutputCallback(ctx: ?*anyopaque) void {
     if (ctx) |c| {
         const pd: *PaneData = @ptrCast(@alignCast(c));
-        const now: i64 = @intCast(std.time.nanoTimestamp());
+        const now: i64 = @intCast(pio.nanoTimestamp());
         pd.last_output_ns.store(now, .release);
         if (pd.isAgentOutputSuppressed(now)) return;
         pd.agent_state.onOutput();

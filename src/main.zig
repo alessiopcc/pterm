@@ -1,4 +1,5 @@
 const std = @import("std");
+const pio = @import("pio");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const App = @import("app").App;
@@ -16,26 +17,23 @@ pub const panic = std.debug.FullPanic(crash.panicHandler);
 // and traps, leaving us with a useless BREAKPOINT exception code).
 pub const std_options: std.Options = .{ .enable_segfault_handler = false };
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
+    pio.init(init);
     crash.install();
 
-    var gpa: std.heap.DebugAllocator(.{}) = .init;
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = init.gpa;
+    const io = init.io;
 
     // Arena for CLI args and config strings — freed at process exit
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const arena_alloc = arena.allocator();
+    const arena_alloc = init.arena.allocator();
 
     // Parse CLI args (string values duped into arena)
-    const cli_args = try cli_mod.parse(arena_alloc);
+    const cli_args = try cli_mod.parse(arena_alloc, init.minimal.args);
 
     // Handle --version
     if (cli_args.version) {
         const version_msg = "pterm " ++ build_options.version ++ "\n";
-        const stdout_file = std.fs.File.stdout();
-        stdout_file.writeAll(version_msg) catch |err| {
+        std.Io.File.stdout().writeStreamingAll(io, version_msg) catch |err| {
             std.log.err("Failed to write version: {}", .{err});
             std.process.exit(1);
         };
@@ -45,7 +43,7 @@ pub fn main() !void {
     // Handle --init-config
     if (cli_args.init_config) {
         const default_config = @embedFile("config/default_config.toml");
-        const home = std.process.getEnvVarOwned(arena_alloc, if (builtin.os.tag == .windows) "USERPROFILE" else "HOME") catch {
+        const home = pio.getEnvVarOwned(arena_alloc, if (builtin.os.tag == .windows) "USERPROFILE" else "HOME") catch {
             std.log.err("Cannot determine home directory", .{});
             std.process.exit(1);
         };
@@ -53,7 +51,7 @@ pub fn main() !void {
             std.log.err("Out of memory", .{});
             std.process.exit(1);
         };
-        std.fs.cwd().makePath(config_dir) catch |err| {
+        std.Io.Dir.cwd().createDirPath(io, config_dir) catch |err| {
             std.log.err("Error creating config directory: {}", .{err});
             std.process.exit(1);
         };
@@ -61,7 +59,7 @@ pub fn main() !void {
             std.log.err("Out of memory", .{});
             std.process.exit(1);
         };
-        const file = std.fs.cwd().createFile(config_path, .{ .exclusive = true }) catch |err| {
+        const file = std.Io.Dir.cwd().createFile(io, config_path, .{ .exclusive = true }) catch |err| {
             if (err == error.PathAlreadyExists) {
                 std.log.err("Config already exists: {s}", .{config_path});
                 std.process.exit(1);
@@ -69,15 +67,14 @@ pub fn main() !void {
             std.log.err("Error creating config: {}", .{err});
             std.process.exit(1);
         };
-        defer file.close();
-        file.writeAll(default_config) catch |err| {
+        defer file.close(io);
+        file.writeStreamingAll(io, default_config) catch |err| {
             std.log.err("Error writing config: {}", .{err});
             std.process.exit(1);
         };
         var buf: [1024]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "Created: {s}\n", .{config_path}) catch "Created config\n";
-        const stdout = std.fs.File.stdout();
-        stdout.writeAll(msg) catch {};
+        std.Io.File.stdout().writeStreamingAll(io, msg) catch {};
         std.process.exit(0);
     }
 

@@ -6,6 +6,7 @@
 ///
 /// Each action has exactly one combo (last assignment wins).
 const std = @import("std");
+const pio = @import("pio");
 const Allocator = std.mem.Allocator;
 const kb = @import("keybindings");
 
@@ -60,20 +61,15 @@ pub fn run(allocator: Allocator, config_path: []const u8, _: ?[]const kb.UserBin
     const ActionInfo = struct { action: Action, name: []const u8 };
 
     const actions = comptime blk: {
-        const fields = @typeInfo(Action).@"enum".fields;
-        var result: [fields.len]ActionInfo = undefined;
-        for (fields, 0..) |f, i| {
-            result[i] = .{ .action = @enumFromInt(f.value), .name = f.name };
+        const info = @typeInfo(Action).@"enum";
+        var result: [info.field_names.len]ActionInfo = undefined;
+        for (info.field_names, info.field_values, 0..) |name, value, i| {
+            result[i] = .{ .action = @fromBackingInt(@intCast(value)), .name = name };
         }
         break :blk result;
     };
 
-    const stdin_file = std.fs.File{ .handle = if (@import("builtin").os.tag == .windows) blk: {
-        const handle = std.os.windows.kernel32.GetStdHandle(std.os.windows.STD_INPUT_HANDLE);
-        break :blk handle orelse return error.StdinUnavailable;
-    } else blk: {
-        break :blk 0;
-    } };
+    const stdin_file = std.Io.File.stdin();
 
     var line_buf: [64]u8 = undefined;
     var modified = false;
@@ -110,16 +106,16 @@ pub fn run(allocator: Allocator, config_path: []const u8, _: ?[]const kb.UserBin
         if (modified) std.debug.print("\n  * unsaved changes\n", .{});
         std.debug.print("\nEnter action number, 's' to save, 'q' to quit: ", .{});
 
-        const n = stdin_file.read(&line_buf) catch break;
+        const n = stdin_file.readStreaming(pio.io, &.{&line_buf}) catch break;
         if (n == 0) break;
-        const input = std.mem.trimRight(u8, line_buf[0..n], "\r\n ");
+        const input = std.mem.trimEnd(u8, line_buf[0..n], "\r\n ");
         if (input.len == 0) continue;
 
         if (std.mem.eql(u8, input, "q")) {
             if (modified) {
                 std.debug.print("Discard changes? (y/n): ", .{});
-                const n2 = stdin_file.read(&line_buf) catch break;
-                const confirm = std.mem.trimRight(u8, line_buf[0..n2], "\r\n ");
+                const n2 = stdin_file.readStreaming(pio.io, &.{&line_buf}) catch break;
+                const confirm = std.mem.trimEnd(u8, line_buf[0..n2], "\r\n ");
                 if (!std.mem.eql(u8, confirm, "y")) continue;
             }
             break;
@@ -145,9 +141,9 @@ pub fn run(allocator: Allocator, config_path: []const u8, _: ?[]const kb.UserBin
 
         std.debug.print("\nType combo for '{s}' (e.g. ctrl+n, shift+insert), or 'unbind', or 'cancel':\n> ", .{selected.name});
 
-        const combo_n = stdin_file.read(&line_buf) catch break;
+        const combo_n = stdin_file.readStreaming(pio.io, &.{&line_buf}) catch break;
         if (combo_n == 0) break;
-        const combo_input = std.mem.trimRight(u8, line_buf[0..combo_n], "\r\n ");
+        const combo_input = std.mem.trimEnd(u8, line_buf[0..combo_n], "\r\n ");
         if (combo_input.len == 0 or std.mem.eql(u8, combo_input, "cancel")) continue;
 
         // Remove ALL existing combos for this action first (1 combo per action)
@@ -192,11 +188,11 @@ fn removeActionBindings(map: *kb.KeybindingMap, action: Action) void {
 pub fn writeKeybindingsToConfig(allocator: Allocator, config_path: []const u8, map: *const kb.KeybindingMap) !void {
     var existing_content: []const u8 = "";
     var content_owned = false;
-    if (std.fs.cwd().openFile(config_path, .{})) |file| {
-        defer file.close();
-        const stat = try file.stat();
+    if (std.Io.Dir.cwd().openFile(pio.io, config_path, .{})) |file| {
+        defer file.close(pio.io);
+        const stat = try file.stat(pio.io);
         if (stat.size > 0 and stat.size < 1_000_000) {
-            existing_content = try file.readToEndAlloc(allocator, 1_000_000);
+            existing_content = try pio.readToEndAlloc(file, allocator, 1_000_000);
             content_owned = true;
         }
     } else |_| {}
@@ -228,9 +224,9 @@ pub fn writeKeybindingsToConfig(allocator: Allocator, config_path: []const u8, m
     // Append [keybindings] section — one combo per action
     try toml_buf.appendSlice(allocator, "\n[keybindings]\n");
 
-    const fields = @typeInfo(Action).@"enum".fields;
-    inline for (fields) |field| {
-        const action: Action = @enumFromInt(field.value);
+    const info = @typeInfo(Action).@"enum";
+    inline for (info.field_names, info.field_values) |field_name, value| {
+        const action: Action = @fromBackingInt(@intCast(value));
         if (action == .none) continue;
 
         var iter = map.map.iterator();
@@ -238,7 +234,7 @@ pub fn writeKeybindingsToConfig(allocator: Allocator, config_path: []const u8, m
             if (entry.value_ptr.* == action) {
                 var fmt_buf: [64]u8 = undefined;
                 const formatted = formatKeyCombo(entry.key_ptr.*, &fmt_buf);
-                try toml_buf.appendSlice(allocator, field.name);
+                try toml_buf.appendSlice(allocator, field_name);
                 try toml_buf.appendSlice(allocator, " = \"");
                 try toml_buf.appendSlice(allocator, formatted);
                 try toml_buf.appendSlice(allocator, "\"\n");
@@ -248,10 +244,10 @@ pub fn writeKeybindingsToConfig(allocator: Allocator, config_path: []const u8, m
     }
 
     const dir = std.fs.path.dirname(config_path);
-    if (dir) |d| std.fs.cwd().makePath(d) catch {};
-    const file = try std.fs.cwd().createFile(config_path, .{});
-    defer file.close();
-    try file.writeAll(toml_buf.items);
+    if (dir) |d| std.Io.Dir.cwd().createDirPath(pio.io, d) catch {};
+    const file = try std.Io.Dir.cwd().createFile(pio.io, config_path, .{});
+    defer file.close(pio.io);
+    try file.writeStreamingAll(pio.io, toml_buf.items);
 }
 
 /// Parse [keybindings] section from a TOML config file into UserBinding entries.
@@ -261,9 +257,9 @@ fn loadKeybindingsFromConfig(
     config_path: []const u8,
     out: *std.ArrayListUnmanaged(kb.UserBinding),
 ) !void {
-    const file = std.fs.cwd().openFile(config_path, .{}) catch return;
-    defer file.close();
-    const content = file.readToEndAlloc(allocator, 1_000_000) catch return;
+    const file = std.Io.Dir.cwd().openFile(pio.io, config_path, .{}) catch return;
+    defer file.close(pio.io);
+    const content = pio.readToEndAlloc(file, allocator, 1_000_000) catch return;
     defer allocator.free(content);
 
     var in_section = false;

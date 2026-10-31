@@ -8,6 +8,7 @@
 ///   - Missing import files log warning and continue
 ///   - Child config overrides parent (last-writer-wins per field)
 const std = @import("std");
+const pio = @import("pio");
 const toml = @import("toml");
 const Config = @import("Config.zig").Config;
 const layout_mod = @import("layout");
@@ -524,8 +525,8 @@ fn resolveImportPath(allocator: std.mem.Allocator, base_file: []const u8, import
 
     // Expand ~ to HOME
     if (import_path.len > 0 and import_path[0] == '~') {
-        const home = std.process.getEnvVarOwned(allocator, "HOME") catch
-            std.process.getEnvVarOwned(allocator, "USERPROFILE") catch
+        const home = pio.getEnvVarOwned(allocator, "HOME") catch
+            pio.getEnvVarOwned(allocator, "USERPROFILE") catch
             return allocator.dupe(u8, import_path);
         defer allocator.free(home);
         const rest = if (import_path.len > 1) import_path[1..] else "";
@@ -601,7 +602,7 @@ fn parseKeybindingsSection(allocator: std.mem.Allocator, content: []const u8) ![
 
 /// Read entire file contents into an allocator-owned slice.
 fn readFileContents(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
-    const file = std.fs.cwd().openFile(path, .{}) catch |err| {
+    const file = std.Io.Dir.cwd().openFile(pio.io, path, .{}) catch |err| {
         return switch (err) {
             error.FileNotFound => error.FileNotFound,
             error.AccessDenied => {
@@ -614,9 +615,9 @@ fn readFileContents(allocator: std.mem.Allocator, path: []const u8) ![]const u8 
             },
         };
     };
-    defer file.close();
+    defer file.close(pio.io);
 
-    const stat = file.stat() catch return error.FileNotFound;
+    const stat = file.stat(pio.io) catch return error.FileNotFound;
     const size = stat.size;
     if (size == 0) return allocator.dupe(u8, "");
     if (size > 10 * 1024 * 1024) {
@@ -627,7 +628,7 @@ fn readFileContents(allocator: std.mem.Allocator, path: []const u8) ![]const u8 
     const buf = allocator.alloc(u8, size) catch return error.OutOfMemory;
     errdefer allocator.free(buf);
 
-    const read = file.readAll(buf) catch return error.FileNotFound;
+    const read = file.readPositionalAll(pio.io, buf, 0) catch return error.FileNotFound;
     if (read != size) {
         // Partial read -- resize
         const trimmed = allocator.realloc(buf, read) catch return buf[0..read];

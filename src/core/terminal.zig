@@ -1,4 +1,5 @@
 const std = @import("std");
+const pio = @import("pio");
 const ghostty_vt = @import("ghostty-vt");
 const observer_mod = @import("observer.zig");
 
@@ -25,7 +26,7 @@ pub const PTermTerminal = struct {
     vt_stream: ?ghostty_vt.TerminalStream,
 
     pub fn init(alloc: std.mem.Allocator, config: Config) !PTermTerminal {
-        const t: ghostty_vt.Terminal = try .init(alloc, .{
+        const t: ghostty_vt.Terminal = try .init(pio.io, alloc, .{
             .cols = config.cols,
             .rows = config.rows,
         });
@@ -77,7 +78,7 @@ pub const PTermTerminal = struct {
 
     /// Resize the terminal.
     pub fn resize(self: *PTermTerminal, cols: u16, rows: u16) !void {
-        try self.terminal.resize(self.allocator, cols, rows);
+        try self.terminal.resize(self.allocator, .{ .cols = cols, .rows = rows });
         self.config.cols = cols;
         self.config.rows = rows;
     }

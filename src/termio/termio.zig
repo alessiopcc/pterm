@@ -12,6 +12,7 @@
 /// Single buffer with mutex: simple, correct, no stale-state bugs.
 /// The mutex is held briefly for reads (render) and writes (parser).
 const std = @import("std");
+const pio = @import("pio");
 const terminal_mod = @import("terminal");
 const observer_mod = @import("observer");
 const mailbox_mod = @import("mailbox");
@@ -42,7 +43,7 @@ pub const TermIO = struct {
     /// SPSC ring buffer connecting reader -> parser.
     mailbox: *MailboxType,
     /// Mutex protecting all terminal access.
-    mutex: std.Thread.Mutex,
+    mutex: pio.Mutex,
     /// Allocator used for terminal creation.
     allocator: std.mem.Allocator,
     /// PTY reader thread: reads from PTY, pushes to mailbox.

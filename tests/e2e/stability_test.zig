@@ -3,6 +3,7 @@
 /// Tests rapid PTY create/close cycles, fast terminal output,
 /// and multiple simultaneous shells.
 const std = @import("std");
+const pio = @import("pio");
 const builtin = @import("builtin");
 const testing = std.testing;
 const harness = @import("e2e_harness");
@@ -36,7 +37,7 @@ test "fast output stress" {
     defer app.deinit();
 
     // Wait for shell to initialize
-    std.Thread.sleep(200 * std.time.ns_per_ms);
+    pio.sleep(200 * std.time.ns_per_ms);
 
     // Platform-specific loop command for generating lots of output
     if (comptime builtin.os.tag == .windows) {
@@ -73,7 +74,7 @@ test "multiple shells simultaneously" {
     }
 
     // Wait for all shells to start
-    std.Thread.sleep(300 * std.time.ns_per_ms);
+    pio.sleep(300 * std.time.ns_per_ms);
 
     // Send unique marker to each
     const markers = [_][]const u8{

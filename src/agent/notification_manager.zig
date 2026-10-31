@@ -7,6 +7,7 @@
 ///
 /// Uses AutoHashMapUnmanaged with allocator-per-call pattern.
 const std = @import("std");
+const pio = @import("pio");
 const notification = @import("notification");
 
 pub const NotificationManager = struct {
@@ -24,7 +25,7 @@ pub const NotificationManager = struct {
     /// Initialize with config values.
     pub fn init(cooldown_seconds: i64, enabled: bool, suppress_when_focused: bool, play_sound: bool) NotificationManager {
         return .{
-            .last_notify = .{},
+            .last_notify = .empty,
             .cooldown_ns = @as(i128, cooldown_seconds) * 1_000_000_000,
             .enabled = enabled,
             .suppress_when_focused = suppress_when_focused,
@@ -56,7 +57,7 @@ pub const NotificationManager = struct {
 
     /// Send a notification if conditions are met, using real wall-clock time.
     pub fn notify(self: *NotificationManager, allocator: std.mem.Allocator, pane_id: u32, pane_identity: []const u8, matched_text: ?[]const u8, window_focused: bool) void {
-        const now = std.time.nanoTimestamp();
+        const now = pio.nanoTimestamp();
         self.notifyWithTimestamp(allocator, pane_id, pane_identity, matched_text, window_focused, now);
     }
 

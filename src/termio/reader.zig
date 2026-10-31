@@ -8,6 +8,7 @@
 /// When the mailbox is full, bytes are dropped (non-blocking push).
 /// When the PTY has no data, the read call blocks (which is expected).
 const std = @import("std");
+const pio = @import("pio");
 const builtin = @import("builtin");
 const mailbox_mod = @import("mailbox");
 const pty_mod = @import("pty");
@@ -93,7 +94,7 @@ pub const PtyReader = struct {
                 // where readFromPty polls PeekNamedPipe instead of blocking.
                 // 5ms keeps keystroke latency imperceptible while cutting
                 // wakeups per pane from ~1000/s to ~200/s.
-                std.Thread.sleep(5 * std.time.ns_per_ms);
+                pio.sleep(5 * std.time.ns_per_ms);
             }
         }
     }
@@ -116,7 +117,7 @@ pub const PtyReader = struct {
             lpBytesRead: ?*std.os.windows.DWORD,
             lpTotalBytesAvail: ?*std.os.windows.DWORD,
             lpBytesLeftThisMessage: ?*std.os.windows.DWORD,
-        ) callconv(.c) std.os.windows.BOOL;
+        ) callconv(.c) c_int;
     }.PeekNamedPipe else void;
 
     fn readFromPtyWindows(self: *PtyReader, buf: []u8) !usize {

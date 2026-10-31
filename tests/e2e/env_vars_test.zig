@@ -3,6 +3,7 @@
 /// Spawns a shell via PTY and verifies that TERM=xterm-256color and
 /// COLORTERM=truecolor are set in the child environment.
 const std = @import("std");
+const pio = @import("pio");
 const builtin = @import("builtin");
 const testing = std.testing;
 const harness = @import("e2e_harness");
@@ -16,7 +17,7 @@ test "TERM env var is xterm-256color" {
     defer app.deinit();
 
     // Wait for shell to start
-    std.Thread.sleep(200 * std.time.ns_per_ms);
+    pio.sleep(200 * std.time.ns_per_ms);
 
     // Send command to print TERM
     if (comptime builtin.os.tag == .windows) {
@@ -44,7 +45,7 @@ test "COLORTERM env var is truecolor" {
     var app = try TestApp.init(allocator, shell_path, null);
     defer app.deinit();
 
-    std.Thread.sleep(200 * std.time.ns_per_ms);
+    pio.sleep(200 * std.time.ns_per_ms);
 
     if (comptime builtin.os.tag == .windows) {
         try app.sendInput("echo %COLORTERM%\r\n");

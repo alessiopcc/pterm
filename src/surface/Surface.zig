@@ -6,6 +6,7 @@
 ///
 /// Communication between threads uses atomics (lock-free for hot path).
 const std = @import("std");
+const pio = @import("pio");
 const builtin = @import("builtin");
 const glfw = @import("zglfw");
 
@@ -58,7 +59,7 @@ pub const Surface = struct {
     config: Config,
     perf_logging: bool,
     debug_keys: bool,
-    debug_key_file: ?std.fs.File,
+    debug_key_file: ?std.Io.File,
 
     // Cursor blink state
     cursor_blink_timer: i128,
@@ -140,7 +141,7 @@ pub const Surface = struct {
             .window = window,
             .scheduler = FrameScheduler{},
             .config = config,
-            .cursor_blink_timer = std.time.nanoTimestamp(),
+            .cursor_blink_timer = pio.nanoTimestamp(),
             .cursor_visible = true,
             .focused = true,
             .frame_arena = std.heap.ArenaAllocator.init(allocator),
@@ -154,7 +155,7 @@ pub const Surface = struct {
             .new_grid_cols = std.atomic.Value(u16).init(0),
             .new_grid_rows = std.atomic.Value(u16).init(0),
             .pending_title_update = std.atomic.Value(bool).init(false),
-            .osc_title = [_]u8{0} ** 256,
+            .osc_title = @as([256]u8, @splat(0)),
             .osc_title_len = std.atomic.Value(u32).init(0),
             .pending_font_change = std.atomic.Value(bool).init(false),
             .new_font_size = std.atomic.Value(u32).init(@intFromFloat(config.font_size_pt() * 100.0)),
@@ -169,10 +170,11 @@ pub const Surface = struct {
             .debug_key_file = if (options.debug_keys) blk: {
                 // Open in append so we share the file with App's debug handle
                 // without either truncating the other's entries.
-                const f = std.fs.cwd().openFile("pterm_debug.log", .{ .mode = .read_write }) catch {
-                    break :blk std.fs.cwd().createFile("pterm_debug.log", .{}) catch null;
+                const f = std.Io.Dir.cwd().openFile(pio.io, "pterm_debug.log", .{ .mode = .read_write }) catch {
+                    break :blk std.Io.Dir.cwd().createFile(pio.io, "pterm_debug.log", .{}) catch null;
                 };
-                f.seekFromEnd(0) catch {};
+                var append_w = f.writerStreaming(pio.io, &.{});
+                append_w.seekToUnbuffered(f.length(pio.io) catch 0) catch {};
                 break :blk f;
             } else null,
             .gl_procs = undefined,
@@ -180,7 +182,7 @@ pub const Surface = struct {
     }
 
     pub fn deinit(self: *Surface) void {
-        if (self.debug_key_file) |f| f.close();
+        if (self.debug_key_file) |f| f.close(pio.io);
         self.keybinding_map.deinit();
         self.frame_arena.deinit();
         self.font_grid.deinit();
@@ -247,7 +249,7 @@ pub const Surface = struct {
 
         // 6. Open perf log file if --perf flag
         const perf_log = if (self.perf_logging)
-            std.fs.cwd().createFile("pterm_perf.log", .{}) catch null
+            std.Io.Dir.cwd().createFile(pio.io, "pterm_perf.log", .{}) catch null
         else
             null;
 
@@ -258,11 +260,11 @@ pub const Surface = struct {
         while (!self.should_quit.load(.acquire)) {
             if (self.frame_requested.swap(false, .acq_rel)) {
                 // Throttle: skip if less than 16ms since last frame
-                const now = std.time.nanoTimestamp();
+                const now = pio.nanoTimestamp();
                 if (now - last_frame_ns < min_frame_ns) {
                     // Re-request so we render on the next cycle
                     self.frame_requested.store(true, .release);
-                    std.Thread.sleep(1_000_000); // 1ms
+                    pio.sleep(1_000_000); // 1ms
                     continue;
                 }
                 last_frame_ns = now;
@@ -380,7 +382,7 @@ pub const Surface = struct {
                             self.frame_count,      diag.frame_time_us,      diag.draw_calls,
                             diag.glyph_cache_hits, diag.glyph_cache_misses,
                         }) catch "";
-                        if (pline.len > 0) _ = f.write(pline) catch 0;
+                        if (pline.len > 0) f.writeStreamingAll(pio.io, pline) catch {};
                     }
                 }
 
@@ -390,12 +392,12 @@ pub const Surface = struct {
                 _ = self.frame_arena.reset(.retain_capacity);
             } else {
                 // No frame requested -- sleep briefly to avoid busy-wait
-                std.Thread.sleep(1_000_000); // 1ms
+                pio.sleep(1_000_000); // 1ms
             }
         }
 
         // 8. Cleanup on render thread
-        if (perf_log) |f| f.close();
+        if (perf_log) |f| f.close(pio.io);
         backend.deinit();
         self.renderer = null;
         gl.makeProcTableCurrent(null);
@@ -433,9 +435,9 @@ pub const Surface = struct {
         if (self.debug_key_file) |f| {
             var tmp: [128]u8 = undefined;
             const line = std.fmt.bufPrint(&tmp, "[key] code={d} action={d} ctrl={} shift={} alt={}\n", .{
-                @intFromEnum(key), @intFromEnum(action), mods.control, mods.shift, mods.alt,
+                @backingInt(key), @backingInt(action), mods.control, mods.shift, mods.alt,
             }) catch "";
-            if (line.len > 0) _ = f.write(line) catch 0;
+            if (line.len > 0) f.writeStreamingAll(pio.io, line) catch {};
         }
 
         // Step A: Check for special (non-printable) keys via keybinding map
@@ -483,7 +485,7 @@ pub const Surface = struct {
                 self.scheduler.markActive();
                 self.requestFrame();
                 // Reset cursor blink on input
-                self.cursor_blink_timer = std.time.nanoTimestamp();
+                self.cursor_blink_timer = pio.nanoTimestamp();
                 self.cursor_visible = true;
             },
             .paste_clipboard => {
@@ -525,7 +527,7 @@ pub const Surface = struct {
             self.scheduler.markActive();
             self.requestFrame();
             // Reset cursor blink on input
-            self.cursor_blink_timer = std.time.nanoTimestamp();
+            self.cursor_blink_timer = pio.nanoTimestamp();
             self.cursor_visible = true;
         }
     }
@@ -708,7 +710,8 @@ pub const Surface = struct {
             batch.ensureTotalCapacity(self.allocator, clip.len * 2) catch {};
             var iter = (std.unicode.Utf8View.init(clip) catch std.unicode.Utf8View.initUnchecked(clip)).iterator();
             while (iter.nextCodepoint()) |cp| {
-                batch.writer(self.allocator).print(
+                batch.print(
+                    self.allocator,
                     "\x1b[0;0;{d};1;0;1_\x1b[0;0;{d};0;0;1_",
                     .{ cp, cp },
                 ) catch {};
@@ -777,7 +780,7 @@ pub const Surface = struct {
     pub fn handleFocusChange(self: *Surface, focused: bool) void {
         self.focused = focused;
         if (focused) {
-            self.cursor_blink_timer = std.time.nanoTimestamp();
+            self.cursor_blink_timer = pio.nanoTimestamp();
             self.cursor_visible = true;
         }
         self.requestFrame();
@@ -835,7 +838,7 @@ pub const Surface = struct {
             return;
         }
 
-        const now = std.time.nanoTimestamp();
+        const now = pio.nanoTimestamp();
         const elapsed = now - self.cursor_blink_timer;
         const blink_interval: i128 = 530_000_000; // 530ms in nanoseconds
 
@@ -911,7 +914,7 @@ pub const Surface = struct {
 
     pub fn focusCallback(handle: *glfw.Window, focused: glfw.Bool) callconv(.c) void {
         const surface = Window.getUserPointer(Surface, handle) orelse return;
-        surface.handleFocusChange(@intFromEnum(focused) != 0);
+        surface.handleFocusChange(@backingInt(focused) != 0);
     }
 
     pub fn scrollCallback(handle: *glfw.Window, _: f64, yoffset: f64) callconv(.c) void {

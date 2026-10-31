@@ -9,10 +9,7 @@ const GlyphBitmap = font_types.GlyphBitmap;
 const GlyphFormat = font_types.GlyphFormat;
 const FontMetrics = font_types.FontMetrics;
 
-const c = @cImport({
-    @cInclude("ft2build.h");
-    @cInclude("freetype/freetype.h");
-});
+const c = @import("c");
 
 pub const FreeTypeRasterizer = struct {
     library: c.FT_Library,

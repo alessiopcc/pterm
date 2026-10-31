@@ -6,6 +6,7 @@
 ///   - Match list with navigation and wrap-around
 ///   - Query persists between open/close within same pane
 const std = @import("std");
+const pio = @import("pio");
 
 pub const SearchState = struct {
     /// Saved viewport state for restore on search close.
@@ -24,9 +25,9 @@ pub const SearchState = struct {
     };
 
     is_open: bool = false,
-    query: [256]u8 = [_]u8{0} ** 256,
+    query: [256]u8 = @as([256]u8, @splat(0)),
     query_len: u16 = 0,
-    matches: std.ArrayListUnmanaged(Match) = .{},
+    matches: std.ArrayListUnmanaged(Match) = .empty,
     current_match: u32 = 0,
     total_matches: u32 = 0,
     scrollback_offset: u32 = 0,
@@ -58,7 +59,7 @@ pub const SearchState = struct {
             self.query[self.query_len] = c;
             self.query_len += 1;
             self.query_dirty = true;
-            self.last_input_ns = std.time.nanoTimestamp();
+            self.last_input_ns = pio.nanoTimestamp();
         }
     }
 
@@ -68,7 +69,7 @@ pub const SearchState = struct {
             self.query_len -= 1;
             self.query[self.query_len] = 0;
             self.query_dirty = true;
-            self.last_input_ns = std.time.nanoTimestamp();
+            self.last_input_ns = pio.nanoTimestamp();
         }
     }
 
@@ -100,7 +101,7 @@ pub const SearchState = struct {
     /// Clear all matches and reset counters.
     pub fn clearMatches(self: *SearchState, allocator: std.mem.Allocator) void {
         self.matches.deinit(allocator);
-        self.matches = .{};
+        self.matches = .empty;
         self.total_matches = 0;
         self.current_match = 0;
     }
@@ -123,7 +124,7 @@ pub const SearchState = struct {
     /// Free match list resources.
     pub fn deinit(self: *SearchState, allocator: std.mem.Allocator) void {
         self.matches.deinit(allocator);
-        self.matches = .{};
+        self.matches = .empty;
         self.total_matches = 0;
     }
 };

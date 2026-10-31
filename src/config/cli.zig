@@ -26,8 +26,8 @@ pub const CliArgs = struct {
 
 /// Parse CLI arguments from std.process args.
 /// String values are duped into the allocator so they outlive the arg iterator.
-pub fn parse(allocator: std.mem.Allocator) !CliArgs {
-    var args = try std.process.argsWithAllocator(allocator);
+pub fn parse(allocator: std.mem.Allocator, process_args: std.process.Args) !CliArgs {
+    var args = try process_args.iterateAllocator(allocator);
     defer args.deinit();
     _ = args.next(); // skip exe name
 

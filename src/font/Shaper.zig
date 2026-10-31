@@ -7,12 +7,7 @@
 const std = @import("std");
 const font_types = @import("font_types");
 
-pub const c = @cImport({
-    @cInclude("hb.h");
-    @cInclude("hb-ft.h");
-    @cInclude("ft2build.h");
-    @cInclude("freetype/freetype.h");
-});
+pub const c = @import("c");
 
 /// Result of shaping a single glyph.
 pub const ShapedGlyph = struct {

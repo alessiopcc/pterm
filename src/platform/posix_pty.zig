@@ -7,24 +7,12 @@
 // This file only compiles on Linux and macOS targets.
 
 const std = @import("std");
+const pio = @import("pio");
 const posix = std.posix;
 
 const builtin = @import("builtin");
 
-const c = @cImport({
-    // forkpty lives in <util.h> on macOS, <pty.h> on Linux.
-    if (builtin.os.tag == .macos) {
-        @cInclude("util.h");
-    } else {
-        @cInclude("pty.h");
-    }
-    @cInclude("unistd.h"); // execvp, close, read, write
-    @cInclude("stdlib.h"); // setenv
-    @cInclude("sys/ioctl.h"); // ioctl, TIOCSWINSZ
-    @cInclude("sys/wait.h"); // waitpid, WNOHANG
-    @cInclude("signal.h"); // kill
-    @cInclude("fcntl.h"); // fcntl, O_NONBLOCK
-});
+const c = @import("c_posix_pty");
 
 pub const PosixPtyError = error{
     ForkFailed,
@@ -108,7 +96,7 @@ pub const PosixPty = struct {
         const result = c.read(self.master_fd, buf.ptr, buf.len);
         if (result < 0) {
             const err = std.c._errno().*;
-            if (err == @intFromEnum(std.c.E.AGAIN) or err == @intFromEnum(std.c.E.INTR)) {
+            if (err == @backingInt(std.c.E.AGAIN) or err == @backingInt(std.c.E.INTR)) {
                 return 0;
             }
             return PosixPtyError.ReadFailed;
@@ -163,7 +151,7 @@ pub const PosixPty = struct {
         var path_buf: [64]u8 = undefined;
         const path = std.fmt.bufPrint(&path_buf, "/proc/{d}/cwd", .{self.child_pid}) catch return null;
         var link_buf: [std.fs.max_path_bytes]u8 = undefined;
-        const link = std.fs.readLinkAbsolute(path, &link_buf) catch return null;
+        const link = std.Io.Dir.readLinkAbsolute(pio.io, path, &link_buf) catch return null;
         if (link.len > buf.len) return null;
         @memcpy(buf[0..link.len], link);
         return buf[0..link.len];

@@ -4,6 +4,7 @@
 /// macOS/Linux: Write BEL byte to /dev/tty.
 const builtin = @import("builtin");
 const std = @import("std");
+const pio = @import("pio");
 
 pub fn beep() void {
     switch (builtin.os.tag) {
@@ -14,8 +15,8 @@ pub fn beep() void {
         },
         else => {
             // Write BEL (0x07) to /dev/tty to trigger system bell on macOS/Linux.
-            if (std.fs.openFileAbsolute("/dev/tty", .{ .mode = .write_only })) |tty| {
-                defer tty.close();
+            if (std.Io.Dir.openFileAbsolute(pio.io, "/dev/tty", .{ .mode = .write_only })) |tty| {
+                defer tty.close(pio.io);
                 _ = tty.write("\x07") catch {};
             } else |_| {}
         },

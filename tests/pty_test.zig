@@ -1,4 +1,5 @@
 const std = @import("std");
+const pio = @import("pio");
 const testing = std.testing;
 const builtin = @import("builtin");
 
@@ -23,22 +24,22 @@ const PeekNamedPipeFn = if (builtin.os.tag == .windows) struct {
         lpBytesRead: ?*std.os.windows.DWORD,
         lpTotalBytesAvail: ?*std.os.windows.DWORD,
         lpBytesLeftThisMessage: ?*std.os.windows.DWORD,
-    ) callconv(.c) std.os.windows.BOOL;
+    ) callconv(.c) c_int;
 }.PeekNamedPipe else void;
 
 /// Read from PTY with timeout. On Windows, uses PeekNamedPipe to avoid
 /// blocking indefinitely on ReadFile.
 fn peekAndRead(p: *Pty, buf: []u8, timeout_ms: u64) !usize {
     if (comptime builtin.os.tag == .windows) {
-        const deadline = std.time.milliTimestamp() + @as(i64, @intCast(timeout_ms));
-        while (std.time.milliTimestamp() < deadline) {
+        const deadline = pio.milliTimestamp() + @as(i64, @intCast(timeout_ms));
+        while (pio.milliTimestamp() < deadline) {
             var avail: std.os.windows.DWORD = 0;
             const peek_ok = PeekNamedPipeFn(p.output_read, null, 0, null, &avail, null);
             if (peek_ok != 0 and avail > 0) {
                 return try p.read(buf);
             }
             if (peek_ok == 0) return error.ReadFailed;
-            std.Thread.sleep(50 * std.time.ns_per_ms);
+            pio.sleep(50 * std.time.ns_per_ms);
         }
         return 0; // timeout
     } else {
@@ -129,7 +130,7 @@ test "pty write and read roundtrip" {
             const n = try p.read(buf[total..]);
             total += n;
             if (total > 0 and std.mem.indexOf(u8, buf[0..total], "hello") != null) break;
-            std.Thread.sleep(100 * std.time.ns_per_ms);
+            pio.sleep(100 * std.time.ns_per_ms);
         }
         try testing.expect(std.mem.indexOf(u8, buf[0..total], "hello") != null);
     }
@@ -187,15 +188,19 @@ test "mailbox push and pop" {
     var mbox = Mailbox{};
 
     // Push 100 bytes
-    const data = "a]" ** 50; // 100 chars
-    const pushed = mbox.push(data);
+    const data = comptime blk: {
+        var buf: [100]u8 = undefined;
+        for (0..50) |i| buf[i * 2 ..][0..2].* = "a]".*;
+        break :blk buf;
+    }; // 100 chars
+    const pushed = mbox.push(&data);
     try testing.expectEqual(@as(usize, 100), pushed);
 
     // Pop them back
     var out: [256]u8 = undefined;
     const popped = mbox.pop(&out);
     try testing.expectEqual(@as(usize, 100), popped);
-    try testing.expectEqualSlices(u8, data, out[0..100]);
+    try testing.expectEqualSlices(u8, &data, out[0..100]);
 }
 
 test "mailbox wraparound" {
@@ -203,7 +208,7 @@ test "mailbox wraparound" {
     var mbox = Mailbox{};
 
     // Fill near capacity (63 bytes max in 64-capacity buffer)
-    const fill = [_]u8{'X'} ** 60;
+    const fill = @as([60]u8, @splat('X'));
     const pushed1 = mbox.push(&fill);
     try testing.expectEqual(@as(usize, 60), pushed1);
 
@@ -213,7 +218,7 @@ test "mailbox wraparound" {
     try testing.expectEqual(@as(usize, 40), popped1);
 
     // Push 30 more bytes (should wrap around the end of buffer)
-    const more = [_]u8{'Y'} ** 30;
+    const more = @as([30]u8, @splat('Y'));
     const pushed2 = mbox.push(&more);
     try testing.expectEqual(@as(usize, 30), pushed2);
 
@@ -232,12 +237,12 @@ test "mailbox full returns 0" {
     var mbox = Mailbox{};
 
     // Fill to capacity (15 bytes in 16-capacity buffer)
-    const fill = [_]u8{'Z'} ** 15;
+    const fill = @as([15]u8, @splat('Z'));
     const pushed = mbox.push(&fill);
     try testing.expectEqual(@as(usize, 15), pushed);
 
     // Try to push more -- should return 0
-    const extra = [_]u8{'Q'} ** 5;
+    const extra = @as([5]u8, @splat('Q'));
     const pushed2 = mbox.push(&extra);
     try testing.expectEqual(@as(usize, 0), pushed2);
 
@@ -266,10 +271,10 @@ test "pty reader thread delivers bytes" {
     try reader.start();
 
     // Wait for data to arrive in the mailbox
-    const deadline = std.time.milliTimestamp() + 5000;
-    while (std.time.milliTimestamp() < deadline) {
+    const deadline = pio.milliTimestamp() + 5000;
+    while (pio.milliTimestamp() < deadline) {
         if (mbox.available() > 0) break;
-        std.Thread.sleep(50 * std.time.ns_per_ms);
+        pio.sleep(50 * std.time.ns_per_ms);
     }
 
     // Should have received some bytes from the shell
@@ -300,7 +305,7 @@ test "pty reader stop" {
 
     // Start then immediately stop
     try reader.start();
-    std.Thread.sleep(100 * std.time.ns_per_ms);
+    pio.sleep(100 * std.time.ns_per_ms);
 
     // Stop should join the thread cleanly
     reader.stop();

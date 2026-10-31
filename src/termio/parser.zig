@@ -4,6 +4,7 @@
 /// to the terminal's VT parser via feedBytes(). Holds the terminal mutex
 /// during feedBytes() to synchronize with the render thread.
 const std = @import("std");
+const pio = @import("pio");
 const terminal_mod = @import("terminal");
 const mailbox_mod = @import("mailbox");
 
@@ -16,7 +17,7 @@ pub const ParseThread = struct {
     running: std.atomic.Value(bool),
     thread: ?std.Thread,
     /// Pointer to TermIO's mutex — held during feedBytes/resize.
-    term_mutex: ?*std.Thread.Mutex,
+    term_mutex: ?*pio.Mutex,
     /// Pending resize signaled by TermIO.resize().
     pending_resize_cols: std.atomic.Value(u16),
     pending_resize_rows: std.atomic.Value(u16),

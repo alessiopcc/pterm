@@ -1,5 +1,6 @@
 /// Action dispatch, pane operations, tab management, overlays.
 const std = @import("std");
+const pio = @import("pio");
 const app_mod = @import("App.zig");
 const App = app_mod.App;
 const PaneData = app_mod.PaneData;
@@ -547,7 +548,7 @@ pub fn resizeAllPanes(self: *App) void {
     self.suppress_activity_frames.store(30, .release);
     for (self.tab_manager.tabs.items) |*t| t.has_activity = false;
     // Suppress agent state transitions on ALL panes during resize
-    const deadline: i64 = @as(i64, @intCast(std.time.nanoTimestamp())) + app_mod.SUPPRESS_DURATION_NS;
+    const deadline: i64 = @as(i64, @intCast(pio.nanoTimestamp())) + app_mod.SUPPRESS_DURATION_NS;
     var pd_iter = self.pane_data.iterator();
     while (pd_iter.next()) |entry| {
         entry.value_ptr.*.suppressAgentOutputUntil(deadline);
@@ -623,7 +624,7 @@ const Eligible = struct { tab_idx: usize, pane_id: u32, state: AgentState.State 
 /// Walk all tabs in (tab_idx, pane_id) order and collect eligible panes.
 /// Caller owns the returned slice (frame_arena).
 fn collectEligible(self: *App, alloc: std.mem.Allocator) []Eligible {
-    var list = std.ArrayListUnmanaged(Eligible){};
+    var list = std.ArrayListUnmanaged(Eligible).empty;
     for (self.tab_manager.tabs.items, 0..) |*tab, ti| {
         const leaves = tree_ops.collectLeaves(tab.root, alloc) catch continue;
         defer alloc.free(leaves);

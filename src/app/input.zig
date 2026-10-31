@@ -1,6 +1,7 @@
 /// Input handling: keyboard, mouse, search overlay, picker overlays.
 const builtin = @import("builtin");
 const std = @import("std");
+const pio = @import("pio");
 const app_mod = @import("App.zig");
 const App = app_mod.App;
 const PaneData = app_mod.PaneData;
@@ -85,9 +86,9 @@ pub fn handleKeyInput(self: *App, key: glfw.Key, action: glfw.Action, mods: glfw
     if (self.debug_key_file) |f| {
         var tmp: [128]u8 = undefined;
         const line = std.fmt.bufPrint(&tmp, "[key] code={d} action={d} ctrl={} shift={} alt={}\n", .{
-            @intFromEnum(key), @intFromEnum(action), mods.control, mods.shift, mods.alt,
+            @backingInt(key), @backingInt(action), mods.control, mods.shift, mods.alt,
         }) catch "";
-        if (line.len > 0) _ = f.write(line) catch 0;
+        if (line.len > 0) f.writeStreamingAll(pio.io, line) catch {};
     }
 
     // Check keybinding map — special keys first, then character keys
@@ -309,7 +310,7 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
                 // empty space between them) must not trigger maximize.
                 const title_h: i32 = @intCast(TabBarRenderer.titleBarHeight(self.chrome_cell_height));
                 if (fb_y < title_h) {
-                    const now = std.time.nanoTimestamp();
+                    const now = pio.nanoTimestamp();
                     const elapsed_ns = now - self.titlebar_last_click_time;
                     self.titlebar_last_click_time = now;
                     if (elapsed_ns > 0 and elapsed_ns < 400_000_000) { // 400ms threshold
@@ -504,7 +505,7 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
                             const cols: u16 = if (cw > 0) @intCast(@as(u32, @intCast(bounds.w)) / cw) else 80;
 
                             // Multi-click detection (400ms threshold)
-                            const now = std.time.nanoTimestamp();
+                            const now = pio.nanoTimestamp();
                             const elapsed_ns = now - self.text_select_last_click_time;
                             self.text_select_last_click_time = now;
                             if (elapsed_ns > 0 and elapsed_ns < 400_000_000) {

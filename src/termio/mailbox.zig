@@ -4,17 +4,18 @@
 /// This is a lock-free ring buffer using atomic operations for thread safety.
 /// The reader thread pushes bytes (producer), and the parser thread pops bytes (consumer).
 const std = @import("std");
+const pio = @import("pio");
 
 pub fn Mailbox(comptime capacity: usize) type {
     return struct {
         const Self = @This();
 
-        buffer: [capacity]u8 = [_]u8{0} ** capacity,
+        buffer: [capacity]u8 = @as([capacity]u8, @splat(0)),
         write_pos: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
         read_pos: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
         /// Signaled by push() when bytes are written, awaited by the parse thread
         /// via waitData() so it can sleep instead of busy-spinning when idle.
-        data_event: std.Thread.ResetEvent = .{},
+        data_event: std.Io.Event = .unset,
 
         /// Push data into the mailbox. Returns the number of bytes actually written.
         /// If the buffer is full, excess bytes are dropped (non-blocking).
@@ -34,20 +35,20 @@ pub fn Mailbox(comptime capacity: usize) type {
             }
 
             self.write_pos.store(pos % capacity, .release);
-            if (written > 0) self.data_event.set();
+            if (written > 0) self.data_event.set(pio.io);
             return written;
         }
 
         /// Block up to timeout_ns for a push signal, then reset the event so the
         /// next wait blocks again. Consumers call this when pop() returned 0.
         pub fn waitData(self: *Self, timeout_ns: u64) void {
-            self.data_event.timedWait(timeout_ns) catch {};
+            self.data_event.waitTimeout(pio.io, .{ .duration = .{ .raw = .fromNanoseconds(@intCast(timeout_ns)), .clock = .awake } }) catch {};
             self.data_event.reset();
         }
 
         /// Unblock any thread currently inside waitData(). Used by shutdown.
         pub fn wake(self: *Self) void {
-            self.data_event.set();
+            self.data_event.set(pio.io);
         }
 
         /// Pop data from the mailbox into the provided buffer.

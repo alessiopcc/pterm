@@ -10,6 +10,7 @@
 //!   }
 
 const std = @import("std");
+const pio = @import("pio");
 const builtin = @import("builtin");
 
 const is_windows = builtin.os.tag == .windows;
@@ -19,7 +20,8 @@ const windows = std.os.windows;
 const HANDLE = windows.HANDLE;
 const HMODULE = windows.HMODULE;
 const DWORD = windows.DWORD;
-const BOOL = windows.BOOL;
+// Win32 BOOL as a plain int (std's BOOL is now an enum); same ABI.
+const BOOL = c_int;
 const LONG = c_long;
 const LPVOID = ?*anyopaque;
 
@@ -111,26 +113,26 @@ fn resolveCrashDir(buf: []u8) ![]const u8 {
     var fba = std.heap.FixedBufferAllocator.init(&env_buf);
 
     const path = if (is_windows) blk: {
-        const local = std.process.getEnvVarOwned(fba.allocator(), "LOCALAPPDATA") catch
+        const local = pio.getEnvVarOwned(fba.allocator(), "LOCALAPPDATA") catch
             return error.NoCrashDir;
         break :blk try std.fmt.bufPrint(buf, "{s}\\pterm\\crashes", .{local});
     } else if (builtin.os.tag == .macos) blk: {
-        const home = std.process.getEnvVarOwned(fba.allocator(), "HOME") catch
+        const home = pio.getEnvVarOwned(fba.allocator(), "HOME") catch
             return error.NoCrashDir;
         break :blk try std.fmt.bufPrint(buf, "{s}/Library/Logs/pterm", .{home});
     } else blk: {
-        const home = std.process.getEnvVarOwned(fba.allocator(), "HOME") catch
+        const home = pio.getEnvVarOwned(fba.allocator(), "HOME") catch
             return error.NoCrashDir;
         break :blk try std.fmt.bufPrint(buf, "{s}/.local/state/pterm/crashes", .{home});
     };
 
-    std.fs.cwd().makePath(path) catch {};
+    std.Io.Dir.cwd().createDirPath(pio.io, path) catch {};
     return path;
 }
 
 /// Build a unique filename stem `crash-YYYYMMDD-HHMMSS-<pid>` into `buf`.
 fn buildStem(buf: []u8) ![]const u8 {
-    const epoch_secs: u64 = @intCast(std.time.timestamp());
+    const epoch_secs: u64 = @intCast(pio.timestamp());
     const day_secs = std.time.epoch.EpochSeconds{ .secs = epoch_secs };
     const day = day_secs.getEpochDay();
     const ymd = day.calculateYearDay();
@@ -163,11 +165,11 @@ fn writePanicLog(msg: []const u8, first_trace_addr: usize) !void {
     const sep: u8 = if (is_windows) '\\' else '/';
     const path = try std.fmt.bufPrint(&path_buf, "{s}{c}{s}.log", .{ dir, sep, stem });
 
-    const file = std.fs.cwd().createFile(path, .{}) catch return;
-    defer file.close();
+    const file = std.Io.Dir.cwd().createFile(pio.io, path, .{}) catch return;
+    defer file.close(pio.io);
 
     var write_buf: [4096]u8 = undefined;
-    var fw = file.writer(&write_buf);
+    var fw = file.writer(pio.io, &write_buf);
     const w = &fw.interface;
 
     w.print("pterm panic\n", .{}) catch {};
@@ -179,7 +181,9 @@ fn writePanicLog(msg: []const u8, first_trace_addr: usize) !void {
         w.print("pid: {d}\n", .{GetCurrentProcessId()}) catch {};
     }
     w.print("\n--- stack trace ---\n", .{}) catch {};
-    std.debug.dumpCurrentStackTraceToWriter(first_trace_addr, w) catch {};
+    var addr_buf: [64]usize = undefined;
+    const trace = std.debug.captureCurrentStackTrace(.{ .first_address = first_trace_addr }, &addr_buf);
+    std.debug.writeStackTrace(&trace, .{ .writer = w, .mode = .no_color }) catch {};
 
     fw.end() catch {};
 }
@@ -199,12 +203,12 @@ fn sehFilter(info: *EXCEPTION_POINTERS) callconv(.winapi) LONG {
     var log_path_buf: [1200]u8 = undefined;
     const log_path = std.fmt.bufPrint(&log_path_buf, "{s}\\{s}.log", .{ dir, stem }) catch
         return EXCEPTION_EXECUTE_HANDLER;
-    const log_file = std.fs.cwd().createFile(log_path, .{}) catch
+    const log_file = std.Io.Dir.cwd().createFile(pio.io, log_path, .{}) catch
         return EXCEPTION_EXECUTE_HANDLER;
-    defer log_file.close();
+    defer log_file.close(pio.io);
 
     var write_buf: [4096]u8 = undefined;
-    var fw = log_file.writer(&write_buf);
+    var fw = log_file.writer(pio.io, &write_buf);
     const w = &fw.interface;
 
     const rec = info.ExceptionRecord;
