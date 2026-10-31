@@ -60,8 +60,8 @@ pub fn dispatchAction(self: *App, action: keybindings.Action) void {
         .increase_font_size => changeFontSize(self, 1.0),
         .decrease_font_size => changeFontSize(self, -1.0),
         .reset_font_size => resetFontSize(self),
-        .scroll_page_up => if (getFocusedPaneData(self)) |pd| pd.surface.scrollPageUp(),
-        .scroll_page_down => if (getFocusedPaneData(self)) |pd| pd.surface.scrollPageDown(),
+        .scroll_page_up => if (getFocusedPaneData(self)) |pd| scrollPage(self, pd, .up),
+        .scroll_page_down => if (getFocusedPaneData(self)) |pd| scrollPage(self, pd, .down),
 
         // Tab operations
         .new_tab => actionNewTab(self),
@@ -1220,6 +1220,25 @@ pub fn runSearchForPane(pd: *PaneData) void {
 
     pd.search_state.scrollback_offset = max_history;
     pd.search_state.updateMatches(alloc, matches);
+}
+
+/// Scroll the pane's scrollback viewport by one page (the visible row count).
+fn scrollPage(self: *App, pd: *PaneData, dir: enum { up, down }) void {
+    const snap = pd.termio.lockTerminal();
+    const screen = @constCast(snap).getScreens().active;
+    const total_rows = screen.pages.total_rows;
+    const page: u32 = @intCast(screen.pages.rows);
+    pd.termio.unlockTerminal();
+
+    switch (dir) {
+        .up => {
+            const max_scroll: u32 = if (total_rows > page) @intCast(total_rows - page) else 0;
+            pd.scroll_offset = @min(pd.scroll_offset +| page, max_scroll);
+        },
+        .down => pd.scroll_offset -|= page,
+    }
+    pd.surface.scroll_offset = pd.scroll_offset;
+    self.requestFrame();
 }
 
 /// Get PaneData for the currently focused pane.

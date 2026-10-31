@@ -538,8 +538,7 @@ pub const Surface = struct {
             .increase_font_size => self.changeFontSize(1.0),
             .decrease_font_size => self.changeFontSize(-1.0),
             .reset_font_size => self.resetFontSize(),
-            .scroll_page_up => self.scrollPageUp(),
-            .scroll_page_down => self.scrollPageDown(),
+            .scroll_page_up, .scroll_page_down => {}, // App-level: scrolls pane scrollback
             .new_tab, .close_tab, .next_tab, .prev_tab => {},
             .split_horizontal, .split_vertical => {},
             .focus_next_pane, .focus_prev_pane => {},
@@ -748,18 +747,6 @@ pub const Surface = struct {
         self.requestFrame();
     }
 
-    /// Scroll up one page.
-    pub fn scrollPageUp(self: *Surface) void {
-        // TODO: Implement terminal viewport scrolling when scrollback is wired
-        self.requestFrame();
-    }
-
-    /// Scroll down one page.
-    pub fn scrollPageDown(self: *Surface) void {
-        // TODO: Implement terminal viewport scrolling when scrollback is wired
-        self.requestFrame();
-    }
-
     /// Handle framebuffer resize from GLFW callback (main thread).
     pub fn handleResize(self: *Surface, fb_width: u32, fb_height: u32) void {
         const metrics = self.font_grid.getMetrics();
@@ -793,15 +780,6 @@ pub const Surface = struct {
             self.cursor_blink_timer = std.time.nanoTimestamp();
             self.cursor_visible = true;
         }
-        self.requestFrame();
-    }
-
-    /// Handle scroll from GLFW callback (main thread).
-    pub fn handleScroll(self: *Surface, y_offset: f64) void {
-        // Each scroll unit = 3 lines
-        const lines: i32 = @intFromFloat(y_offset * 3.0);
-        _ = lines;
-        // TODO: Implement terminal viewport scrolling when scrollback is wired
         self.requestFrame();
     }
 
