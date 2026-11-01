@@ -39,9 +39,13 @@ tools like Claude Code are waiting for input.
   `PI_PROGRAM_STATUS=1` (unless you set it) and `TERM_PROGRAM=pterm` for its
   shells. Progress
   (OSC 9;4) and notification sequences (OSC 9 / 777) are understood too.
-  For agents that report nothing, pterm falls back to inference: when the
-  foreground process matches the configured list (`claude`, `codex`,
-  `opencode` by default), recent output = working, quiet = idle, and a bell
+  For agents that report nothing, pterm reads the status glyph agents put
+  in the window title (Claude Code `✳` idle / spinner working, Gemini CLI,
+  Codex "Action Required"), which stays accurate through quiet stretches
+  such as subagent runs; the title text becomes the sidebar message. Without
+  a title glyph it falls back to inference: when the foreground process
+  matches the configured list (`claude`, `codex`, `opencode` by default),
+  recent output = working, quiet = idle, and a bell
   = needs you (for Claude Code, set `"preferredNotifChannel":
   "terminal_bell"`). Desktop notifications fire for needs you, error and
   done. An agent leaves the sidebar when it exits (unread done / error stay

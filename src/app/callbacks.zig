@@ -315,6 +315,14 @@ pub fn agentNotificationCallback(ctx: ?*anyopaque, title: []const u8, body: []co
     if (g_screen_change_app) |app| app.requestFrame();
 }
 
+/// Window title changed (OSC 0 / 2), from the parse thread. Agents encode
+/// their state in a leading status glyph; see AgentState.classifyTitle.
+pub fn agentTitleCallback(ctx: ?*anyopaque, title: []const u8) void {
+    const pd: *PaneData = @ptrCast(@alignCast(ctx orelse return));
+    pd.agent_state.onTitle(title);
+    if (g_screen_change_app) |app| app.requestFrame();
+}
+
 /// Shell prompt started (OSC 133;A), from the parse thread.
 pub fn agentPromptStartCallback(ctx: ?*anyopaque) void {
     const pd: *PaneData = @ptrCast(@alignCast(ctx orelse return));
@@ -335,6 +343,7 @@ pub fn wireObserver(pd: *PaneData, protocol: bool) void {
     obs.onStatus = if (protocol) agentStatusCallback else null;
     obs.onNotification = if (protocol) agentNotificationCallback else null;
     obs.onPromptStart = if (protocol) agentPromptStartCallback else null;
+    obs.onTitle = if (protocol) agentTitleCallback else null;
 }
 
 /// Per-pane screen change callback.

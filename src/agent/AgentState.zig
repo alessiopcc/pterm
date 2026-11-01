@@ -85,6 +85,32 @@ pub const AgentState = struct {
 
     pub const Source = enum(u8) { inferred, reported };
 
+    /// State an agent encodes in its window title (status glyph prefix).
+    pub const TitleHint = enum(u8) { none, idle, working, waiting };
+
+    /// Classify an agent title by its leading status glyph:
+    ///   Claude Code: "✳ " idle; spinner frames (◐◑◒◓, Braille) working
+    ///   Gemini CLI:  "◇" idle, "✋" needs you, "✦" / "⏲" working
+    ///   Codex:       "[ ! ]" / "[ . ]" Action Required = needs you
+    /// Returns the hint and the title text after the glyph.
+    pub fn classifyTitle(title: []const u8) struct { hint: TitleHint, text: []const u8 } {
+        if (std.mem.startsWith(u8, title, "[ ! ]") or std.mem.startsWith(u8, title, "[ . ]")) {
+            return .{ .hint = .waiting, .text = std.mem.trimStart(u8, title[5..], " ") };
+        }
+        if (title.len == 0) return .{ .hint = .none, .text = "" };
+        const len = std.unicode.utf8ByteSequenceLength(title[0]) catch return .{ .hint = .none, .text = title };
+        if (len > title.len) return .{ .hint = .none, .text = title };
+        const cp = std.unicode.utf8Decode(title[0..len]) catch return .{ .hint = .none, .text = title };
+        const hint: TitleHint = switch (cp) {
+            0x2733, 0x25C7 => .idle, // ✳ ◇
+            0x270B => .waiting, // ✋
+            0x2800...0x28FF, 0x25D0...0x25D3, 0x2726, 0x23F2 => .working, // Braille, ◐◑◒◓, ✦, ⏲
+            else => .none,
+        };
+        if (hint == .none) return .{ .hint = .none, .text = title };
+        return .{ .hint = hint, .text = std.mem.trimStart(u8, title[len..], " ") };
+    }
+
     /// Flash duration: 150ms UI-SPEC.
     pub const FLASH_DURATION_NS: i128 = 150_000_000;
 
@@ -113,6 +139,12 @@ pub const AgentState = struct {
 
     /// When a one-shot notification set waiting (0 = none pending).
     notified_at_ns: i128 = 0,
+
+    /// Status glyph from the agent's window title (parse thread writes).
+    title_hint: std.atomic.Value(TitleHint) = std.atomic.Value(TitleHint).init(.none),
+    /// Title text after the glyph (session summary). Guarded by `mutex`.
+    title_buf: [MAX_MESSAGE]u8 = undefined,
+    title_len: usize = 0,
 
     /// Guards records, message and app.
     mutex: pio.Mutex = .{},
@@ -173,6 +205,42 @@ pub const AgentState = struct {
         self.notified_at_ns = now;
     }
 
+    /// Parse thread: the window title changed.
+    pub fn onTitle(self: *AgentState, title: []const u8) void {
+        const c = classifyTitle(title);
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        self.title_len = if (c.hint == .none) 0 else copyText(&self.title_buf, c.text);
+        self.title_hint.store(c.hint, .release);
+    }
+
+    /// Render thread, while an agent runs in the pane: let the title glyph
+    /// decide the state (it tracks the agent's own busy flag, e.g. through
+    /// quiet subagent runs). Returns false when there is no hint or status
+    /// records already decide.
+    pub fn applyTitleHint(self: *AgentState, now: i128) bool {
+        if (self.hasReports()) return false;
+        const new: State = switch (self.title_hint.load(.acquire)) {
+            .none => return false,
+            .idle => .idle,
+            .working => .working,
+            .waiting => .waiting,
+        };
+        // A pending bell / notification stays until the agent works again.
+        if (self.notified_at_ns != 0 and new == .idle) return true;
+        self.setState(new, now);
+        return true;
+    }
+
+    /// Copy the title text (status glyph removed) into `buf`.
+    pub fn getTitle(self: *AgentState, buf: []u8) []const u8 {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        const n = @min(buf.len, self.title_len);
+        @memcpy(buf[0..n], self.title_buf[0..n]);
+        return buf[0..n];
+    }
+
     /// Parse thread: a shell prompt started (OSC 133;A).
     pub fn onPromptStart(self: *AgentState) void {
         self.prompt_started.store(true, .release);
@@ -190,6 +258,7 @@ pub const AgentState = struct {
     /// The agent process left the foreground: drop in-flight records
     /// (working / blocked / idle); outcomes (done / error) stay until seen.
     pub fn agentGone(self: *AgentState, now: i128) void {
+        self.title_hint.store(.none, .release);
         self.dropTransient(now);
     }
 
@@ -273,6 +342,7 @@ pub const AgentState = struct {
     /// `now` is when the output arrived.
     pub fn onOutputWithTimestamp(self: *AgentState, now: i128) void {
         if (self.hasReports()) return;
+        if (self.title_hint.load(.acquire) != .none) return; // title decides
         if (self.notified_at_ns != 0 and now - self.notified_at_ns < NOTIFY_GRACE_NS) return;
         self.setState(.working, now);
     }
@@ -285,6 +355,7 @@ pub const AgentState = struct {
 
     pub fn markIdleWithTimestamp(self: *AgentState, now: i128) void {
         if (self.hasReports()) return;
+        if (self.title_hint.load(.acquire) != .none) return; // title decides
         if (self.state.load(.acquire) == .done) return;
         if (self.notified_at_ns != 0) return; // needs you until output follows
         self.setState(.idle, now);
@@ -646,6 +717,45 @@ test "notification holds through quiet and its own output burst" {
     try std.testing.expectEqual(S.working, st.state.load(.acquire));
     st.markIdleWithTimestamp(13 * sec); // notification consumed
     try std.testing.expectEqual(S.idle, st.state.load(.acquire));
+}
+
+test "classifyTitle reads agent status glyphs" {
+    const C = AgentState;
+    try std.testing.expectEqual(C.TitleHint.idle, C.classifyTitle("✳ Write two notes").hint);
+    try std.testing.expectEqualStrings("Write two notes", C.classifyTitle("✳ Write two notes").text);
+    try std.testing.expectEqual(C.TitleHint.working, C.classifyTitle("◑ Second branch").hint);
+    try std.testing.expectEqual(C.TitleHint.working, C.classifyTitle("⠋ Refactor").hint);
+    try std.testing.expectEqual(C.TitleHint.waiting, C.classifyTitle("✋  Action Required (repo)").hint);
+    try std.testing.expectEqual(C.TitleHint.waiting, C.classifyTitle("[ ! ] Action Required").hint);
+    try std.testing.expectEqual(C.TitleHint.idle, C.classifyTitle("◇  Ready (repo)").hint);
+    try std.testing.expectEqual(C.TitleHint.none, C.classifyTitle("nu - ~/project").hint);
+    try std.testing.expectEqual(C.TitleHint.none, C.classifyTitle("").hint);
+}
+
+test "title hint drives state through quiet periods and ignores output" {
+    var st = AgentState{};
+    st.onTitle("◐ Running subagents");
+    try std.testing.expect(st.applyTitleHint(1 * sec));
+    try std.testing.expectEqual(S.working, st.state.load(.acquire));
+    st.markIdleWithTimestamp(5 * sec); // quiet, but the title says working
+    try std.testing.expectEqual(S.working, st.state.load(.acquire));
+    st.onTitle("✳ Running subagents");
+    _ = st.applyTitleHint(6 * sec);
+    try std.testing.expectEqual(S.idle, st.state.load(.acquire));
+    st.onOutputWithTimestamp(7 * sec); // typing echo does not flip to working
+    try std.testing.expectEqual(S.idle, st.state.load(.acquire));
+    var buf: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("Running subagents", st.getTitle(&buf));
+    st.agentGone(8 * sec);
+    try std.testing.expect(!st.applyTitleHint(9 * sec));
+}
+
+test "status records beat title hints" {
+    var st = AgentState{};
+    st.applyStatus(.{ .state = .blocked }, 1 * sec);
+    st.onTitle("◐ busy");
+    try std.testing.expect(!st.applyTitleHint(2 * sec));
+    try std.testing.expectEqual(S.waiting, st.state.load(.acquire));
 }
 
 test "notification is ignored while status records exist" {

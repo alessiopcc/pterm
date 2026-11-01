@@ -101,6 +101,13 @@ pub fn updateAgentStateFromProcess(self: *App, pd: *PaneData) void {
     pd.was_busy = !at_shell;
     pd.agent_state.consumePromptStart(!at_shell, now);
 
+    // The agent's title glyph (Claude Code, Gemini, Codex) beats output
+    // timing: it stays "working" through quiet stretches like subagent runs.
+    if (is_agent and pd.agent_state.applyTitleHint(now)) {
+        if (pd.agent_state.state.load(.acquire) == .working) self.requestFrame();
+        return;
+    }
+
     // Inference only for panes without status records (AgentState ignores
     // it otherwise), and only if enabled.
     if (!self.config.agent.heuristic_fallback) return;

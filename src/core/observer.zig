@@ -56,6 +56,8 @@ pub const Observer = struct {
     onNotification: ?*const fn (ctx: ?*anyopaque, title: []const u8, body: []const u8) void = null,
     /// Shell integration: a new prompt started (OSC 133;A).
     onPromptStart: ?*const fn (ctx: ?*anyopaque) void = null,
+    /// Window title changed (OSC 0 / 2). Borrowed slice.
+    onTitle: ?*const fn (ctx: ?*anyopaque, title: []const u8) void = null,
 
     /// Reply to the program (query responses). Receives `write_ctx`.
     /// When null the terminal answers no queries.

@@ -43,7 +43,9 @@ pub fn collectEntries(self: *App, alloc: std.mem.Allocator, preview_lines: usize
             const st = &pd.agent_state;
 
             const msg_buf = alloc.alloc(u8, @TypeOf(st.*).MAX_MESSAGE) catch continue;
-            const message = st.getMessage(msg_buf);
+            // The agent's message, else its title text (e.g. the session summary).
+            const reported = st.getMessage(msg_buf);
+            const message = if (reported.len > 0) reported else st.getTitle(msg_buf);
             var app_buf: [64]u8 = undefined;
             const app = st.getApp(&app_buf);
             const proc = pd.process_name[0..pd.process_name_len];

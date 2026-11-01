@@ -93,6 +93,13 @@ pub const PTermTerminal = struct {
             handler.effects.program_status = &effectProgramStatus;
         }
         if (self.observer.onPromptStart != null) handler.effects.semantic_prompt = &effectSemanticPrompt;
+        if (self.observer.onTitle != null) handler.effects.title_changed = &effectTitleChanged;
+    }
+
+    fn effectTitleChanged(handler: *Handler) void {
+        const self = fromHandler(handler);
+        const cb = self.observer.onTitle orelse return;
+        cb(self.observer.agent_ctx, self.terminal.getTitle() orelse "");
     }
 
     fn fromHandler(handler: *Handler) *PTermTerminal {
