@@ -81,15 +81,18 @@ pub const PTermTerminal = struct {
 
     /// Wire the VT handler's side effects to the observer: query replies,
     /// bells, notifications, progress, program status, prompt marks.
+    /// Status effects are only installed when the observer listens, so a pane
+    /// with status reporting disabled does not answer the OSC 7501 query.
     fn installEffects(self: *PTermTerminal, handler: *Handler) void {
-        _ = self;
         handler.effects.write_pty = &effectWritePty;
         handler.effects.device_attributes = &effectDeviceAttributes;
         handler.effects.bell = &effectBell;
-        handler.effects.desktop_notification = &effectDesktopNotification;
-        handler.effects.progress_report = &effectProgressReport;
-        handler.effects.program_status = &effectProgramStatus;
-        handler.effects.semantic_prompt = &effectSemanticPrompt;
+        if (self.observer.onNotification != null) handler.effects.desktop_notification = &effectDesktopNotification;
+        if (self.observer.onStatus != null) {
+            handler.effects.progress_report = &effectProgressReport;
+            handler.effects.program_status = &effectProgramStatus;
+        }
+        if (self.observer.onPromptStart != null) handler.effects.semantic_prompt = &effectSemanticPrompt;
     }
 
     fn fromHandler(handler: *Handler) *PTermTerminal {

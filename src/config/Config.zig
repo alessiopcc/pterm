@@ -73,9 +73,22 @@ pub const Config = struct {
         notification_cooldown: i64 = 30,
         /// Whether to suppress notification when PTerm window is focused. true by default.
         suppress_when_focused: bool = true,
+        /// Agent states that send a desktop notification: "waiting" (needs
+        /// you), "error", "done".
+        notify_on: []const []const u8 = &default_notify_on,
+
+        // Status reporting
+        /// Honour program status reports (OSC 7501, OSC 9;4 progress, OSC 9 /
+        /// 777 notifications) and answer the status support query. Applies to
+        /// panes opened after a change.
+        protocol: bool = true,
+        /// Infer state from output timing and the foreground process for
+        /// panes that never report their status.
+        heuristic_fallback: bool = true,
     };
 
     pub const default_agent_processes = [_][]const u8{ "claude", "opencode", "codex" };
+    pub const default_notify_on = [_][]const u8{ "waiting", "error", "done" };
 
     /// Status bar config.
     /// Controls the persistent status bar at the bottom of the window.

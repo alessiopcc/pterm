@@ -110,6 +110,9 @@ const FileAgent = struct {
     notification_sound: bool = true,
     notification_cooldown: i64 = 30,
     suppress_when_focused: bool = true,
+    notify_on: ?[]const []const u8 = null,
+    protocol: bool = true,
+    heuristic_fallback: bool = true,
 };
 
 const FileStatusBar = struct {
@@ -321,6 +324,9 @@ fn mergeConfigs(base: Config, over: Config) Config {
     if (!over.agent.notification_sound) result.agent.notification_sound = over.agent.notification_sound;
     if (over.agent.notification_cooldown != 30) result.agent.notification_cooldown = over.agent.notification_cooldown;
     if (!over.agent.suppress_when_focused) result.agent.suppress_when_focused = over.agent.suppress_when_focused;
+    if (over.agent.notify_on.ptr != (&Config.default_notify_on).ptr) result.agent.notify_on = over.agent.notify_on;
+    if (!over.agent.protocol) result.agent.protocol = false;
+    if (!over.agent.heuristic_fallback) result.agent.heuristic_fallback = false;
 
     // Status bar
     if (!over.status_bar.visible) result.status_bar.visible = over.status_bar.visible;
@@ -480,6 +486,15 @@ fn applyFileConfig(allocator: std.mem.Allocator, base: Config, file: FileConfig)
         if (!a.notification_sound) result.agent.notification_sound = false;
         if (a.notification_cooldown != 30) result.agent.notification_cooldown = a.notification_cooldown;
         if (!a.suppress_when_focused) result.agent.suppress_when_focused = false;
+        if (a.notify_on) |v| {
+            const duped = try allocator.alloc([]const u8, v.len);
+            for (v, 0..) |name, i| {
+                duped[i] = try allocator.dupe(u8, name);
+            }
+            result.agent.notify_on = duped;
+        }
+        if (!a.protocol) result.agent.protocol = false;
+        if (!a.heuristic_fallback) result.agent.heuristic_fallback = false;
     }
 
     // Status bar

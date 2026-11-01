@@ -14,6 +14,7 @@ const window_mod = @import("window");
 const Window = window_mod.Window;
 const bell_state_mod = @import("bell_state");
 const agent_state_mod = @import("agent_state");
+const AgentStateT = agent_state_mod.AgentState;
 const BellState = bell_state_mod.BellState;
 const cli_mod = @import("cli");
 const Config = @import("config").Config;
@@ -282,6 +283,9 @@ pub fn agentOutputCallback(ctx: ?*anyopaque) void {
         const now: i64 = @intCast(pio.nanoTimestamp());
         pd.last_output_ns.store(now, .release);
         if (pd.isAgentOutputSuppressed(now)) return;
+        if (g_screen_change_app) |app| {
+            if (!app.config.agent.heuristic_fallback) return;
+        }
         pd.agent_state.onOutput();
     }
 }
@@ -308,8 +312,9 @@ pub fn agentPromptStartCallback(ctx: ?*anyopaque) void {
 }
 
 /// Point a pane's terminal observer at the app callbacks. Called when the
-/// pane is created and when its shell is respawned.
-pub fn wireObserver(pd: *PaneData) void {
+/// pane is created and when its shell is respawned. With `protocol` off the
+/// pane ignores status reports and does not answer the status query.
+pub fn wireObserver(pd: *PaneData, protocol: bool) void {
     const obs = &pd.termio.terminal.observer;
     // Bell: real BELs only (the VT parser excludes OSC terminators).
     obs.onBell = bellCallback;
@@ -317,9 +322,9 @@ pub fn wireObserver(pd: *PaneData) void {
     // Agent output timing + status reports / notifications / prompt marks.
     obs.onAgentOutput = agentOutputCallback;
     obs.agent_ctx = @ptrCast(pd);
-    obs.onStatus = agentStatusCallback;
-    obs.onNotification = agentNotificationCallback;
-    obs.onPromptStart = agentPromptStartCallback;
+    obs.onStatus = if (protocol) agentStatusCallback else null;
+    obs.onNotification = if (protocol) agentNotificationCallback else null;
+    obs.onPromptStart = if (protocol) agentPromptStartCallback else null;
 }
 
 /// Per-pane screen change callback.
@@ -358,6 +363,7 @@ pub fn configReloadCallback() void {
         new_config.agent.suppress_when_focused,
         new_config.agent.notification_sound,
     );
+    self.notification_manager.setKindMask(AgentStateT.State.maskFromNames(new_config.agent.notify_on));
     // Free old config's arena (all heap strings freed at once)
     self.config.deinit();
     self.config = new_config;

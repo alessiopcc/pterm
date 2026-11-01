@@ -316,6 +316,10 @@ test "agent fields parsed from TOML" {
     try testing.expectEqual(false, config.agent.notification_sound);
     try testing.expectEqual(@as(i64, 60), config.agent.notification_cooldown);
     try testing.expectEqual(false, config.agent.suppress_when_focused);
+    try testing.expectEqual(@as(usize, 1), config.agent.notify_on.len);
+    try testing.expectEqualStrings("waiting", config.agent.notify_on[0]);
+    try testing.expectEqual(false, config.agent.protocol);
+    try testing.expectEqual(false, config.agent.heuristic_fallback);
     try testing.expectEqual(false, config.status_bar.visible);
 }
 

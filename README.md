@@ -30,14 +30,20 @@ tools like Claude Code are waiting for input.
   with keyboard shortcuts. No external multiplexer needed.
 - **Layout presets** -- Define named multi-tab, multi-pane layouts in your config
   and load them with a picker or `--layout <name>`.
-- **Agent monitoring** -- Process-based detection: when the foreground process
-  inside a pane matches the configured list (`claude`, `codex`, `opencode` by
-  default), the pane is tracked as an agent. Recent PTY output = `working`;
-  quiet + agent process = `waiting` (desktop notification fires).
+- **Agent status** -- Agents report their own state through the
+  [Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status)
+  (OSC 7501): working, needs you, done, error. Codex, opencode, Crush and
+  Goose report out of the box; Claude Code (2.1.295+) and pi report once the
+  terminal answers the protocol's support query, which pterm does. Progress
+  (OSC 9;4) and notification sequences (OSC 9 / 777) are understood too.
+  For agents that report nothing, pterm falls back to inference: when the
+  foreground process matches the configured list (`claude`, `codex`,
+  `opencode` by default), recent output = working, quiet = needs you.
+  Desktop notifications fire for needs you, error and done.
 - **Agent focus mode** -- `Ctrl+Alt+A` (or the `A` square at the leading edge
-  of the tab bar) takes over the window with the first waiting agent pane at
-  full size. `Ctrl+Alt+N` advances to the next waiting pane. `Esc` restores
-  the tiled layout.
+  of the tab bar) takes over the window with the agent pane that needs you
+  (then errors, then done, then working) at full size. `Ctrl+Alt+N` advances
+  to the next one. `Esc` restores the tiled layout.
 - **HarfBuzz text shaping** -- Ligatures, kerning, and font fallback chains.
   FreeType on Linux/Windows, CoreText on macOS.
 - **8 built-in color themes** -- default, dracula, solarized-dark,
@@ -140,10 +146,12 @@ mode = "none"       # visual, sound, both, none
 
 [agent]
 enabled = true
-preset = "broad"    # conservative, broad
+processes = ["claude", "codex", "opencode"]  # inference fallback
 notifications = true
+notify_on = ["waiting", "error", "done"]     # states that notify
 suppress_when_focused = true
-custom_patterns = ["my-custom-tool>"]
+protocol = true             # agent status reports (OSC 7501 / 9;4 / 9 / 777)
+heuristic_fallback = true   # infer state for agents that don't report
 
 [url]
 enabled = true

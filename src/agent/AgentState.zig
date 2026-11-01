@@ -53,6 +53,24 @@ pub const AgentState = struct {
             };
         }
 
+        /// Parse a config state name ("waiting", "error", "done", ...).
+        /// "needs_you" / "blocked" are accepted for waiting.
+        pub fn fromName(name: []const u8) ?State {
+            if (std.mem.eql(u8, name, "needs_you") or std.mem.eql(u8, name, "blocked")) return .waiting;
+            if (std.mem.eql(u8, name, "error")) return .errored;
+            return std.meta.stringToEnum(State, name);
+        }
+
+        /// Bit mask (bit = state index) of the named states; unknown names
+        /// are ignored.
+        pub fn maskFromNames(names: []const []const u8) u32 {
+            var mask: u32 = 0;
+            for (names) |n| {
+                if (fromName(n)) |st| mask |= @as(u32, 1) << @intCast(@backingInt(st));
+            }
+            return mask;
+        }
+
         fn fromRecord(s: ProgramStatus.State) State {
             return switch (s) {
                 .idle => .idle,
@@ -614,6 +632,19 @@ test "inferred idle keeps an unseen done" {
     st.applyStatus(.{ .state = .clear }, 2 * sec);
     st.markIdleWithTimestamp(3 * sec);
     try std.testing.expectEqual(S.done, st.state.load(.acquire));
+}
+
+test "state names and notify mask" {
+    try std.testing.expectEqual(S.waiting, S.fromName("waiting").?);
+    try std.testing.expectEqual(S.waiting, S.fromName("needs_you").?);
+    try std.testing.expectEqual(S.errored, S.fromName("error").?);
+    try std.testing.expectEqual(S.done, S.fromName("done").?);
+    try std.testing.expect(S.fromName("bogus") == null);
+    const names = [_][]const u8{ "waiting", "done", "bogus" };
+    const mask = S.maskFromNames(&names);
+    try std.testing.expect(mask & (1 << @backingInt(S.waiting)) != 0);
+    try std.testing.expect(mask & (1 << @backingInt(S.done)) != 0);
+    try std.testing.expect(mask & (1 << @backingInt(S.errored)) == 0);
 }
 
 test {

@@ -940,7 +940,7 @@ pub fn respawnShell(self: *App, pd: *PaneData, shell_name: []const u8) !void {
     pd.surface.window = &self.window;
 
     // Rewire observer callbacks
-    callbacks.wireObserver(pd);
+    callbacks.wireObserver(pd, self.config.agent.protocol);
 
     // Update process name from new shell
     {

@@ -66,6 +66,20 @@ pub fn updateAgentStateFromProcess(self: *App, pd: *PaneData) void {
     const now: i64 = @intCast(pio.nanoTimestamp());
     const quiet_threshold_ns: i64 = @as(i64, self.config.agent.quiet_threshold_ms) * 1_000_000;
 
+    const name = pd.process_name[0..pd.process_name_len];
+    const is_agent = process_monitor.nameMatchesList(name, self.config.agent.processes);
+    const is_shell = name.len == 0 or actions.isShellName(name);
+
+    // Status-record lifetime: agent exit / shell prompt end in-flight records.
+    if (is_agent) pd.agent_state.markTracked();
+    if (pd.was_agent and !is_agent) pd.agent_state.agentGone(now);
+    pd.was_agent = is_agent;
+    pd.agent_state.consumePromptStart(is_agent, now);
+
+    // Inference only for panes without status records (AgentState ignores
+    // it otherwise), and only if enabled.
+    if (!self.config.agent.heuristic_fallback) return;
+
     const last_output = pd.last_output_ns.load(.acquire);
     const recent_output = last_output > 0 and (now - last_output) < quiet_threshold_ns;
     const current = pd.agent_state.state.load(.acquire);
@@ -77,15 +91,6 @@ pub fn updateAgentStateFromProcess(self: *App, pd: *PaneData) void {
         self.requestFrame();
         return;
     }
-
-    const name = pd.process_name[0..pd.process_name_len];
-    const is_agent = process_monitor.nameMatchesList(name, self.config.agent.processes);
-    const is_shell = name.len == 0 or actions.isShellName(name);
-
-    if (is_agent) pd.agent_state.markTracked();
-    if (pd.was_agent and !is_agent) pd.agent_state.agentGone(now);
-    pd.was_agent = is_agent;
-    pd.agent_state.consumePromptStart(is_agent, now);
 
     if (is_agent) {
         if (current != .waiting) pd.agent_state.triggerWaiting();
@@ -1152,7 +1157,8 @@ pub fn processAgentFlashForPane(self: *App, pd: *PaneData, bounds: RendererRect,
         // Body: the agent's own message if it sent one, else the state.
         var msg_buf: [AgentState.MAX_MESSAGE]u8 = undefined;
         const message = pd.agent_state.getMessage(&msg_buf);
-        const body: ?[]const u8 = if (message.len > 0) message else switch (pd.agent_state.notify_state.load(.acquire)) {
+        const notify_state = pd.agent_state.notify_state.load(.acquire);
+        const body: ?[]const u8 = if (message.len > 0) message else switch (notify_state) {
             .done => "Done",
             .errored => "Error",
             else => null, // "Output idle"
@@ -1160,6 +1166,7 @@ pub fn processAgentFlashForPane(self: *App, pd: *PaneData, bounds: RendererRect,
         self.notification_manager.notify(
             self.allocator,
             pd.pane_id,
+            @backingInt(notify_state),
             pane_identity,
             body,
             self.focused,

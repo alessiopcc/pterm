@@ -505,6 +505,8 @@ pub const App = struct {
     /// Start all threads and wire GLFW callbacks.
     /// Must be called after init() returns and the App struct is at its final address.
     pub fn start(self: *App) !void {
+        self.notification_manager.setKindMask(AgentState.State.maskFromNames(self.config.agent.notify_on));
+
         // Create first pane (TermIO + PTY + Surface)
         const first_tab = self.tab_manager.getActiveTab() orelse return error.NoTab;
         const pane_id = try self.createPane(null, null, null);
@@ -720,7 +722,7 @@ pub const App = struct {
         pd.termio.attachPty(&pd.pty);
 
         // Wire bell, agent output and agent status callbacks.
-        callbacks.wireObserver(pd);
+        callbacks.wireObserver(pd, self.config.agent.protocol);
 
         // Create PaneState for registry
         const ps = try self.allocator.create(PaneState);
