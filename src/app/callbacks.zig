@@ -268,6 +268,17 @@ pub fn cursorPosCallback(handle: *glfw.Window, xpos: f64, ypos: f64) callconv(.c
 pub fn bellCallback(ctx: ?*anyopaque) void {
     if (ctx) |c| {
         const pd: *PaneData = @ptrCast(@alignCast(c));
+        // An agent ringing the bell wants attention (e.g. Claude Code with
+        // preferredNotifChannel = "terminal_bell"): one-shot "needs you".
+        // Agents that report status are not affected (reports win). Only
+        // while an agent is in the foreground (`was_agent`, render-thread
+        // flag; a stale read only delays this by one poll).
+        if (pd.was_agent) {
+            if (g_screen_change_app) |app| {
+                if (app.config.agent.protocol) pd.agent_state.notifyWaiting("", pio.nanoTimestamp());
+                app.requestFrame();
+            }
+        }
         if (pd.agent_state.state.load(.acquire) == .working) return;
         _ = pd.bell_state.trigger();
     }

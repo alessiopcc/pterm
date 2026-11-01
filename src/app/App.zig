@@ -148,6 +148,13 @@ pub const PaneData = struct {
     /// state update (detects the agent exiting).
     was_agent: bool = false,
 
+    /// Render-thread only: the shell itself is in the foreground (nothing
+    /// running in it), per the last foreground-process poll.
+    at_shell: bool = true,
+    /// Render-thread only: something was running in the shell at the
+    /// previous state update (detects any agent exiting, whatever its name).
+    was_busy: bool = false,
+
     /// Live working folder of the pane's shell (polled with the foreground
     /// process; render thread writes, main thread reads). Guarded by cwd_mutex.
     live_cwd: [256]u8 = undefined,

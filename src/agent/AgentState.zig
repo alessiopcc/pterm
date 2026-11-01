@@ -15,8 +15,9 @@
 ///   - inferred: output timing + foreground process (onOutput /
 ///     triggerWaiting / markIdle). Only used while the table is empty.
 ///
-/// OSC 9 / 777 notifications are one-shot: waiting + alert + message, but
-/// inference stays in charge (new output means working again).
+/// OSC 9 / 777 notifications and agent bells are one-shot: waiting + alert +
+/// message, held until output arrives after them (NOTIFY_GRACE_NS later),
+/// then inference is back in charge.
 ///
 /// Entering waiting / errored / done raises an alert (pane flash + pending
 /// notification), at most once per FLASH_COOLDOWN_NS per state.
@@ -94,6 +95,10 @@ pub const AgentState = struct {
 
     pub const MAX_MESSAGE = ProgramStatus.max_text;
 
+    /// Output this soon after a notification belongs to the same burst (the
+    /// redraw that carried the bell) and does not clear it.
+    pub const NOTIFY_GRACE_NS: i128 = 500_000_000;
+
     /// Current state, atomically updated for cross-thread reads.
     state: std.atomic.Value(State) = std.atomic.Value(State).init(.idle),
     /// Whether `state` comes from status records or from inference.
@@ -105,6 +110,9 @@ pub const AgentState = struct {
     /// A shell prompt started (parse thread); the render thread applies the
     /// lifetime rule once it knows whether an agent is in the foreground.
     prompt_started: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    /// When a one-shot notification set waiting (0 = none pending).
+    notified_at_ns: i128 = 0,
 
     /// Guards records, message and app.
     mutex: pio.Mutex = .{},
@@ -162,6 +170,7 @@ pub const AgentState = struct {
         if (!self.records.isEmpty()) return;
         self.message_len = copyText(&self.message_buf, message);
         self.setState(.waiting, now);
+        self.notified_at_ns = now;
     }
 
     /// Parse thread: a shell prompt started (OSC 133;A).
@@ -255,13 +264,16 @@ pub const AgentState = struct {
         self.setState(.waiting, now);
     }
 
-    /// Terminal output received: inferred .working. No-op while status records exist.
+    /// Terminal output received: inferred .working. No-op while status records
+    /// exist, and for output belonging to a pending notification's burst.
     pub fn onOutput(self: *AgentState) void {
         self.onOutputWithTimestamp(pio.nanoTimestamp());
     }
 
+    /// `now` is when the output arrived.
     pub fn onOutputWithTimestamp(self: *AgentState, now: i128) void {
         if (self.hasReports()) return;
+        if (self.notified_at_ns != 0 and now - self.notified_at_ns < NOTIFY_GRACE_NS) return;
         self.setState(.working, now);
     }
 
@@ -274,6 +286,7 @@ pub const AgentState = struct {
     pub fn markIdleWithTimestamp(self: *AgentState, now: i128) void {
         if (self.hasReports()) return;
         if (self.state.load(.acquire) == .done) return;
+        if (self.notified_at_ns != 0) return; // needs you until output follows
         self.setState(.idle, now);
     }
 
@@ -286,6 +299,7 @@ pub const AgentState = struct {
         self.since_ns.store(@intCast(now), .release);
 
         if (old == .waiting) {
+            self.notified_at_ns = 0;
             self.flash_active = false;
             self.show_badge = false;
             self.flash_triggered.store(false, .release);
@@ -617,6 +631,21 @@ test "notification sets waiting but output resumes working" {
     try std.testing.expectEqualStrings("Claude needs your permission", st.getMessage(&buf));
     st.onOutputWithTimestamp(2 * sec);
     try std.testing.expectEqual(S.working, st.state.load(.acquire));
+}
+
+test "notification holds through quiet and its own output burst" {
+    var st = AgentState{};
+    st.notifyWaiting("", 10 * sec);
+    st.markIdleWithTimestamp(11 * sec); // quiet agent: still needs you
+    try std.testing.expectEqual(S.waiting, st.state.load(.acquire));
+    st.onOutputWithTimestamp(10 * sec + 200_000_000); // same redraw burst
+    try std.testing.expectEqual(S.waiting, st.state.load(.acquire));
+    st.onOutputWithTimestamp(9 * sec); // output from before the bell
+    try std.testing.expectEqual(S.waiting, st.state.load(.acquire));
+    st.onOutputWithTimestamp(12 * sec); // user typed / agent resumed
+    try std.testing.expectEqual(S.working, st.state.load(.acquire));
+    st.markIdleWithTimestamp(13 * sec); // notification consumed
+    try std.testing.expectEqual(S.idle, st.state.load(.acquire));
 }
 
 test "notification is ignored while status records exist" {

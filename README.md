@@ -41,8 +41,11 @@ tools like Claude Code are waiting for input.
   (OSC 9;4) and notification sequences (OSC 9 / 777) are understood too.
   For agents that report nothing, pterm falls back to inference: when the
   foreground process matches the configured list (`claude`, `codex`,
-  `opencode` by default), recent output = working, quiet = needs you.
-  Desktop notifications fire for needs you, error and done.
+  `opencode` by default), recent output = working, quiet = idle, and a bell
+  = needs you (for Claude Code, set `"preferredNotifChannel":
+  "terminal_bell"`). Desktop notifications fire for needs you, error and
+  done. An agent leaves the sidebar when it exits (unread done / error stay
+  until you look).
 - **Agent sidebar and board** -- A sidebar (left by default, shown
   automatically while agents run) lists every agent pane grouped into needs
   you, working, done and idle, with the working folder, elapsed time and the

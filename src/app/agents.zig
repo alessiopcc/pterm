@@ -17,9 +17,15 @@ const actions = @import("actions.zig");
 
 pub const Entry = overview.Entry;
 
-/// Whether a pane counts as an agent pane for the overview.
+/// Whether a pane belongs in the overview: an agent process is running, it
+/// has live status reports, or it holds something unread (needs you, done,
+/// error). Once an agent exits and its outcome is seen, the pane drops out.
 fn isAgentPane(self: *App, pd: *PaneData) bool {
-    if (pd.agent_state.tracked.load(.acquire) or pd.agent_state.hasReports()) return true;
+    if (pd.agent_state.hasReports()) return true;
+    switch (pd.agent_state.state.load(.acquire)) {
+        .waiting, .done, .errored => return true,
+        .idle, .working => {},
+    }
     const name = pd.process_name[0..pd.process_name_len];
     return name.len > 0 and process_monitor.nameMatchesList(name, self.config.agent.processes);
 }

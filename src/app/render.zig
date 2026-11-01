@@ -59,6 +59,7 @@ pub fn pollForegroundProcess(self: *App, pd: *PaneData) void {
             @memset(&pd.process_name, 0);
             @memcpy(pd.process_name[0..n], pn.buf[0..n]);
             pd.process_name_len = @intCast(n);
+            pd.at_shell = pn.is_shell;
         }
         // Live working folder (shown in the agent sidebar).
         var cwd_buf: [256]u8 = undefined;
@@ -81,11 +82,17 @@ pub fn updateAgentStateFromProcess(self: *App, pd: *PaneData) void {
     const is_agent = process_monitor.nameMatchesList(name, self.config.agent.processes);
     const is_shell = name.len == 0 or actions.isShellName(name);
 
+    // Back at the shell itself = the agent (whatever its process name, e.g.
+    // pi runs as node) has exited. A tool's `bash` under an agent is still a
+    // child of the shell, so it doesn't count.
+    const at_shell = pd.at_shell;
+
     // Status-record lifetime: agent exit / shell prompt end in-flight records.
     if (is_agent) pd.agent_state.markTracked();
-    if (pd.was_agent and !is_agent) pd.agent_state.agentGone(now);
+    if ((pd.was_agent and !is_agent) or (pd.was_busy and at_shell)) pd.agent_state.agentGone(now);
     pd.was_agent = is_agent;
-    pd.agent_state.consumePromptStart(is_agent, now);
+    pd.was_busy = !at_shell;
+    pd.agent_state.consumePromptStart(!at_shell, now);
 
     // Inference only for panes without status records (AgentState ignores
     // it otherwise), and only if enabled.
@@ -96,7 +103,7 @@ pub fn updateAgentStateFromProcess(self: *App, pd: *PaneData) void {
     const current = pd.agent_state.state.load(.acquire);
 
     if (recent_output) {
-        if (current != .working) pd.agent_state.onOutput();
+        if (current != .working) pd.agent_state.onOutputWithTimestamp(last_output);
         // Keep rendering until the quiet threshold elapses so we can
         // re-evaluate.
         self.requestFrame();
@@ -104,8 +111,10 @@ pub fn updateAgentStateFromProcess(self: *App, pd: *PaneData) void {
     }
 
     if (is_agent) {
-        if (current != .waiting) pd.agent_state.triggerWaiting();
-        self.requestFrame();
+        // A quiet agent is idle: without status reports pterm can't tell a
+        // permission prompt from an agent sitting at its prompt. Bells and
+        // notifications still mark it "needs you".
+        if (current != .idle) pd.agent_state.markIdle();
     } else if (is_shell) {
         if (current != .idle) pd.agent_state.markIdle();
     } else {
@@ -1261,6 +1270,7 @@ pub fn processAgentFlashForPane(self: *App, pd: *PaneData, bounds: RendererRect,
         const body: ?[]const u8 = if (message.len > 0) message else switch (notify_state) {
             .done => "Done",
             .errored => "Error",
+            .waiting => "Needs your attention",
             else => null, // "Output idle"
         };
         self.notification_manager.notify(
