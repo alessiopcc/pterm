@@ -148,10 +148,10 @@ pub const PaneData = struct {
     /// state update (detects the agent exiting).
     was_agent: bool = false,
 
-    /// An agent process is running in this pane. Sticky: set when an agent
-    /// name is seen in the foreground, cleared only when the shell itself is
-    /// back (nothing running). The foreground leaf flips between the agent
-    /// and its short-lived helpers (git, bash, ...), so the name alone flaps.
+    /// An agent process is running in this pane. Not the foreground leaf, which
+    /// flips between the agent and its short-lived helpers (git, bash, ...).
+    /// Windows: an agent name is among the shell's descendants. POSIX: sticky,
+    /// set when an agent name is in the foreground, cleared when the shell is.
     /// Render thread writes; main thread and parse thread read.
     agent_present: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 

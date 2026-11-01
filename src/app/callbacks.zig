@@ -271,7 +271,7 @@ pub fn bellCallback(ctx: ?*anyopaque) void {
         // An agent ringing the bell wants attention (e.g. Claude Code with
         // preferredNotifChannel = "terminal_bell"): one-shot "needs you".
         // Agents that report status are not affected (reports win). Only
-        // while an agent is running in the pane (sticky agent_present).
+        // while an agent is running in the pane (agent_present).
         if (pd.agent_present.load(.acquire)) {
             if (g_screen_change_app) |app| {
                 if (app.config.agent.protocol) pd.agent_state.notifyWaiting("", pio.nanoTimestamp());

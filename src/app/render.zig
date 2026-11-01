@@ -53,6 +53,7 @@ pub fn pollForegroundProcess(self: *App, pd: *PaneData) void {
         const ok = process_monitor.queryForegroundName(.{
             .shell_pid = pd.pty.getChildPid(),
             .master_fd = if (@hasField(@TypeOf(pd.pty), "master_fd")) pd.pty.master_fd else -1,
+            .agent_names = self.config.agent.processes,
         }, &pn);
         if (ok and pn.len > 0) {
             const n = @min(pn.len, pd.process_name.len);
@@ -62,6 +63,8 @@ pub fn pollForegroundProcess(self: *App, pd: *PaneData) void {
             pd.at_shell = pn.is_shell;
             if (pn.is_shell) {
                 pd.agent_present.store(false, .release);
+            } else if (pn.agent_running) |running| {
+                pd.agent_present.store(running, .release);
             } else if (process_monitor.nameMatchesList(pn.buf[0..pn.len], self.config.agent.processes)) {
                 pd.agent_present.store(true, .release);
             }
@@ -84,7 +87,7 @@ pub fn updateAgentStateFromProcess(self: *App, pd: *PaneData) void {
     const quiet_threshold_ns: i64 = @as(i64, self.config.agent.quiet_threshold_ms) * 1_000_000;
 
     const name = pd.process_name[0..pd.process_name_len];
-    // Sticky "agent running" (see PaneData.agent_present), not the current
+    // "Agent running" (see PaneData.agent_present), not the current
     // foreground leaf, which flips to the agent's helper processes.
     const is_agent = pd.agent_present.load(.acquire);
     const is_shell = pd.at_shell or name.len == 0 or (!is_agent and actions.isShellName(name));
