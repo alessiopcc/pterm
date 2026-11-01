@@ -10,8 +10,10 @@
 ///     name on failure (macOS: TODO — use proc_pidpath when needed).
 ///   - Windows: ConPTY has no foreground-process API, so we snapshot the full
 ///     process list via CreateToolhelp32Snapshot and walk descendants of the
-///     shell PID, picking the most-recently-started leaf. Long-lived helpers
-///     the shell keeps for itself (nu plugins) are not "running in" the pane.
+///     shell PID, picking the agent if one is running (the outermost, not the
+///     helpers it spawns), else the most-recently-started leaf. Long-lived
+///     helpers the shell keeps for itself (nu plugins) are not "running in"
+///     the pane.
 const std = @import("std");
 const pio = @import("pio");
 const builtin = @import("builtin");
@@ -197,7 +199,7 @@ fn queryWindows(in: QueryInput, out: *ProcessName) bool {
 
     var best_idx: ?usize = null;
     var best_ctime: u64 = 0;
-    var agent_running = false;
+    var agent_idx: ?usize = null;
 
     // Mark queue of pids to traverse
     var queue: [256]DWORD = undefined;
@@ -220,7 +222,8 @@ fn queryWindows(in: QueryInput, out: *ProcessName) bool {
             }
             // Consider as candidate (exclude the shell itself)
             if (pids[i] == shell_pid_u) continue;
-            if (nameMatchesList(name, in.agent_names)) agent_running = true;
+            // Breadth-first, so the first match is the outermost agent.
+            if (agent_idx == null and nameMatchesList(name, in.agent_names)) agent_idx = i;
             const ctime = getProcessCreationTime(pids[i]);
             if (ctime == 0) continue;
             if (best_idx == null or ctime > best_ctime) {
@@ -230,8 +233,8 @@ fn queryWindows(in: QueryInput, out: *ProcessName) bool {
         }
     }
 
-    out.agent_running = agent_running;
-    if (best_idx) |idx| {
+    out.agent_running = agent_idx != null;
+    if (agent_idx orelse best_idx) |idx| {
         out.set(names[idx][0..name_lens[idx]]);
         out.is_shell = false;
         return true;
