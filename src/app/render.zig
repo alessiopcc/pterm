@@ -60,6 +60,11 @@ pub fn pollForegroundProcess(self: *App, pd: *PaneData) void {
             @memcpy(pd.process_name[0..n], pn.buf[0..n]);
             pd.process_name_len = @intCast(n);
             pd.at_shell = pn.is_shell;
+            if (pn.is_shell) {
+                pd.agent_present.store(false, .release);
+            } else if (process_monitor.nameMatchesList(pn.buf[0..pn.len], self.config.agent.processes)) {
+                pd.agent_present.store(true, .release);
+            }
         }
         // Live working folder (shown in the agent sidebar).
         var cwd_buf: [256]u8 = undefined;
@@ -79,8 +84,10 @@ pub fn updateAgentStateFromProcess(self: *App, pd: *PaneData) void {
     const quiet_threshold_ns: i64 = @as(i64, self.config.agent.quiet_threshold_ms) * 1_000_000;
 
     const name = pd.process_name[0..pd.process_name_len];
-    const is_agent = process_monitor.nameMatchesList(name, self.config.agent.processes);
-    const is_shell = name.len == 0 or actions.isShellName(name);
+    // Sticky "agent running" (see PaneData.agent_present), not the current
+    // foreground leaf, which flips to the agent's helper processes.
+    const is_agent = pd.agent_present.load(.acquire);
+    const is_shell = pd.at_shell or name.len == 0 or (!is_agent and actions.isShellName(name));
 
     // Back at the shell itself = the agent (whatever its process name, e.g.
     // pi runs as node) has exited. A tool's `bash` under an agent is still a

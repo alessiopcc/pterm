@@ -26,8 +26,8 @@ fn isAgentPane(self: *App, pd: *PaneData) bool {
         .waiting, .done, .errored => return true,
         .idle, .working => {},
     }
-    const name = pd.process_name[0..pd.process_name_len];
-    return name.len > 0 and process_monitor.nameMatchesList(name, self.config.agent.processes);
+    _ = self;
+    return pd.agent_present.load(.acquire);
 }
 
 /// Snapshot every agent pane, in tab / pane order. Strings live in `alloc`.
@@ -173,16 +173,25 @@ pub fn contentRectFor(self: *App, fb_w: u32, fb_h: u32) Rect {
 
 /// Main thread: show/hide the sidebar per config (auto = any agent pane) or
 /// the user's toggle; resize panes when it changes.
+/// Auto mode waits this long without agents before hiding the sidebar, so
+/// brief gaps (agent restarting, process churn) don't make it flap.
+const auto_hide_delay_ms: i64 = 3000;
+
 pub fn updateSidebarVisibility(self: *App) void {
     const want = self.sidebar_user orelse switch (self.config.sidebar.visible) {
         .always => true,
         .never => false,
         .auto => blk: {
+            const now_ms = pio.milliTimestamp();
             var it = self.pane_data.valueIterator();
             while (it.next()) |pd| {
-                if (isAgentPane(self, pd.*)) break :blk true;
+                if (isAgentPane(self, pd.*)) {
+                    self.sidebar_last_agent_ms = now_ms;
+                    break :blk true;
+                }
             }
-            break :blk false;
+            // Keep showing for a while after the last agent disappears.
+            break :blk self.sidebar_shown.load(.acquire) and now_ms - self.sidebar_last_agent_ms < auto_hide_delay_ms;
         },
     };
     if (want == self.sidebar_shown.load(.acquire)) return;

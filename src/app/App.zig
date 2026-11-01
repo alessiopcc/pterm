@@ -148,6 +148,13 @@ pub const PaneData = struct {
     /// state update (detects the agent exiting).
     was_agent: bool = false,
 
+    /// An agent process is running in this pane. Sticky: set when an agent
+    /// name is seen in the foreground, cleared only when the shell itself is
+    /// back (nothing running). The foreground leaf flips between the agent
+    /// and its short-lived helpers (git, bash, ...), so the name alone flaps.
+    /// Render thread writes; main thread and parse thread read.
+    agent_present: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
     /// Render-thread only: the shell itself is in the foreground (nothing
     /// running in it), per the last foreground-process poll.
     at_shell: bool = true,
@@ -295,6 +302,8 @@ pub const App = struct {
     sidebar_collapsed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     /// Home folder, for "~" in displayed paths ("" if unknown).
     home_dir: []const u8 = "",
+    /// When the sidebar last had an agent to show (auto-hide delay).
+    sidebar_last_agent_ms: i64 = 0,
     /// Board selection (main thread).
     board_sel: @import("agent_overview").Board.Selection = .{},
     pending_ops_mutex: pio.Mutex,
