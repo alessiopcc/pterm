@@ -13,6 +13,7 @@ const PaneData = app_mod.PaneData;
 const window_mod = @import("window");
 const Window = window_mod.Window;
 const bell_state_mod = @import("bell_state");
+const agent_state_mod = @import("agent_state");
 const BellState = bell_state_mod.BellState;
 const cli_mod = @import("cli");
 const Config = @import("config").Config;
@@ -283,6 +284,42 @@ pub fn agentOutputCallback(ctx: ?*anyopaque) void {
         if (pd.isAgentOutputSuppressed(now)) return;
         pd.agent_state.onOutput();
     }
+}
+
+/// Program status report (OSC 7501 / OSC 9;4), from the parse thread.
+pub fn agentStatusCallback(ctx: ?*anyopaque, report: agent_state_mod.StatusReport) void {
+    const pd: *PaneData = @ptrCast(@alignCast(ctx orelse return));
+    pd.agent_state.applyStatus(report, pio.nanoTimestamp());
+    if (g_screen_change_app) |app| app.requestFrame();
+}
+
+/// Desktop notification request (OSC 9 / 777), from the parse thread:
+/// a one-shot "needs you" with the program's text.
+pub fn agentNotificationCallback(ctx: ?*anyopaque, title: []const u8, body: []const u8) void {
+    const pd: *PaneData = @ptrCast(@alignCast(ctx orelse return));
+    pd.agent_state.notifyWaiting(if (body.len > 0) body else title, pio.nanoTimestamp());
+    if (g_screen_change_app) |app| app.requestFrame();
+}
+
+/// Shell prompt started (OSC 133;A), from the parse thread.
+pub fn agentPromptStartCallback(ctx: ?*anyopaque) void {
+    const pd: *PaneData = @ptrCast(@alignCast(ctx orelse return));
+    pd.agent_state.onPromptStart();
+}
+
+/// Point a pane's terminal observer at the app callbacks. Called when the
+/// pane is created and when its shell is respawned.
+pub fn wireObserver(pd: *PaneData) void {
+    const obs = &pd.termio.terminal.observer;
+    // Bell: real BELs only (the VT parser excludes OSC terminators).
+    obs.onBell = bellCallback;
+    obs.bell_ctx = @ptrCast(pd);
+    // Agent output timing + status reports / notifications / prompt marks.
+    obs.onAgentOutput = agentOutputCallback;
+    obs.agent_ctx = @ptrCast(pd);
+    obs.onStatus = agentStatusCallback;
+    obs.onNotification = agentNotificationCallback;
+    obs.onPromptStart = agentPromptStartCallback;
 }
 
 /// Per-pane screen change callback.

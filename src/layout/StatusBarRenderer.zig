@@ -97,6 +97,9 @@ pub const StatusBarRenderer = struct {
                 .idle => config.idle_color,
                 .working => config.working_color,
                 .waiting => config.waiting_color,
+                // Dedicated done/error colors arrive with the theme update.
+                .done => config.idle_color,
+                .errored => config.waiting_color,
             };
 
             draw_text_fn(segment, x_cursor, text_y, color, text_scale, draw_ctx);

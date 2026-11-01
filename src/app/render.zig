@@ -82,6 +82,11 @@ pub fn updateAgentStateFromProcess(self: *App, pd: *PaneData) void {
     const is_agent = process_monitor.nameMatchesList(name, self.config.agent.processes);
     const is_shell = name.len == 0 or actions.isShellName(name);
 
+    if (is_agent) pd.agent_state.markTracked();
+    if (pd.was_agent and !is_agent) pd.agent_state.agentGone(now);
+    pd.was_agent = is_agent;
+    pd.agent_state.consumePromptStart(is_agent, now);
+
     if (is_agent) {
         if (current != .waiting) pd.agent_state.triggerWaiting();
         self.requestFrame();
@@ -264,12 +269,17 @@ pub fn renderThreadMain(self: *App) void {
                 self.pane_mutex.lock();
                 defer self.pane_mutex.unlock();
                 const now_ns: i64 = @intCast(pio.nanoTimestamp());
+                const focused_pane_id: ?u32 = if (self.tab_manager.getActiveTab()) |t| t.focused_pane_id else null;
                 var pit = self.pane_data.iterator();
                 while (pit.next()) |pe| {
                     const pd = pe.value_ptr.*;
                     pollForegroundProcess(self, pd);
                     if (self.config.agent.enabled and !pd.isAgentOutputSuppressed(now_ns)) {
                         updateAgentStateFromProcess(self, pd);
+                    }
+                    // Looking at a pane acknowledges its "done".
+                    if (self.focused and focused_pane_id == pd.pane_id) {
+                        pd.agent_state.markSeen(now_ns);
                     }
                 }
             }
@@ -1139,11 +1149,19 @@ pub fn processAgentFlashForPane(self: *App, pd: *PaneData, bounds: RendererRect,
             pd.pane_id,
         }) catch {};
         const pane_identity = identity_writer.buffered();
+        // Body: the agent's own message if it sent one, else the state.
+        var msg_buf: [AgentState.MAX_MESSAGE]u8 = undefined;
+        const message = pd.agent_state.getMessage(&msg_buf);
+        const body: ?[]const u8 = if (message.len > 0) message else switch (pd.agent_state.notify_state.load(.acquire)) {
+            .done => "Done",
+            .errored => "Error",
+            else => null, // "Output idle"
+        };
         self.notification_manager.notify(
             self.allocator,
             pd.pane_id,
             pane_identity,
-            null, // matched_text not available at render time
+            body,
             self.focused,
         );
     }

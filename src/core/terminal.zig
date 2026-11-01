@@ -5,6 +5,16 @@ const observer_mod = @import("observer.zig");
 
 pub const Observer = observer_mod.Observer;
 pub const Event = observer_mod.Event;
+pub const StatusReport = observer_mod.StatusReport;
+
+const Handler = @FieldType(ghostty_vt.TerminalStream, "handler");
+const ProgramStatusReport = ghostty_vt.osc.Command.ProgramStatus.Report;
+const ProgressReport = ghostty_vt.osc.Command.ProgressReport;
+const DesktopNotification = @typeInfo(@typeInfo(@typeInfo(@FieldType(@FieldType(Handler, "effects"), "desktop_notification")).optional.child).pointer.child).@"fn".param_types[1].?;
+
+/// Record id used for OSC 9;4 progress, which has no id of its own. Not a
+/// valid OSC 7501 id (`#` is outside the id alphabet), so it cannot collide.
+pub const progress_record_id = "#progress";
 
 pub const Config = struct {
     cols: u16 = 80,
@@ -24,6 +34,9 @@ pub const PTermTerminal = struct {
     /// the stream captures a pointer to `terminal` — if created during
     /// init the struct may move when returned by value, invalidating it.
     vt_stream: ?ghostty_vt.TerminalStream,
+    /// Serializes writes to the PTY: query replies (parse thread) and user
+    /// input (main thread) must not interleave.
+    write_mutex: pio.Mutex = .{},
 
     pub fn init(alloc: std.mem.Allocator, config: Config) !PTermTerminal {
         const t: ghostty_vt.Terminal = try .init(pio.io, alloc, .{
@@ -58,11 +71,103 @@ pub const PTermTerminal = struct {
         // the stream's internal pointer to `terminal` stays valid.
         if (self.vt_stream == null) {
             self.vt_stream = self.terminal.vtStream();
+            self.installEffects(&self.vt_stream.?.handler);
         }
         self.vt_stream.?.nextSlice(bytes);
 
         // Notify screen change after parsing
         self.observer.notify(.screen_change);
+    }
+
+    /// Wire the VT handler's side effects to the observer: query replies,
+    /// bells, notifications, progress, program status, prompt marks.
+    fn installEffects(self: *PTermTerminal, handler: *Handler) void {
+        _ = self;
+        handler.effects.write_pty = &effectWritePty;
+        handler.effects.device_attributes = &effectDeviceAttributes;
+        handler.effects.bell = &effectBell;
+        handler.effects.desktop_notification = &effectDesktopNotification;
+        handler.effects.progress_report = &effectProgressReport;
+        handler.effects.program_status = &effectProgramStatus;
+        handler.effects.semantic_prompt = &effectSemanticPrompt;
+    }
+
+    fn fromHandler(handler: *Handler) *PTermTerminal {
+        return @fieldParentPtr("terminal", handler.terminal);
+    }
+
+    fn effectWritePty(handler: *Handler, data: []const u8) void {
+        const self = fromHandler(handler);
+        const cb = self.observer.onWritePty orelse return;
+        self.write_mutex.lock();
+        defer self.write_mutex.unlock();
+        cb(self.observer.write_ctx, data);
+    }
+
+    fn effectDeviceAttributes(_: *Handler) ghostty_vt.device_attributes.Attributes {
+        return .{};
+    }
+
+    fn effectBell(handler: *Handler) void {
+        const self = fromHandler(handler);
+        if (self.observer.onBell) |cb| cb(self.observer.bell_ctx);
+    }
+
+    fn effectDesktopNotification(handler: *Handler, n: DesktopNotification) void {
+        const self = fromHandler(handler);
+        if (self.observer.onNotification) |cb| cb(self.observer.agent_ctx, n.title, n.body);
+    }
+
+    fn effectProgressReport(handler: *Handler, p: ProgressReport) void {
+        const self = fromHandler(handler);
+        const cb = self.observer.onStatus orelse return;
+        const state: StatusReport.State = switch (p.state) {
+            .remove => .clear,
+            .set, .indeterminate, .pause => .working,
+            .@"error" => .err,
+        };
+        cb(self.observer.agent_ctx, .{ .state = state, .id = progress_record_id, .progress = p.progress });
+    }
+
+    fn effectProgramStatus(handler: *Handler, report: ProgramStatusReport) void {
+        const self = fromHandler(handler);
+        const cb = self.observer.onStatus orelse return;
+        const state: StatusReport.State = switch (report.state) {
+            .idle => .idle,
+            .working => .working,
+            .done => .done,
+            .blocked => .blocked,
+            .@"error" => .err,
+            .clear => .clear,
+        };
+        const kind: ?StatusReport.Kind = if (report.readOption(.kind)) |k| switch (k) {
+            .permission => .permission,
+            .question => .question,
+            .auth => .auth,
+        } else null;
+
+        var title_buf: [256]u8 = undefined;
+        var title_w: std.Io.Writer = .fixed(&title_buf);
+        report.writeText(.title, &title_w) catch {};
+        var msg_buf: [2048]u8 = undefined;
+        var msg_w: std.Io.Writer = .fixed(&msg_buf);
+        report.writeText(.msg, &msg_w) catch {};
+
+        cb(self.observer.agent_ctx, .{
+            .state = state,
+            .id = report.readOption(.id) orelse "",
+            .kind = kind,
+            .app = report.readOption(.app) orelse "",
+            .title = title_w.buffered(),
+            .msg = msg_w.buffered(),
+            .progress = report.readOption(.progress),
+        });
+    }
+
+    fn effectSemanticPrompt(handler: *Handler, ev: ghostty_vt.SemanticPrompt) void {
+        const self = fromHandler(handler);
+        if (ev.kind != .prompt_start) return;
+        if (self.observer.onPromptStart) |cb| cb(self.observer.agent_ctx);
     }
 
     /// Feed display text to the terminal (no escape sequence processing).

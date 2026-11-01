@@ -89,6 +89,15 @@ pub const TermIO = struct {
     pub fn attachPty(self: *TermIO, pty: *Pty) void {
         self.pty = pty;
         self.reader = PtyReader.init(pty, self.mailbox);
+        // Terminal query replies (device attributes, OSC 7501 support, ...)
+        // go straight back to the program. `pty` is stable; TermIO may move.
+        self.terminal.observer.onWritePty = writePtyReply;
+        self.terminal.observer.write_ctx = @ptrCast(pty);
+    }
+
+    fn writePtyReply(ctx: ?*anyopaque, data: []const u8) void {
+        const pty: *Pty = @ptrCast(@alignCast(ctx orelse return));
+        _ = pty.write(data) catch {};
     }
 
     pub fn start(self: *TermIO) !void {
@@ -157,6 +166,8 @@ pub const TermIO = struct {
 
     pub fn writeInput(self: *TermIO, data: []const u8) !void {
         if (self.pty) |pty| {
+            self.terminal.write_mutex.lock();
+            defer self.terminal.write_mutex.unlock();
             _ = try pty.write(data);
         } else {
             return error.NoPty;

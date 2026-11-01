@@ -143,6 +143,10 @@ pub const PaneData = struct {
     /// Render-thread only: timestamp of last foreground-process poll.
     last_process_poll_ns: i64 = 0,
 
+    /// Render-thread only: an agent process was in the foreground at the last
+    /// state update (detects the agent exiting).
+    was_agent: bool = false,
+
     /// Suppress agent state transitions during resize (PTY redraws cause
     /// false positives). Time-based: resize sets `suppress_until_ns = now +
     /// SUPPRESS_DURATION_NS` and all checks compare wall-clock to that.
@@ -715,13 +719,8 @@ pub const App = struct {
         // pointers reference the stable heap location.
         pd.termio.attachPty(&pd.pty);
 
-        // Wire bell detection: Observer fires callbacks.bellCallback when BEL (0x07) found in output.
-        pd.termio.terminal.observer.onBell = callbacks.bellCallback;
-        pd.termio.terminal.observer.bell_ctx = @ptrCast(pd);
-
-        // Wire agent output detection: Observer fires callbacks.agentOutputCallback on raw output.
-        pd.termio.terminal.observer.onAgentOutput = callbacks.agentOutputCallback;
-        pd.termio.terminal.observer.agent_ctx = @ptrCast(pd);
+        // Wire bell, agent output and agent status callbacks.
+        callbacks.wireObserver(pd);
 
         // Create PaneState for registry
         const ps = try self.allocator.create(PaneState);

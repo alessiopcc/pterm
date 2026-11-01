@@ -1155,6 +1155,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    agent_state_mod.addImport("observer", observer_mod);
 
     const process_monitor_mod = createModule(b, .{
         .root_source_file = b.path("src/agent/ProcessMonitor.zig"),
