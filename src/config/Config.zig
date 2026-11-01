@@ -108,6 +108,8 @@ pub const Config = struct {
         side: Side = .left,
         /// Width in columns (chrome font).
         width: u32 = 32,
+        /// Start collapsed to a narrow strip of state dots.
+        collapsed: bool = false,
     };
 
     /// Search config (empty stub for v1, no regex, no history).

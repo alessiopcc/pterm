@@ -148,6 +148,12 @@ pub const PaneData = struct {
     /// state update (detects the agent exiting).
     was_agent: bool = false,
 
+    /// Live working folder of the pane's shell (polled with the foreground
+    /// process; render thread writes, main thread reads). Guarded by cwd_mutex.
+    live_cwd: [256]u8 = undefined,
+    live_cwd_len: usize = 0,
+    cwd_mutex: pio.Mutex = .{},
+
     /// Suppress agent state transitions during resize (PTY redraws cause
     /// false positives). Time-based: resize sets `suppress_until_ns = now +
     /// SUPPRESS_DURATION_NS` and all checks compare wall-clock to that.
@@ -158,6 +164,16 @@ pub const PaneData = struct {
 
     /// Scrollback viewport offset: 0 = live (bottom), >0 = scrolled up N lines into history.
     scroll_offset: u32 = 0,
+
+    /// Copy the pane's current folder (live, else the start folder) into buf.
+    pub fn currentFolder(self: *PaneData, buf: []u8) []const u8 {
+        self.cwd_mutex.lock();
+        defer self.cwd_mutex.unlock();
+        const src = if (self.live_cwd_len > 0) self.live_cwd[0..self.live_cwd_len] else self.cwd[0..self.cwd_len.load(.acquire)];
+        const n = @min(buf.len, src.len);
+        @memcpy(buf[0..n], src[0..n]);
+        return buf[0..n];
+    }
 
     pub fn isAgentOutputSuppressed(self: *const PaneData, now_ns: i64) bool {
         return now_ns < self.suppress_until_ns.load(.acquire);
@@ -268,6 +284,10 @@ pub const App = struct {
     sidebar_user: ?bool = null,
     /// Board overlay open.
     board_visible: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Sidebar collapsed to a strip of state dots.
+    sidebar_collapsed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Home folder, for "~" in displayed paths ("" if unknown).
+    home_dir: []const u8 = "",
     /// Board selection (main thread).
     board_sel: @import("agent_overview").Board.Selection = .{},
     pending_ops_mutex: pio.Mutex,
@@ -516,6 +536,8 @@ pub const App = struct {
     /// Start all threads and wire GLFW callbacks.
     /// Must be called after init() returns and the App struct is at its final address.
     pub fn start(self: *App) !void {
+        self.sidebar_collapsed.store(self.config.sidebar.collapsed, .release);
+        self.home_dir = pio.getEnvVarOwned(self.allocator, if (builtin.os.tag == .windows) "USERPROFILE" else "HOME") catch "";
         self.notification_manager.setKindMask(AgentState.State.maskFromNames(self.config.agent.notify_on));
 
         // Create first pane (TermIO + PTY + Surface)
@@ -781,6 +803,7 @@ pub const App = struct {
     }
 
     pub fn deinit(self: *App) void {
+        if (self.home_dir.len > 0) self.allocator.free(self.home_dir);
         // Detach version-check worker so a stuck network fetch doesn't block exit.
         self.version_check.deinit();
 

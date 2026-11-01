@@ -119,6 +119,7 @@ const FileSidebar = struct {
     visible: ?[]const u8 = null,
     side: ?[]const u8 = null,
     width: ?i64 = null,
+    collapsed: bool = false,
 };
 
 const FileStatusBar = struct {
@@ -342,6 +343,7 @@ fn mergeConfigs(base: Config, over: Config) Config {
     if (over.sidebar.visible != .auto) result.sidebar.visible = over.sidebar.visible;
     if (over.sidebar.side != .left) result.sidebar.side = over.sidebar.side;
     if (over.sidebar.width != 32) result.sidebar.width = over.sidebar.width;
+    if (over.sidebar.collapsed) result.sidebar.collapsed = true;
 
     // Theme
     if (over.theme) |v| result.theme = v;
@@ -522,6 +524,7 @@ fn applyFileConfig(allocator: std.mem.Allocator, base: Config, file: FileConfig)
             } else std.log.warn("[sidebar] side: unknown value '{s}' (left, right)", .{v});
         }
         if (sb.width) |w| result.sidebar.width = @intCast(std.math.clamp(w, 16, 120));
+        if (sb.collapsed) result.sidebar.collapsed = true;
     }
 
     // Status bar

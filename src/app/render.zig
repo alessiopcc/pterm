@@ -60,6 +60,15 @@ pub fn pollForegroundProcess(self: *App, pd: *PaneData) void {
             @memcpy(pd.process_name[0..n], pn.buf[0..n]);
             pd.process_name_len = @intCast(n);
         }
+        // Live working folder (shown in the agent sidebar).
+        var cwd_buf: [256]u8 = undefined;
+        if (pd.pty.getChildCwd(&cwd_buf)) |cwd| {
+            pd.cwd_mutex.lock();
+            defer pd.cwd_mutex.unlock();
+            const n = @min(cwd.len, pd.live_cwd.len);
+            @memcpy(pd.live_cwd[0..n], cwd[0..n]);
+            pd.live_cwd_len = n;
+        }
     }
 }
 
@@ -678,6 +687,7 @@ pub fn renderThreadMain(self: *App) void {
                         agents.colors(self),
                         @intCast(pio.nanoTimestamp()),
                         self.config.sidebar.side == .left,
+                        self.sidebar_collapsed.load(.acquire),
                         statusBarDrawRect,
                         overviewDrawText,
                         @ptrCast(&sidebar_ctx),

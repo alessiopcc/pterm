@@ -34,7 +34,10 @@ tools like Claude Code are waiting for input.
   [Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status)
   (OSC 7501): working, needs you, done, error. Codex, opencode, Crush and
   Goose report out of the box; Claude Code (2.1.295+) and pi report once the
-  terminal answers the protocol's support query, which pterm does. Progress
+  terminal answers the protocol's support query, which pterm does. On Windows
+  ConPTY answers part of that query itself, so pterm also sets
+  `PI_PROGRAM_STATUS=1` (unless you set it) and `TERM_PROGRAM=pterm` for its
+  shells. Progress
   (OSC 9;4) and notification sequences (OSC 9 / 777) are understood too.
   For agents that report nothing, pterm falls back to inference: when the
   foreground process matches the configured list (`claude`, `codex`,
@@ -42,8 +45,9 @@ tools like Claude Code are waiting for input.
   Desktop notifications fire for needs you, error and done.
 - **Agent sidebar and board** -- A sidebar (left by default, shown
   automatically while agents run) lists every agent pane grouped into needs
-  you, working, done and idle, with elapsed time and the agent's message;
-  click a row to jump to the pane. `Ctrl+Alt+D` opens a full-window board
+  you, working, done and idle, with the working folder, elapsed time and the
+  agent's message; click a row to jump to the pane. Collapse it to a strip of
+  state dots with `«` or `Ctrl+Alt+S`. `Ctrl+Alt+D` opens a full-window board
   with Needs you / Working / Done columns and a preview of each pane.
   Tabs show a dot colored by their most urgent agent state.
 - **Agent focus mode** -- `Ctrl+Alt+A` (or the `A` square at the leading edge
@@ -166,6 +170,7 @@ enabled = true
 visible = "auto"   # auto (while agents run), always, never
 side = "left"      # left, right
 width = 32         # columns
+collapsed = false  # start as a narrow strip of state dots
 
 [status_bar]
 visible = true
@@ -232,7 +237,7 @@ reserved and cannot be overridden.
 | Toggle agent tab marker | `Ctrl+Shift+A` |
 | Agent focus mode toggle | `Ctrl+Alt+A` |
 | Agent focus next waiting | `Ctrl+Alt+N` |
-| Toggle agent sidebar | `Ctrl+Alt+S` |
+| Collapse / expand agent sidebar | `Ctrl+Alt+S` |
 | Toggle agent board | `Ctrl+Alt+D` |
 | Change shell | `Ctrl+Shift+S` |
 | Font size +/−/reset | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` |

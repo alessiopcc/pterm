@@ -150,6 +150,7 @@ pub fn dumpConfig() void {
         \\# visible = "auto"   # auto (while agents run), always, never
         \\# side = "left"      # left, right
         \\# width = 32         # columns
+        \\# collapsed = false  # start as a narrow strip of state dots
         \\
         \\[status_bar]
         \\# Status bar visibility

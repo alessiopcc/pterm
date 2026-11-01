@@ -44,8 +44,12 @@ pub fn collectEntries(self: *App, alloc: std.mem.Allocator, preview_lines: usize
             const name_src = if (app.len > 0) app else if (proc.len > 0) proc else "agent";
             const name = alloc.dupe(u8, name_src) catch continue;
 
+            var folder_buf: [256]u8 = undefined;
+            const folder = displayFolder(alloc, pd.currentFolder(&folder_buf), self.home_dir);
+
             list.append(alloc, .{
                 .pane_id = pid,
+                .folder = folder,
                 .tab_index = ti,
                 .state = st.state.load(.acquire),
                 .since_ns = st.since_ns.load(.acquire),
@@ -57,6 +61,24 @@ pub fn collectEntries(self: *App, alloc: std.mem.Allocator, preview_lines: usize
         }
     }
     return list.toOwnedSlice(alloc) catch &.{};
+}
+
+/// Display form of a folder: no trailing separator, home as "~", "/" separators.
+pub fn displayFolder(alloc: std.mem.Allocator, path_in: []const u8, home: []const u8) []const u8 {
+    var path = path_in;
+    while (path.len > 1 and (path[path.len - 1] == '/' or path[path.len - 1] == '\\')) path = path[0 .. path.len - 1];
+    if (path.len == 0) return "";
+    const under_home = home.len > 0 and path.len >= home.len and
+        std.ascii.eqlIgnoreCase(path[0..home.len], home) and
+        (path.len == home.len or path[home.len] == '/' or path[home.len] == '\\');
+    const out = (if (under_home)
+        std.mem.concat(alloc, u8, &.{ "~", path[home.len..] })
+    else
+        alloc.dupe(u8, path)) catch return "";
+    for (out) |*c| {
+        if (c.* == '\\') c.* = '/';
+    }
+    return out;
 }
 
 /// Last `n` non-empty lines of the pane's screen, trimmed.
@@ -116,7 +138,8 @@ fn chromeHeights(self: *App) struct { top: u32, bottom: u32 } {
 
 /// Sidebar width in pixels for a window this wide (capped at half the window).
 fn sidebarWidth(self: *App, fb_w: u32) u32 {
-    const want: u32 = @intFromFloat(@as(f32, @floatFromInt(self.config.sidebar.width)) * self.chrome_cell_width);
+    const cols: u32 = if (self.sidebar_collapsed.load(.acquire)) overview.Sidebar.collapsed_cols else self.config.sidebar.width;
+    const want: u32 = @intFromFloat(@as(f32, @floatFromInt(cols)) * self.chrome_cell_width);
     return @min(want, fb_w / 2);
 }
 
@@ -162,9 +185,21 @@ pub fn updateSidebarVisibility(self: *App) void {
     self.requestFrame();
 }
 
+/// Ctrl+Alt+S: collapse / expand the sidebar (showing it if it is hidden).
 pub fn toggleSidebar(self: *App) void {
-    self.sidebar_user = !self.sidebar_shown.load(.acquire);
-    updateSidebarVisibility(self);
+    if (!self.sidebar_shown.load(.acquire)) {
+        self.sidebar_user = true;
+        self.sidebar_collapsed.store(false, .release);
+        updateSidebarVisibility(self);
+        return;
+    }
+    toggleCollapsed(self);
+}
+
+fn toggleCollapsed(self: *App) void {
+    self.sidebar_collapsed.store(!self.sidebar_collapsed.load(.acquire), .release);
+    actions.resizeAllPanes(self);
+    self.requestFrame();
 }
 
 // ── Board ────────────────────────────────────────────────
@@ -241,9 +276,11 @@ pub fn handleClick(self: *App, fb_w: u32, fb_h: u32, x: i32, y: i32) bool {
     const sb = sidebar.?;
     if (x < sb.x or x >= sb.x + @as(i32, @intCast(sb.w)) or y < sb.y or y >= sb.y + @as(i32, @intCast(sb.h))) return false;
     const entries = collectEntries(self, arena.allocator(), 0);
-    if (overview.Sidebar.hitTest(entries, toOverviewRect(sb), metrics(self), x, y)) |pane_id| {
-        focusPane(self, pane_id);
-    }
+    const collapsed = self.sidebar_collapsed.load(.acquire);
+    if (overview.Sidebar.hitTest(entries, toOverviewRect(sb), metrics(self), collapsed, x, y)) |hit| switch (hit) {
+        .toggle => toggleCollapsed(self),
+        .pane => |pane_id| focusPane(self, pane_id),
+    };
     return true;
 }
 
