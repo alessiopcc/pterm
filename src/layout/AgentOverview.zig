@@ -184,7 +184,7 @@ pub const Sidebar = struct {
     }
 
     /// Lay out the title row, then headers and rows top to bottom. Groups with
-    /// no entries are skipped; the idle group shows only its header.
+    /// no entries are skipped.
     /// Collapsed: title row, then one line per entry (group order).
     pub fn layout(entries: []const Entry, rect: Rect, m: Metrics, collapsed: bool, out: []Item) usize {
         const lh = lineH(m);
@@ -216,7 +216,6 @@ pub const Sidebar = struct {
             out[n] = .{ .kind = .header, .group = g, .index = count, .y = y, .h = lh };
             n += 1;
             y += lh;
-            if (g == .idle) continue; // collapsed group
             for (entries, 0..) |e, i| {
                 if (Group.of(e.state) != g) continue;
                 const h = rowLines(e) * lh + @divFloor(lh, 3);
@@ -583,7 +582,7 @@ test "formatElapsed" {
     try testing.expectEqualStrings("", formatElapsed(&buf, 0, 100));
 }
 
-test "sidebar groups in order: needs you, working, done, idle (collapsed)" {
+test "sidebar groups in order: needs you, working, done, idle" {
     const entries = [_]Entry{
         entry(1, .working, ""),
         entry(2, .idle, ""),
@@ -593,14 +592,15 @@ test "sidebar groups in order: needs you, working, done, idle (collapsed)" {
     };
     var items: [32]Sidebar.Item = undefined;
     const n = Sidebar.layout(&entries, .{ .x = 0, .y = 0, .w = 256, .h = 2000 }, m_test, false, &items);
-    // title + headers: needs_you(2 rows), working(1), done(1), idle(header only)
-    try testing.expectEqual(@as(usize, 1 + 4 + 4), n);
+    // title + 4 headers + one row per entry (idle rows included)
+    try testing.expectEqual(@as(usize, 1 + 4 + 5), n);
     try testing.expect(items[0].kind == .title);
     try testing.expectEqual(Group.needs_you, items[1].group);
     try testing.expectEqual(@as(usize, 2), items[2].index); // errored, input order
     try testing.expectEqual(@as(usize, 4), items[3].index);
     try testing.expectEqual(Group.idle, items[n - 1].group);
-    try testing.expect(items[n - 1].kind == .header);
+    try testing.expect(items[n - 1].kind == .row);
+    try testing.expectEqual(@as(usize, 1), items[n - 1].index);
 }
 
 test "sidebar hitTest maps rows to pane ids" {
