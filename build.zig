@@ -1155,6 +1155,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    agent_state_mod.addImport("observer", observer_mod);
 
     const process_monitor_mod = createModule(b, .{
         .root_source_file = b.path("src/agent/ProcessMonitor.zig"),
@@ -1240,6 +1241,17 @@ pub fn build(b: *std.Build) void {
     app_mod.addImport("status_bar_renderer", status_bar_renderer_mod);
 
     // StatusBarRenderer inline tests
+    // Agent overview: sidebar + board
+    const agent_overview_mod = createModule(b, .{
+        .root_source_file = b.path("src/layout/AgentOverview.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    agent_overview_mod.addImport("agent_state", agent_state_mod);
+    app_mod.addImport("agent_overview", agent_overview_mod);
+    const agent_overview_tests = b.addTest(.{ .root_module = agent_overview_mod });
+    test_step.dependOn(&b.addRunArtifact(agent_overview_tests).step);
+
     const status_bar_tests = b.addTest(.{ .root_module = status_bar_renderer_mod });
     const run_status_bar_tests = b.addRunArtifact(status_bar_tests);
     test_step.dependOn(&run_status_bar_tests.step);

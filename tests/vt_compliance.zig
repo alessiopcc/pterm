@@ -304,3 +304,152 @@ test "observer onSequence callback fires when set" {
     try testing.expectEqual(@as(u8, 'A'), sequence_action_seen);
     try testing.expectEqual(@as(usize, 2), sequence_params_len_seen);
 }
+
+// --- Agent status effects (OSC 7501 / 9 / 777 / 9;4 / bell / query replies) ---
+
+const StatusRec = struct {
+    var status_count: usize = 0;
+    var last_state: observer_mod.StatusReport.State = .idle;
+    var last_kind: ?observer_mod.StatusReport.Kind = null;
+    var last_id: [64]u8 = undefined;
+    var last_id_len: usize = 0;
+    var last_app: [64]u8 = undefined;
+    var last_app_len: usize = 0;
+    var last_msg: [256]u8 = undefined;
+    var last_msg_len: usize = 0;
+    var notify_count: usize = 0;
+    var notify_body: [256]u8 = undefined;
+    var notify_body_len: usize = 0;
+    var bells: usize = 0;
+    var prompts: usize = 0;
+    var written: [512]u8 = undefined;
+    var written_len: usize = 0;
+
+    fn reset() void {
+        status_count = 0;
+        notify_count = 0;
+        bells = 0;
+        prompts = 0;
+        written_len = 0;
+    }
+
+    fn copy(dst: []u8, src: []const u8) usize {
+        const n = @min(dst.len, src.len);
+        @memcpy(dst[0..n], src[0..n]);
+        return n;
+    }
+
+    fn onStatus(_: ?*anyopaque, r: observer_mod.StatusReport) void {
+        status_count += 1;
+        last_state = r.state;
+        last_kind = r.kind;
+        last_id_len = copy(&last_id, r.id);
+        last_app_len = copy(&last_app, r.app);
+        last_msg_len = copy(&last_msg, r.msg);
+    }
+    fn onNotification(_: ?*anyopaque, _: []const u8, body: []const u8) void {
+        notify_count += 1;
+        notify_body_len = copy(&notify_body, body);
+    }
+    fn onBell(_: ?*anyopaque) void {
+        bells += 1;
+    }
+    fn onPrompt(_: ?*anyopaque) void {
+        prompts += 1;
+    }
+    fn onWrite(_: ?*anyopaque, data: []const u8) void {
+        written_len += copy(written[written_len..], data);
+    }
+
+    fn wire(t: *PTermTerminal) void {
+        reset();
+        t.observer.onStatus = &onStatus;
+        t.observer.onNotification = &onNotification;
+        t.observer.onBell = &onBell;
+        t.observer.onPromptStart = &onPrompt;
+        t.observer.onWritePty = &onWrite;
+    }
+};
+
+test "OSC 7501 report reaches onStatus with decoded fields" {
+    var t = try createTestTerminal();
+    defer t.deinit();
+    StatusRec.wire(&t);
+
+    try t.feedBytes("\x1b]7501;state=blocked:kind=permission:app=codex:msg=QXBwcm92ZSBlZGl0Pw==\x1b\\");
+    try testing.expectEqual(@as(usize, 1), StatusRec.status_count);
+    try testing.expectEqual(observer_mod.StatusReport.State.blocked, StatusRec.last_state);
+    try testing.expectEqual(observer_mod.StatusReport.Kind.permission, StatusRec.last_kind.?);
+    try testing.expectEqualStrings("codex", StatusRec.last_app[0..StatusRec.last_app_len]);
+    try testing.expectEqualStrings("Approve edit?", StatusRec.last_msg[0..StatusRec.last_msg_len]);
+    try testing.expectEqualStrings("", StatusRec.last_id[0..StatusRec.last_id_len]);
+
+    // Split across reads, BEL-terminated, with an id.
+    try t.feedBytes("\x1b]7501;state=wor");
+    try t.feedBytes("king:id=ses_1\x07");
+    try testing.expectEqual(@as(usize, 2), StatusRec.status_count);
+    try testing.expectEqual(observer_mod.StatusReport.State.working, StatusRec.last_state);
+    try testing.expectEqualStrings("ses_1", StatusRec.last_id[0..StatusRec.last_id_len]);
+    // The BEL terminating the OSC is not a bell.
+    try testing.expectEqual(@as(usize, 0), StatusRec.bells);
+}
+
+test "OSC 7501 support query is answered before DA1" {
+    var t = try createTestTerminal();
+    defer t.deinit();
+    StatusRec.wire(&t);
+
+    try t.feedBytes("\x1b]7501;?\x1b\\\x1b[c");
+    const out = StatusRec.written[0..StatusRec.written_len];
+    const status_reply = std.mem.indexOf(u8, out, "\x1b]7501;?") orelse return error.NoStatusReply;
+    const da1_reply = std.mem.indexOf(u8, out, "\x1b[?") orelse return error.NoDa1Reply;
+    try testing.expect(status_reply < da1_reply);
+}
+
+test "OSC 9;4 progress maps to a working record and clear" {
+    var t = try createTestTerminal();
+    defer t.deinit();
+    StatusRec.wire(&t);
+
+    try t.feedBytes("\x1b]9;4;1;50\x07");
+    try testing.expectEqual(observer_mod.StatusReport.State.working, StatusRec.last_state);
+    try testing.expectEqualStrings(terminal_mod.progress_record_id, StatusRec.last_id[0..StatusRec.last_id_len]);
+    try t.feedBytes("\x1b]9;4;0\x07");
+    try testing.expectEqual(observer_mod.StatusReport.State.clear, StatusRec.last_state);
+}
+
+test "OSC 9 and 777 notifications reach onNotification" {
+    var t = try createTestTerminal();
+    defer t.deinit();
+    StatusRec.wire(&t);
+
+    try t.feedBytes("\x1b]9;Agent turn complete\x07");
+    try testing.expectEqual(@as(usize, 1), StatusRec.notify_count);
+    try testing.expectEqualStrings("Agent turn complete", StatusRec.notify_body[0..StatusRec.notify_body_len]);
+    try t.feedBytes("\x1b]777;notify;Gemini;Action required\x07");
+    try testing.expectEqual(@as(usize, 2), StatusRec.notify_count);
+    try testing.expectEqualStrings("Action required", StatusRec.notify_body[0..StatusRec.notify_body_len]);
+    // ConEmu cwd report is not a notification.
+    try t.feedBytes("\x1b]9;9;C:\\Users\\me\x07");
+    try testing.expectEqual(@as(usize, 2), StatusRec.notify_count);
+}
+
+test "title updates are not bells; real BEL is" {
+    var t = try createTestTerminal();
+    defer t.deinit();
+    StatusRec.wire(&t);
+
+    try t.feedBytes("\x1b]0;\xe2\xa0\x8b working\x07");
+    try testing.expectEqual(@as(usize, 0), StatusRec.bells);
+    try t.feedBytes("\x07");
+    try testing.expectEqual(@as(usize, 1), StatusRec.bells);
+}
+
+test "OSC 133;A reaches onPromptStart" {
+    var t = try createTestTerminal();
+    defer t.deinit();
+    StatusRec.wire(&t);
+
+    try t.feedBytes("\x1b]133;A\x07$ ");
+    try testing.expectEqual(@as(usize, 1), StatusRec.prompts);
+}

@@ -7,6 +7,14 @@ notifications = false
 notification_sound = false
 notification_cooldown = 60
 suppress_when_focused = false
+notify_on = ["waiting"]
+protocol = false
+heuristic_fallback = false
 
 [status_bar]
 visible = false
+
+[sidebar]
+visible = "always"
+side = "right"
+width = 500

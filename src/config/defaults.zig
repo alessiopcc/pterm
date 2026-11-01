@@ -141,6 +141,16 @@ pub fn dumpConfig() void {
         \\# notification_sound = true
         \\# notification_cooldown = 30
         \\# suppress_when_focused = true
+        \\# notify_on = ["waiting", "error", "done"]  # states that notify
+        \\# protocol = true           # agent status reports (OSC 7501 / 9;4 / 9 / 777)
+        \\# heuristic_fallback = true # infer state for agents that don't report
+        \\
+        \\[sidebar]
+        \\# Agent sidebar
+        \\# visible = "auto"   # auto (while agents run), always, never
+        \\# side = "left"      # left, right
+        \\# width = 32         # columns
+        \\# collapsed = false  # start as a narrow strip of state dots
         \\
         \\[status_bar]
         \\# Status bar visibility

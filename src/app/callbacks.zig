@@ -13,6 +13,8 @@ const PaneData = app_mod.PaneData;
 const window_mod = @import("window");
 const Window = window_mod.Window;
 const bell_state_mod = @import("bell_state");
+const agent_state_mod = @import("agent_state");
+const AgentStateT = agent_state_mod.AgentState;
 const BellState = bell_state_mod.BellState;
 const cli_mod = @import("cli");
 const Config = @import("config").Config;
@@ -266,6 +268,16 @@ pub fn cursorPosCallback(handle: *glfw.Window, xpos: f64, ypos: f64) callconv(.c
 pub fn bellCallback(ctx: ?*anyopaque) void {
     if (ctx) |c| {
         const pd: *PaneData = @ptrCast(@alignCast(c));
+        // An agent ringing the bell wants attention (e.g. Claude Code with
+        // preferredNotifChannel = "terminal_bell"): one-shot "needs you".
+        // Agents that report status are not affected (reports win). Only
+        // while an agent is running in the pane (agent_present).
+        if (pd.agent_present.load(.acquire)) {
+            if (g_screen_change_app) |app| {
+                if (app.config.agent.protocol) pd.agent_state.notifyWaiting("", pio.nanoTimestamp());
+                app.requestFrame();
+            }
+        }
         if (pd.agent_state.state.load(.acquire) == .working) return;
         _ = pd.bell_state.trigger();
     }
@@ -281,8 +293,57 @@ pub fn agentOutputCallback(ctx: ?*anyopaque) void {
         const now: i64 = @intCast(pio.nanoTimestamp());
         pd.last_output_ns.store(now, .release);
         if (pd.isAgentOutputSuppressed(now)) return;
+        if (g_screen_change_app) |app| {
+            if (!app.config.agent.heuristic_fallback) return;
+        }
         pd.agent_state.onOutput();
     }
+}
+
+/// Program status report (OSC 7501 / OSC 9;4), from the parse thread.
+pub fn agentStatusCallback(ctx: ?*anyopaque, report: agent_state_mod.StatusReport) void {
+    const pd: *PaneData = @ptrCast(@alignCast(ctx orelse return));
+    pd.agent_state.applyStatus(report, pio.nanoTimestamp());
+    if (g_screen_change_app) |app| app.requestFrame();
+}
+
+/// Desktop notification request (OSC 9 / 777), from the parse thread:
+/// a one-shot "needs you" with the program's text.
+pub fn agentNotificationCallback(ctx: ?*anyopaque, title: []const u8, body: []const u8) void {
+    const pd: *PaneData = @ptrCast(@alignCast(ctx orelse return));
+    pd.agent_state.notifyWaiting(if (body.len > 0) body else title, pio.nanoTimestamp());
+    if (g_screen_change_app) |app| app.requestFrame();
+}
+
+/// Window title changed (OSC 0 / 2), from the parse thread. Agents encode
+/// their state in a leading status glyph; see AgentState.classifyTitle.
+pub fn agentTitleCallback(ctx: ?*anyopaque, title: []const u8) void {
+    const pd: *PaneData = @ptrCast(@alignCast(ctx orelse return));
+    pd.agent_state.onTitle(title);
+    if (g_screen_change_app) |app| app.requestFrame();
+}
+
+/// Shell prompt started (OSC 133;A), from the parse thread.
+pub fn agentPromptStartCallback(ctx: ?*anyopaque) void {
+    const pd: *PaneData = @ptrCast(@alignCast(ctx orelse return));
+    pd.agent_state.onPromptStart();
+}
+
+/// Point a pane's terminal observer at the app callbacks. Called when the
+/// pane is created and when its shell is respawned. With `protocol` off the
+/// pane ignores status reports and does not answer the status query.
+pub fn wireObserver(pd: *PaneData, protocol: bool) void {
+    const obs = &pd.termio.terminal.observer;
+    // Bell: real BELs only (the VT parser excludes OSC terminators).
+    obs.onBell = bellCallback;
+    obs.bell_ctx = @ptrCast(pd);
+    // Agent output timing + status reports / notifications / prompt marks.
+    obs.onAgentOutput = agentOutputCallback;
+    obs.agent_ctx = @ptrCast(pd);
+    obs.onStatus = if (protocol) agentStatusCallback else null;
+    obs.onNotification = if (protocol) agentNotificationCallback else null;
+    obs.onPromptStart = if (protocol) agentPromptStartCallback else null;
+    obs.onTitle = if (protocol) agentTitleCallback else null;
 }
 
 /// Per-pane screen change callback.
@@ -321,6 +382,7 @@ pub fn configReloadCallback() void {
         new_config.agent.suppress_when_focused,
         new_config.agent.notification_sound,
     );
+    self.notification_manager.setKindMask(AgentStateT.State.maskFromNames(new_config.agent.notify_on));
     // Free old config's arena (all heap strings freed at once)
     self.config.deinit();
     self.config = new_config;

@@ -18,6 +18,8 @@ const status_bar_mod = @import("status_bar_renderer");
 const bell_state_mod = @import("bell_state");
 const system_beep = @import("system_beep");
 const actions = @import("actions.zig");
+const agents = @import("agents.zig");
+const overview = @import("agent_overview");
 
 const OpenGLBackend = opengl_backend_mod.OpenGLBackend;
 const FontGrid = fontgrid_mod.FontGrid;
@@ -51,12 +53,30 @@ pub fn pollForegroundProcess(self: *App, pd: *PaneData) void {
         const ok = process_monitor.queryForegroundName(.{
             .shell_pid = pd.pty.getChildPid(),
             .master_fd = if (@hasField(@TypeOf(pd.pty), "master_fd")) pd.pty.master_fd else -1,
+            .agent_names = self.config.agent.processes,
         }, &pn);
         if (ok and pn.len > 0) {
             const n = @min(pn.len, pd.process_name.len);
             @memset(&pd.process_name, 0);
             @memcpy(pd.process_name[0..n], pn.buf[0..n]);
             pd.process_name_len = @intCast(n);
+            pd.at_shell = pn.is_shell;
+            if (pn.is_shell) {
+                pd.agent_present.store(false, .release);
+            } else if (pn.agent_running) |running| {
+                pd.agent_present.store(running, .release);
+            } else if (process_monitor.nameMatchesList(pn.buf[0..pn.len], self.config.agent.processes)) {
+                pd.agent_present.store(true, .release);
+            }
+        }
+        // Live working folder (shown in the agent sidebar).
+        var cwd_buf: [256]u8 = undefined;
+        if (pd.pty.getChildCwd(&cwd_buf)) |cwd| {
+            pd.cwd_mutex.lock();
+            defer pd.cwd_mutex.unlock();
+            const n = @min(cwd.len, pd.live_cwd.len);
+            @memcpy(pd.live_cwd[0..n], cwd[0..n]);
+            pd.live_cwd_len = n;
         }
     }
 }
@@ -66,25 +86,52 @@ pub fn updateAgentStateFromProcess(self: *App, pd: *PaneData) void {
     const now: i64 = @intCast(pio.nanoTimestamp());
     const quiet_threshold_ns: i64 = @as(i64, self.config.agent.quiet_threshold_ms) * 1_000_000;
 
+    const name = pd.process_name[0..pd.process_name_len];
+    // "Agent running" (see PaneData.agent_present), not the current
+    // foreground leaf, which flips to the agent's helper processes.
+    const is_agent = pd.agent_present.load(.acquire);
+    const is_shell = pd.at_shell or name.len == 0 or (!is_agent and actions.isShellName(name));
+
+    // Back at the shell itself = the agent (whatever its process name, e.g.
+    // pi runs as node) has exited. A tool's `bash` under an agent is still a
+    // child of the shell, so it doesn't count.
+    const at_shell = pd.at_shell;
+
+    // Status-record lifetime: agent exit / shell prompt end in-flight records.
+    if (is_agent) pd.agent_state.markTracked();
+    if ((pd.was_agent and !is_agent) or (pd.was_busy and at_shell)) pd.agent_state.agentGone(now);
+    pd.was_agent = is_agent;
+    pd.was_busy = !at_shell;
+    pd.agent_state.consumePromptStart(!at_shell, now);
+
+    // The agent's title glyph (Claude Code, Gemini, Codex) beats output
+    // timing: it stays "working" through quiet stretches like subagent runs.
+    if (is_agent and pd.agent_state.applyTitleHint(now)) {
+        if (pd.agent_state.state.load(.acquire) == .working) self.requestFrame();
+        return;
+    }
+
+    // Inference only for panes without status records (AgentState ignores
+    // it otherwise), and only if enabled.
+    if (!self.config.agent.heuristic_fallback) return;
+
     const last_output = pd.last_output_ns.load(.acquire);
     const recent_output = last_output > 0 and (now - last_output) < quiet_threshold_ns;
     const current = pd.agent_state.state.load(.acquire);
 
     if (recent_output) {
-        if (current != .working) pd.agent_state.onOutput();
+        if (current != .working) pd.agent_state.onOutputWithTimestamp(last_output);
         // Keep rendering until the quiet threshold elapses so we can
         // re-evaluate.
         self.requestFrame();
         return;
     }
 
-    const name = pd.process_name[0..pd.process_name_len];
-    const is_agent = process_monitor.nameMatchesList(name, self.config.agent.processes);
-    const is_shell = name.len == 0 or actions.isShellName(name);
-
     if (is_agent) {
-        if (current != .waiting) pd.agent_state.triggerWaiting();
-        self.requestFrame();
+        // A quiet agent is idle: without status reports pterm can't tell a
+        // permission prompt from an agent sitting at its prompt. Bells and
+        // notifications still mark it "needs you".
+        if (current != .idle) pd.agent_state.markIdle();
     } else if (is_shell) {
         if (current != .idle) pd.agent_state.markIdle();
     } else {
@@ -264,12 +311,17 @@ pub fn renderThreadMain(self: *App) void {
                 self.pane_mutex.lock();
                 defer self.pane_mutex.unlock();
                 const now_ns: i64 = @intCast(pio.nanoTimestamp());
+                const focused_pane_id: ?u32 = if (self.tab_manager.getActiveTab()) |t| t.focused_pane_id else null;
                 var pit = self.pane_data.iterator();
                 while (pit.next()) |pe| {
                     const pd = pe.value_ptr.*;
                     pollForegroundProcess(self, pd);
                     if (self.config.agent.enabled and !pd.isAgentOutputSuppressed(now_ns)) {
                         updateAgentStateFromProcess(self, pd);
+                    }
+                    // Looking at a pane acknowledges its "done".
+                    if (self.focused and focused_pane_id == pd.pane_id) {
+                        pd.agent_state.markSeen(now_ns);
                     }
                 }
             }
@@ -294,8 +346,8 @@ pub fn renderThreadMain(self: *App) void {
                         if (pd_ptr.*.bell_state.show_badge) {
                             bell_badges_buf[ti] = true;
                         }
-                        // Agent waiting badge
-                        if (pd_ptr.*.agent_state.show_badge) {
+                        // Agent badge: shown for any agent activity (colored below)
+                        if (pd_ptr.*.agent_state.state.load(.acquire) != .idle) {
                             agent_badges_buf[ti] = true;
                         }
                         // Agent tab icon
@@ -303,6 +355,17 @@ pub fn renderThreadMain(self: *App) void {
                             agent_tab_buf[ti] = true;
                         }
                     }
+                }
+            }
+
+            // Tab dot color: the tab's most urgent agent state.
+            var agent_colors_buf: [64]u32 = undefined;
+            {
+                const ov_colors = agents.colors(self);
+                for (self.tab_manager.tabs.items, 0..) |tab, ti| {
+                    if (ti >= 64) break;
+                    const st = agents.tabState(self, tab.root, self.frame_arena.allocator()) orelse .idle;
+                    agent_colors_buf[ti] = ov_colors.forState(st);
                 }
             }
 
@@ -321,6 +384,7 @@ pub fn renderThreadMain(self: *App) void {
                     .bell_badge_color = self.renderer_palette.ui_bell_badge.toU32(),
                     .tab_bell_badges = bell_badges_buf[0..badge_count],
                     .tab_agent_badges = agent_badges_buf[0..badge_count],
+                    .tab_agent_colors = agent_colors_buf[0..badge_count],
                     .tab_is_agent = agent_tab_buf[0..badge_count],
                     .agent_mode_active = self.tab_manager.agent_mode_active,
                 },
@@ -339,22 +403,15 @@ pub fn renderThreadMain(self: *App) void {
                 0;
 
             if (self.tab_manager.getActiveTab()) |active_tab| {
-                const content_y: i32 = @intCast(tab_bar_height);
-                const total_chrome = tab_bar_height + status_bar_height;
-                const content_h: u32 = if (fb.height > total_chrome) fb.height - total_chrome else 0;
-                const available = Rect{
-                    .x = 0,
-                    .y = content_y,
-                    .w = fb.width,
-                    .h = content_h,
-                };
+                // Pane area: window minus tab bar, status bar and agent sidebar.
+                const available = agents.contentRectFor(self, fb.width, fb.height);
 
                 // Fill content area with default bg to cover cell-grid rounding gaps
                 backend.drawFilledRect(RendererRect{
-                    .x = 0,
-                    .y = content_y,
-                    .w = fb.width,
-                    .h = content_h,
+                    .x = available.x,
+                    .y = available.y,
+                    .w = available.w,
+                    .h = available.h,
                 }, self.renderer_palette.default_bg);
 
                 // Agent focus mode: render only the source pane at full content rect.
@@ -636,6 +693,33 @@ pub fn renderThreadMain(self: *App) void {
                     }, lighter);
                 }
 
+                // Agent sidebar
+                if (agents.sidebarRect(self, fb.width, fb.height)) |sb_rect| {
+                    backend.setFullViewport();
+                    const entries = blk: {
+                        self.pane_mutex.lock();
+                        defer self.pane_mutex.unlock();
+                        break :blk agents.collectEntries(self, self.frame_arena.allocator(), 0);
+                    };
+                    var sidebar_ctx = TabBarRenderCtx{
+                        .backend = &backend,
+                        .font_grid = self.font_grid,
+                        .chrome_font_grid = self.chrome_font_grid,
+                    };
+                    overview.Sidebar.render(
+                        entries,
+                        agents.toOverviewRect(sb_rect),
+                        agents.metrics(self),
+                        agents.colors(self),
+                        @intCast(pio.nanoTimestamp()),
+                        self.config.sidebar.side == .left,
+                        self.sidebar_collapsed.load(.acquire),
+                        statusBarDrawRect,
+                        overviewDrawText,
+                        @ptrCast(&sidebar_ctx),
+                    );
+                }
+
                 // Render status bar at window bottom
                 if (self.config.status_bar.visible and status_bar_height > 0) {
                     backend.setFullViewport();
@@ -682,6 +766,8 @@ pub fn renderThreadMain(self: *App) void {
                         .working_color = self.renderer_palette.ansi_normal[2].toU32(),
                         .waiting_color = self.renderer_palette.ui_agent_alert.toU32(),
                         .focused_bg_color = lightenColorU32(self.renderer_palette.ui_tab_bar_bg.toU32(), 15),
+                        .done_color = self.renderer_palette.ansi_normal[4].toU32(),
+                        .error_color = self.renderer_palette.ansi_normal[1].toU32(),
                     };
 
                     var sb_render_ctx = TabBarRenderCtx{
@@ -769,6 +855,33 @@ pub fn renderThreadMain(self: *App) void {
                     shellPickerDrawRectCallback,
                     drawTextCallback,
                     @ptrCast(&sp_render_ctx),
+                );
+            }
+
+            // Agent board overlay (on top of everything)
+            if (self.board_visible.load(.acquire)) {
+                backend.setFullViewport();
+                const entries = blk: {
+                    self.pane_mutex.lock();
+                    defer self.pane_mutex.unlock();
+                    break :blk agents.collectEntries(self, self.frame_arena.allocator(), agents.board_preview_lines);
+                };
+                var board_ctx = TabBarRenderCtx{
+                    .backend = &backend,
+                    .font_grid = self.font_grid,
+                    .chrome_font_grid = self.chrome_font_grid,
+                };
+                overview.Board.render(
+                    entries,
+                    self.board_sel,
+                    fb.width,
+                    fb.height,
+                    agents.metrics(self),
+                    agents.colors(self),
+                    @intCast(pio.nanoTimestamp()),
+                    overlayDrawRect,
+                    overviewDrawText,
+                    @ptrCast(&board_ctx),
                 );
             }
 
@@ -860,14 +973,27 @@ fn drawTextCallback(text: []const u8, px_x: i32, px_y: i32, color: Compositor.Co
     const font_grid = rc.chrome_font_grid orelse rc.font_grid;
     const metrics = font_grid.getMetrics();
 
-    // Build CellInstance array for each byte in the string
+    // Build CellInstance array, one per codepoint (UTF-8 decoded; invalid
+    // bytes are drawn as single characters).
     var instances: [128]renderer_types.CellInstance = undefined;
     var count: usize = 0;
 
     const ascender: i32 = @intFromFloat(metrics.ascender);
-    for (text) |byte| {
+    var i: usize = 0;
+    while (i < text.len) {
         if (count >= 128) break;
-        const glyph = font_grid.getGlyph(@as(u21, byte)) catch continue;
+        const seq_len = std.unicode.utf8ByteSequenceLength(text[i]) catch 1;
+        const cp: u21 = blk: {
+            if (seq_len > 1 and i + seq_len <= text.len) {
+                if (std.unicode.utf8Decode(text[i..][0..seq_len])) |c| {
+                    i += seq_len;
+                    break :blk c;
+                } else |_| {}
+            }
+            i += 1;
+            break :blk text[i - 1];
+        };
+        const glyph = font_grid.getGlyph(cp) catch continue;
 
         // Compute vertical offset: same as pane rendering (ascender - bearing_y)
         const sby: i32 = ascender - glyph.bearing_y;
@@ -960,6 +1086,21 @@ fn statusBarDrawRect(x: i32, y: i32, w: u32, h: u32, color: u32, ctx: *anyopaque
     const rc: *TabBarRenderCtx = @ptrCast(@alignCast(ctx));
     const c = renderer_types.Color.fromU32(color);
     rc.backend.drawFilledRect(.{ .x = x, .y = y, .w = w, .h = h }, c);
+}
+
+/// Rect callback that honours alpha (board backdrop).
+fn overlayDrawRect(x: i32, y: i32, w: u32, h: u32, color: u32, ctx: *anyopaque) void {
+    const rc: *TabBarRenderCtx = @ptrCast(@alignCast(ctx));
+    const c = renderer_types.Color.fromU32(color);
+    if (c.a == 255) {
+        rc.backend.drawFilledRect(.{ .x = x, .y = y, .w = w, .h = h }, c);
+    } else {
+        rc.backend.drawFilledRectAlpha(.{ .x = x, .y = y, .w = w, .h = h }, c);
+    }
+}
+
+fn overviewDrawText(text: []const u8, px_x: i32, px_y: i32, color: u32, ctx: *anyopaque) void {
+    drawTextCallback(text, px_x, px_y, color, ctx);
 }
 
 fn statusBarDrawText(text: []const u8, px_x: i32, px_y: i32, color: u32, scale: f32, ctx: *anyopaque) void {
@@ -1139,11 +1280,22 @@ pub fn processAgentFlashForPane(self: *App, pd: *PaneData, bounds: RendererRect,
             pd.pane_id,
         }) catch {};
         const pane_identity = identity_writer.buffered();
+        // Body: the agent's own message if it sent one, else the state.
+        var msg_buf: [AgentState.MAX_MESSAGE]u8 = undefined;
+        const message = pd.agent_state.getMessage(&msg_buf);
+        const notify_state = pd.agent_state.notify_state.load(.acquire);
+        const body: ?[]const u8 = if (message.len > 0) message else switch (notify_state) {
+            .done => "Done",
+            .errored => "Error",
+            .waiting => "Needs your attention",
+            else => null, // "Output idle"
+        };
         self.notification_manager.notify(
             self.allocator,
             pd.pane_id,
+            @backingInt(notify_state),
             pane_identity,
-            null, // matched_text not available at render time
+            body,
             self.focused,
         );
     }

@@ -2,6 +2,7 @@
 const std = @import("std");
 const pio = @import("pio");
 const app_mod = @import("App.zig");
+const agents = @import("agents.zig");
 const App = app_mod.App;
 const PaneData = app_mod.PaneData;
 const callbacks = @import("callbacks.zig");
@@ -185,6 +186,8 @@ pub fn dispatchAction(self: *App, action: keybindings.Action) void {
                 advanceAgentSource(self);
             }
         },
+        .toggle_agent_sidebar => agents.toggleSidebar(self),
+        .toggle_agent_board => agents.toggleBoard(self),
         // Shell switching
         .change_shell => actionOpenShellPicker(self),
         .scroll_to_top, .scroll_to_bottom => {},
@@ -554,20 +557,7 @@ pub fn resizeAllPanes(self: *App) void {
         entry.value_ptr.*.suppressAgentOutputUntil(deadline);
     }
     const metrics = self.font_grid.getMetrics();
-    const tab_bar_height = TabBarRenderer.computeHeight(self.chrome_cell_height);
-    const status_bar_height: u32 = if (self.config.status_bar.visible)
-        StatusBarRenderer.statusBarHeight(self.chrome_cell_height)
-    else
-        0;
-    const content_y: i32 = @intCast(tab_bar_height);
-    const total_chrome = tab_bar_height + status_bar_height;
-    const content_h: u32 = if (fb.height > total_chrome) fb.height - total_chrome else 0;
-    const available = Rect{
-        .x = 0,
-        .y = content_y,
-        .w = fb.width,
-        .h = content_h,
-    };
+    const available = agents.contentRectFor(self, fb.width, fb.height);
     const padding = self.config.grid_padding();
 
     // Agent focus mode: only the source pane is visible, sized to the full
@@ -612,8 +602,11 @@ pub fn resizeAllPanes(self: *App) void {
 
 // ── Agent focus mode ─────────────────────────────────────────
 
-/// True if the pane's foreground process is in `config.agent.processes`.
+/// True if the pane's foreground process is in `config.agent.processes`, or
+/// the pane has a non-idle agent state from status reports (programs that
+/// report via status sequences, or a done/error left after the agent exited).
 fn paneIsAgentEligible(self: *App, pd: *PaneData) bool {
+    if (pd.agent_state.tracked.load(.acquire) and pd.agent_state.state.load(.acquire) != .idle) return true;
     const name = pd.process_name[0..pd.process_name_len];
     if (name.len == 0) return false;
     return process_monitor.nameMatchesList(name, self.config.agent.processes);
@@ -641,15 +634,28 @@ fn collectEligible(self: *App, alloc: std.mem.Allocator) []Eligible {
     return list.toOwnedSlice(alloc) catch &.{};
 }
 
-/// Pick the best eligible pane: first .waiting, else first .working, else null.
+/// Focus-mode priority: needs you (waiting, errored) first, then unseen done,
+/// then working. Idle panes are never picked.
+const focus_priority = [_][]const AgentState.State{
+    &.{ .waiting, .errored },
+    &.{.done},
+    &.{.working},
+};
+
+fn inGroup(state: AgentState.State, group: []const AgentState.State) bool {
+    return std.mem.indexOfScalar(AgentState.State, group, state) != null;
+}
+
+/// Pick the best eligible pane by focus_priority, in tab/pane order.
 fn pickFirstEligible(eligibles: []const Eligible) ?Eligible {
-    for (eligibles) |e| if (e.state == .waiting) return e;
-    for (eligibles) |e| if (e.state == .working) return e;
+    for (focus_priority) |group| {
+        for (eligibles) |e| if (inGroup(e.state, group)) return e;
+    }
     return null;
 }
 
-/// Pick the next eligible pane after `current`, with wrap-around. Prefers
-/// .waiting over .working in the round.
+/// Pick the next eligible pane after `current`, with wrap-around, by
+/// focus_priority.
 fn pickNextEligible(eligibles: []const Eligible, current: AgentSource) ?Eligible {
     if (eligibles.len == 0) return null;
     var start: usize = 0;
@@ -659,16 +665,13 @@ fn pickNextEligible(eligibles: []const Eligible, current: AgentSource) ?Eligible
             break;
         }
     }
-    // Walk forward with wrap, preferring waiting first.
-    var i: usize = 0;
-    while (i < eligibles.len) : (i += 1) {
-        const e = eligibles[(start + i) % eligibles.len];
-        if (e.state == .waiting) return e;
-    }
-    i = 0;
-    while (i < eligibles.len) : (i += 1) {
-        const e = eligibles[(start + i) % eligibles.len];
-        if (e.state == .working) return e;
+    // Walk forward with wrap, one priority group at a time.
+    for (focus_priority) |group| {
+        var i: usize = 0;
+        while (i < eligibles.len) : (i += 1) {
+            const e = eligibles[(start + i) % eligibles.len];
+            if (inGroup(e.state, group)) return e;
+        }
     }
     return null;
 }
@@ -927,10 +930,7 @@ pub fn respawnShell(self: *App, pd: *PaneData, shell_name: []const u8) !void {
     pd.surface.window = &self.window;
 
     // Rewire observer callbacks
-    pd.termio.terminal.observer.onBell = callbacks.bellCallback;
-    pd.termio.terminal.observer.bell_ctx = @ptrCast(pd);
-    pd.termio.terminal.observer.onAgentOutput = callbacks.agentOutputCallback;
-    pd.termio.terminal.observer.agent_ctx = @ptrCast(pd);
+    callbacks.wireObserver(pd, self.config.agent.protocol);
 
     // Update process name from new shell
     {

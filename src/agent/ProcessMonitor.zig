@@ -10,7 +10,10 @@
 ///     name on failure (macOS: TODO — use proc_pidpath when needed).
 ///   - Windows: ConPTY has no foreground-process API, so we snapshot the full
 ///     process list via CreateToolhelp32Snapshot and walk descendants of the
-///     shell PID, picking the most-recently-started leaf.
+///     shell PID, picking the agent if one is running (the outermost, not the
+///     helpers it spawns), else the most-recently-started leaf. Long-lived
+///     helpers the shell keeps for itself (nu plugins) are not "running in"
+///     the pane.
 const std = @import("std");
 const pio = @import("pio");
 const builtin = @import("builtin");
@@ -20,6 +23,11 @@ pub const MAX_NAME = 64;
 pub const ProcessName = struct {
     buf: [MAX_NAME]u8 = @as([MAX_NAME]u8, @splat(0)),
     len: u32 = 0,
+    /// The foreground process is the shell itself (nothing running in it).
+    is_shell: bool = false,
+    /// A process named in `QueryInput.agent_names` is running under the shell.
+    /// Null where the platform can't tell (only the foreground group is known).
+    agent_running: ?bool = null,
 
     pub fn slice(self: *const ProcessName) []const u8 {
         return self.buf[0..self.len];
@@ -38,6 +46,8 @@ pub const QueryInput = struct {
     shell_pid: ?i32,
     /// PTY master fd (POSIX only; ignored on Windows).
     master_fd: c_int = -1,
+    /// Agent process names to look for among all descendants (Windows).
+    agent_names: []const []const u8 = &.{},
 };
 
 /// Query the foreground process name. Writes into `out` and returns true on
@@ -59,7 +69,10 @@ fn queryLinux(in: QueryInput, out: *ProcessName) bool {
     if (in.master_fd < 0) return false;
     const pgid = tcgetpgrp(in.master_fd);
     if (pgid <= 0) return false;
-    return readProcComm(@intCast(pgid), out);
+    if (!readProcComm(@intCast(pgid), out)) return false;
+    // The shell leads its own process group; a job gets a new one.
+    out.is_shell = if (in.shell_pid) |sp| sp == pgid else false;
+    return true;
 }
 
 fn readProcComm(pid: i32, out: *ProcessName) bool {
@@ -89,6 +102,7 @@ fn queryMacos(in: QueryInput, out: *ProcessName) bool {
     if (rc <= 0) return false;
     const n: usize = @intCast(rc);
     out.set(name_buf[0..@min(n, MAX_NAME)]);
+    out.is_shell = if (in.shell_pid) |sp| sp == pgid else false;
     return true;
 }
 
@@ -185,6 +199,7 @@ fn queryWindows(in: QueryInput, out: *ProcessName) bool {
 
     var best_idx: ?usize = null;
     var best_ctime: u64 = 0;
+    var agent_idx: ?usize = null;
 
     // Mark queue of pids to traverse
     var queue: [256]DWORD = undefined;
@@ -198,6 +213,8 @@ fn queryWindows(in: QueryInput, out: *ProcessName) bool {
         var i: usize = 0;
         while (i < count) : (i += 1) {
             if (ppids[i] != parent) continue;
+            const name = names[i][0..name_lens[i]];
+            if (parent == shell_pid_u and isShellHelper(name)) continue;
             // Enqueue this descendant
             if (qtail < queue.len) {
                 queue[qtail] = pids[i];
@@ -205,6 +222,8 @@ fn queryWindows(in: QueryInput, out: *ProcessName) bool {
             }
             // Consider as candidate (exclude the shell itself)
             if (pids[i] == shell_pid_u) continue;
+            // Breadth-first, so the first match is the outermost agent.
+            if (agent_idx == null and nameMatchesList(name, in.agent_names)) agent_idx = i;
             const ctime = getProcessCreationTime(pids[i]);
             if (ctime == 0) continue;
             if (best_idx == null or ctime > best_ctime) {
@@ -214,8 +233,10 @@ fn queryWindows(in: QueryInput, out: *ProcessName) bool {
         }
     }
 
-    if (best_idx) |idx| {
+    out.agent_running = agent_idx != null;
+    if (agent_idx orelse best_idx) |idx| {
         out.set(names[idx][0..name_lens[idx]]);
+        out.is_shell = false;
         return true;
     }
     // No descendant — fall back to shell's own name
@@ -223,6 +244,7 @@ fn queryWindows(in: QueryInput, out: *ProcessName) bool {
     while (i < count) : (i += 1) {
         if (pids[i] == shell_pid_u) {
             out.set(names[i][0..name_lens[i]]);
+            out.is_shell = true;
             return true;
         }
     }
@@ -241,6 +263,14 @@ fn getProcessCreationTime(pid: DWORD) u64 {
 }
 
 // ── Helpers ──────────────────────────────────────────────
+
+/// A child the shell keeps alive for itself rather than a command the user
+/// ran: nushell starts plugins from its prompt (e.g. nu_plugin_gstat in a git
+/// folder) and leaves them running for a while afterwards.
+fn isShellHelper(name: []const u8) bool {
+    const prefix = "nu_plugin_";
+    return name.len >= prefix.len and std.ascii.eqlIgnoreCase(name[0..prefix.len], prefix);
+}
 
 /// Case-insensitive match of `name` against any entry in `list`.
 pub fn nameMatchesList(name: []const u8, list: []const []const u8) bool {
@@ -268,4 +298,12 @@ test "nameMatchesList case-insensitive" {
     try std.testing.expect(nameMatchesList("Codex", &list));
     try std.testing.expect(!nameMatchesList("bash", &list));
     try std.testing.expect(!nameMatchesList("claude-code", &list));
+}
+
+test "isShellHelper matches nushell plugins only" {
+    try std.testing.expect(isShellHelper("nu_plugin_gstat"));
+    try std.testing.expect(isShellHelper("NU_PLUGIN_query"));
+    try std.testing.expect(!isShellHelper("nu"));
+    try std.testing.expect(!isShellHelper("claude"));
+    try std.testing.expect(!isShellHelper("nu_plugin"));
 }

@@ -37,6 +37,7 @@ const render_state = @import("render_state");
 const theme_mod = @import("theme");
 const keybindings = @import("keybindings");
 const callbacks = @import("callbacks.zig");
+const agents = @import("agents.zig");
 const utils = @import("utils.zig");
 
 const TermIO = termio_mod.TermIO;
@@ -143,6 +144,30 @@ pub const PaneData = struct {
     /// Render-thread only: timestamp of last foreground-process poll.
     last_process_poll_ns: i64 = 0,
 
+    /// Render-thread only: an agent process was in the foreground at the last
+    /// state update (detects the agent exiting).
+    was_agent: bool = false,
+
+    /// An agent process is running in this pane. Not the foreground leaf, which
+    /// flips between the agent and its short-lived helpers (git, bash, ...).
+    /// Windows: an agent name is among the shell's descendants. POSIX: sticky,
+    /// set when an agent name is in the foreground, cleared when the shell is.
+    /// Render thread writes; main thread and parse thread read.
+    agent_present: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    /// Render-thread only: the shell itself is in the foreground (nothing
+    /// running in it), per the last foreground-process poll.
+    at_shell: bool = true,
+    /// Render-thread only: something was running in the shell at the
+    /// previous state update (detects any agent exiting, whatever its name).
+    was_busy: bool = false,
+
+    /// Live working folder of the pane's shell (polled with the foreground
+    /// process; render thread writes, main thread reads). Guarded by cwd_mutex.
+    live_cwd: [256]u8 = undefined,
+    live_cwd_len: usize = 0,
+    cwd_mutex: pio.Mutex = .{},
+
     /// Suppress agent state transitions during resize (PTY redraws cause
     /// false positives). Time-based: resize sets `suppress_until_ns = now +
     /// SUPPRESS_DURATION_NS` and all checks compare wall-clock to that.
@@ -153,6 +178,16 @@ pub const PaneData = struct {
 
     /// Scrollback viewport offset: 0 = live (bottom), >0 = scrolled up N lines into history.
     scroll_offset: u32 = 0,
+
+    /// Copy the pane's current folder (live, else the start folder) into buf.
+    pub fn currentFolder(self: *PaneData, buf: []u8) []const u8 {
+        self.cwd_mutex.lock();
+        defer self.cwd_mutex.unlock();
+        const src = if (self.live_cwd_len > 0) self.live_cwd[0..self.live_cwd_len] else self.cwd[0..self.cwd_len.load(.acquire)];
+        const n = @min(buf.len, src.len);
+        @memcpy(buf[0..n], src[0..n]);
+        return buf[0..n];
+    }
 
     pub fn isAgentOutputSuppressed(self: *const PaneData, now_ns: i64) bool {
         return now_ns < self.suppress_until_ns.load(.acquire);
@@ -255,6 +290,22 @@ pub const App = struct {
 
     // Pending pane operations (main thread -> render thread, mutex-protected)
     pending_ops: std.ArrayListUnmanaged(PaneOp),
+
+    // Agent overview (sidebar + board)
+    /// Sidebar currently shown (main thread decides, render thread reads).
+    sidebar_shown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// User toggle overriding [sidebar] visible; null = follow config.
+    sidebar_user: ?bool = null,
+    /// Board overlay open.
+    board_visible: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Sidebar collapsed to a strip of state dots.
+    sidebar_collapsed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Home folder, for "~" in displayed paths ("" if unknown).
+    home_dir: []const u8 = "",
+    /// When the sidebar last had an agent to show (auto-hide delay).
+    sidebar_last_agent_ms: i64 = 0,
+    /// Board selection (main thread).
+    board_sel: @import("agent_overview").Board.Selection = .{},
     pending_ops_mutex: pio.Mutex,
 
     /// Protects pane_data and tab_manager from concurrent access
@@ -501,6 +552,10 @@ pub const App = struct {
     /// Start all threads and wire GLFW callbacks.
     /// Must be called after init() returns and the App struct is at its final address.
     pub fn start(self: *App) !void {
+        self.sidebar_collapsed.store(self.config.sidebar.collapsed, .release);
+        self.home_dir = pio.getEnvVarOwned(self.allocator, if (builtin.os.tag == .windows) "USERPROFILE" else "HOME") catch "";
+        self.notification_manager.setKindMask(AgentState.State.maskFromNames(self.config.agent.notify_on));
+
         // Create first pane (TermIO + PTY + Surface)
         const first_tab = self.tab_manager.getActiveTab() orelse return error.NoTab;
         const pane_id = try self.createPane(null, null, null);
@@ -715,13 +770,8 @@ pub const App = struct {
         // pointers reference the stable heap location.
         pd.termio.attachPty(&pd.pty);
 
-        // Wire bell detection: Observer fires callbacks.bellCallback when BEL (0x07) found in output.
-        pd.termio.terminal.observer.onBell = callbacks.bellCallback;
-        pd.termio.terminal.observer.bell_ctx = @ptrCast(pd);
-
-        // Wire agent output detection: Observer fires callbacks.agentOutputCallback on raw output.
-        pd.termio.terminal.observer.onAgentOutput = callbacks.agentOutputCallback;
-        pd.termio.terminal.observer.agent_ctx = @ptrCast(pd);
+        // Wire bell, agent output and agent status callbacks.
+        callbacks.wireObserver(pd, self.config.agent.protocol);
 
         // Create PaneState for registry
         const ps = try self.allocator.create(PaneState);
@@ -769,6 +819,7 @@ pub const App = struct {
     }
 
     pub fn deinit(self: *App) void {
+        if (self.home_dir.len > 0) self.allocator.free(self.home_dir);
         // Detach version-check worker so a stuck network fetch doesn't block exit.
         self.version_check.deinit();
 
@@ -855,6 +906,9 @@ pub const App = struct {
                     self.requestFrame();
                 }
             }
+
+            // Show/hide the agent sidebar (auto mode follows agent panes).
+            agents.updateSidebarVisibility(self);
 
             // Periodic frame request so the render thread re-polls foreground
             // process names even when nothing else is happening. Without this
@@ -1023,14 +1077,7 @@ pub const App = struct {
     /// agent focus mode to size and hit-test the source pane fullscreen.
     pub fn contentRect(self: *App) Rect {
         const fb = self.window.getFramebufferSize();
-        const tab_bar_h = TabBarRenderer.computeHeight(self.chrome_cell_height);
-        const sb_h: u32 = if (self.config.status_bar.visible)
-            @import("status_bar_renderer").StatusBarRenderer.statusBarHeight(self.chrome_cell_height)
-        else
-            0;
-        const chrome = tab_bar_h + sb_h;
-        const h: u32 = if (fb.height > chrome) fb.height - chrome else 0;
-        return .{ .x = 0, .y = @intCast(tab_bar_h), .w = fb.width, .h = h };
+        return agents.contentRectFor(self, fb.width, fb.height);
     }
 
     /// Effective on-screen bounds for a pane. In agent focus mode, the source

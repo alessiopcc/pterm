@@ -181,6 +181,12 @@ extern "kernel32" fn SetEnvironmentVariableA(
     lpValue: [*:0]const u8,
 ) callconv(.c) BOOL;
 
+extern "kernel32" fn GetEnvironmentVariableA(
+    lpName: [*:0]const u8,
+    lpBuffer: ?[*]u8,
+    nSize: DWORD,
+) callconv(.c) DWORD;
+
 // NtQueryInformationProcess + ReadProcessMemory for querying child CWD
 const PROCESS_BASIC_INFORMATION = extern struct {
     ExitStatus: usize = 0,
@@ -340,6 +346,14 @@ pub const ConPty = struct {
         // via lpEnvironment=null in CreateProcessW.
         _ = SetEnvironmentVariableA("TERM", "xterm-256color");
         _ = SetEnvironmentVariableA("COLORTERM", "truecolor");
+        _ = SetEnvironmentVariableA("TERM_PROGRAM", "pterm");
+        // pterm understands OSC 7501 program status, but ConPTY answers the
+        // DA1 sentinel of a program's support query itself, before pterm's
+        // reply can arrive, so query-gated reporters (pi) see "unsupported".
+        // Tell pi directly unless the user chose otherwise.
+        if (GetEnvironmentVariableA("PI_PROGRAM_STATUS", null, 0) == 0) {
+            _ = SetEnvironmentVariableA("PI_PROGRAM_STATUS", "1");
+        }
 
         // Convert working directory from UTF-8 to UTF-16 if specified
         var wd_buf: [1024]u16 = undefined;

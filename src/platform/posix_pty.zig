@@ -66,6 +66,10 @@ pub const PosixPty = struct {
             // Set TERM and COLORTERM for proper terminal capability detection
             _ = c.setenv("TERM", "xterm-256color", 1);
             _ = c.setenv("COLORTERM", "truecolor", 1);
+            _ = c.setenv("TERM_PROGRAM", "pterm", 1);
+            // pterm understands OSC 7501 program status; tell pi directly
+            // (no overwrite, so an explicit PI_PROGRAM_STATUS=0 wins).
+            _ = c.setenv("PI_PROGRAM_STATUS", "1", 0);
 
             // Set up environment if provided
             if (self.config.env) |env| {

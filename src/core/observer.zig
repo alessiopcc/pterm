@@ -13,6 +13,23 @@ pub const Event = union(enum) {
     sequence: struct { action: u8, params: []const u16 },
 };
 
+/// Program status report (OSC 7501, or OSC 9;4 progress mapped onto it).
+/// Slices are borrowed and only valid during the callback.
+pub const StatusReport = struct {
+    pub const State = enum { idle, working, done, blocked, err, clear };
+    pub const Kind = enum { permission, question, auth };
+
+    state: State,
+    /// Record id ("" = the program's root record). `/` separates levels.
+    id: []const u8 = "",
+    kind: ?Kind = null,
+    app: []const u8 = "",
+    /// Decoded UTF-8 title / message (no control characters).
+    title: []const u8 = "",
+    msg: []const u8 = "",
+    progress: ?u8 = null,
+};
+
 pub const Observer = struct {
     onOutput: ?*const fn (bytes: []const u8) void = null,
     onScreenChange: ?*const fn (ctx: ?*anyopaque) void = null,
@@ -21,8 +38,8 @@ pub const Observer = struct {
     /// Fired when custom VT parser replaces ghostty-vt.
     onSequence: ?*const fn (action: u8, params: []const u16) void = null,
 
-    /// Bell detection callback. Fired when BEL byte (0x07) is found
-    /// in the raw output stream before VT parsing strips it.
+    /// Bell callback. Fired by the VT parser for a real BEL; the BEL that
+    /// terminates an OSC sequence (e.g. a title update) does not count.
     onBell: ?*const fn (ctx: ?*anyopaque) void = null,
     bell_ctx: ?*anyopaque = null,
 
@@ -31,19 +48,26 @@ pub const Observer = struct {
     onAgentOutput: ?*const fn (ctx: ?*anyopaque) void = null,
     agent_ctx: ?*anyopaque = null,
 
+    // ── Agent status (parse thread, receive agent_ctx) ──
+
+    /// Program status report (OSC 7501 / OSC 9;4).
+    onStatus: ?*const fn (ctx: ?*anyopaque, report: StatusReport) void = null,
+    /// Desktop notification request (OSC 9 / OSC 777). Borrowed slices.
+    onNotification: ?*const fn (ctx: ?*anyopaque, title: []const u8, body: []const u8) void = null,
+    /// Shell integration: a new prompt started (OSC 133;A).
+    onPromptStart: ?*const fn (ctx: ?*anyopaque) void = null,
+    /// Window title changed (OSC 0 / 2). Borrowed slice.
+    onTitle: ?*const fn (ctx: ?*anyopaque, title: []const u8) void = null,
+
+    /// Reply to the program (query responses). Receives `write_ctx`.
+    /// When null the terminal answers no queries.
+    onWritePty: ?*const fn (ctx: ?*anyopaque, data: []const u8) void = null,
+    write_ctx: ?*anyopaque = null,
+
     pub fn notify(self: *const Observer, event: Event) void {
         switch (event) {
             .output => |bytes| {
                 if (self.onOutput) |cb| cb(bytes);
-                // Bell detection: scan for BEL byte (0x07) in raw output
-                if (self.onBell) |bell_cb| {
-                    for (bytes) |b| {
-                        if (b == 0x07) {
-                            bell_cb(self.bell_ctx);
-                            break;
-                        }
-                    }
-                }
                 // Agent output notification (instant clear, idle reset, scan schedule)
                 if (self.onAgentOutput) |agent_cb| {
                     agent_cb(self.agent_ctx);

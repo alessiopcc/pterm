@@ -30,14 +30,37 @@ tools like Claude Code are waiting for input.
   with keyboard shortcuts. No external multiplexer needed.
 - **Layout presets** -- Define named multi-tab, multi-pane layouts in your config
   and load them with a picker or `--layout <name>`.
-- **Agent monitoring** -- Process-based detection: when the foreground process
-  inside a pane matches the configured list (`claude`, `codex`, `opencode` by
-  default), the pane is tracked as an agent. Recent PTY output = `working`;
-  quiet + agent process = `waiting` (desktop notification fires).
+- **Agent status** -- Agents report their own state through the
+  [Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status)
+  (OSC 7501): working, needs you, done, error. Codex, opencode, Crush and
+  Goose report out of the box; Claude Code (2.1.295+) and pi report once the
+  terminal answers the protocol's support query, which pterm does. On Windows
+  ConPTY answers part of that query itself, so pterm also sets
+  `PI_PROGRAM_STATUS=1` (unless you set it) and `TERM_PROGRAM=pterm` for its
+  shells. Progress
+  (OSC 9;4) and notification sequences (OSC 9 / 777) are understood too.
+  For agents that report nothing, pterm reads the status glyph agents put
+  in the window title (Claude Code `✳` idle / spinner working, Gemini CLI,
+  Codex "Action Required"), which stays accurate through quiet stretches
+  such as subagent runs; the title text becomes the sidebar message. Without
+  a title glyph it falls back to inference: when the foreground process
+  matches the configured list (`claude`, `codex`, `opencode` by default),
+  recent output = working, quiet = idle, and a bell
+  = needs you (for Claude Code, set `"preferredNotifChannel":
+  "terminal_bell"`). Desktop notifications fire for needs you, error and
+  done. An agent leaves the sidebar when it exits (unread done / error stay
+  until you look).
+- **Agent sidebar and board** -- A sidebar (left by default, shown
+  automatically while agents run) lists every agent pane grouped into needs
+  you, working, done and idle, with the working folder, elapsed time and the
+  agent's message; click a row to jump to the pane. Collapse it to a strip of
+  state dots with `«` or `Ctrl+Alt+S`. `Ctrl+Alt+D` opens a full-window board
+  with Needs you / Working / Done columns and a preview of each pane.
+  Tabs show a dot colored by their most urgent agent state.
 - **Agent focus mode** -- `Ctrl+Alt+A` (or the `A` square at the leading edge
-  of the tab bar) takes over the window with the first waiting agent pane at
-  full size. `Ctrl+Alt+N` advances to the next waiting pane. `Esc` restores
-  the tiled layout.
+  of the tab bar) takes over the window with the agent pane that needs you
+  (then errors, then done, then working) at full size. `Ctrl+Alt+N` advances
+  to the next one. `Esc` restores the tiled layout.
 - **HarfBuzz text shaping** -- Ligatures, kerning, and font fallback chains.
   FreeType on Linux/Windows, CoreText on macOS.
 - **8 built-in color themes** -- default, dracula, solarized-dark,
@@ -140,13 +163,21 @@ mode = "none"       # visual, sound, both, none
 
 [agent]
 enabled = true
-preset = "broad"    # conservative, broad
+processes = ["claude", "codex", "opencode"]  # inference fallback
 notifications = true
+notify_on = ["waiting", "error", "done"]     # states that notify
 suppress_when_focused = true
-custom_patterns = ["my-custom-tool>"]
+protocol = true             # agent status reports (OSC 7501 / 9;4 / 9 / 777)
+heuristic_fallback = true   # infer state for agents that don't report
 
 [url]
 enabled = true
+
+[sidebar]
+visible = "auto"   # auto (while agents run), always, never
+side = "left"      # left, right
+width = 32         # columns
+collapsed = false  # start as a narrow strip of state dots
 
 [status_bar]
 visible = true
@@ -213,6 +244,8 @@ reserved and cannot be overridden.
 | Toggle agent tab marker | `Ctrl+Shift+A` |
 | Agent focus mode toggle | `Ctrl+Alt+A` |
 | Agent focus next waiting | `Ctrl+Alt+N` |
+| Collapse / expand agent sidebar | `Ctrl+Alt+S` |
+| Toggle agent board | `Ctrl+Alt+D` |
 | Change shell | `Ctrl+Shift+S` |
 | Font size +/−/reset | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` |
 | Copy / Paste | `Ctrl+C` / `Ctrl+V` |

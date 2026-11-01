@@ -29,6 +29,8 @@ pub const StatusBarConfig = struct {
     working_color: ColorU32, // theme green (ANSI color 2)
     waiting_color: ColorU32, // agent_alert
     focused_bg_color: ColorU32, // status_bar_bg lightened 15%
+    done_color: ColorU32 = 0x89B4FAFF, // theme blue (ANSI color 4)
+    error_color: ColorU32 = 0xF38BA8FF, // theme red (ANSI color 1)
 };
 
 /// Optional "update available" notification rendered at the right edge.
@@ -97,6 +99,8 @@ pub const StatusBarRenderer = struct {
                 .idle => config.idle_color,
                 .working => config.working_color,
                 .waiting => config.waiting_color,
+                .done => config.done_color,
+                .errored => config.error_color,
             };
 
             draw_text_fn(segment, x_cursor, text_y, color, text_scale, draw_ctx);

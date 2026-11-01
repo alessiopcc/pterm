@@ -110,6 +110,16 @@ const FileAgent = struct {
     notification_sound: bool = true,
     notification_cooldown: i64 = 30,
     suppress_when_focused: bool = true,
+    notify_on: ?[]const []const u8 = null,
+    protocol: bool = true,
+    heuristic_fallback: bool = true,
+};
+
+const FileSidebar = struct {
+    visible: ?[]const u8 = null,
+    side: ?[]const u8 = null,
+    width: ?i64 = null,
+    collapsed: bool = false,
 };
 
 const FileStatusBar = struct {
@@ -151,6 +161,7 @@ const FileConfig = struct {
     bell: ?FileBell = null,
     theme: ?[]const u8 = null,
     agent: ?FileAgent = null,
+    sidebar: ?FileSidebar = null,
     status_bar: ?FileStatusBar = null,
 };
 
@@ -321,9 +332,18 @@ fn mergeConfigs(base: Config, over: Config) Config {
     if (!over.agent.notification_sound) result.agent.notification_sound = over.agent.notification_sound;
     if (over.agent.notification_cooldown != 30) result.agent.notification_cooldown = over.agent.notification_cooldown;
     if (!over.agent.suppress_when_focused) result.agent.suppress_when_focused = over.agent.suppress_when_focused;
+    if (over.agent.notify_on.ptr != (&Config.default_notify_on).ptr) result.agent.notify_on = over.agent.notify_on;
+    if (!over.agent.protocol) result.agent.protocol = false;
+    if (!over.agent.heuristic_fallback) result.agent.heuristic_fallback = false;
 
     // Status bar
     if (!over.status_bar.visible) result.status_bar.visible = over.status_bar.visible;
+
+    // Sidebar
+    if (over.sidebar.visible != .auto) result.sidebar.visible = over.sidebar.visible;
+    if (over.sidebar.side != .left) result.sidebar.side = over.sidebar.side;
+    if (over.sidebar.width != 32) result.sidebar.width = over.sidebar.width;
+    if (over.sidebar.collapsed) result.sidebar.collapsed = true;
 
     // Theme
     if (over.theme) |v| result.theme = v;
@@ -480,6 +500,31 @@ fn applyFileConfig(allocator: std.mem.Allocator, base: Config, file: FileConfig)
         if (!a.notification_sound) result.agent.notification_sound = false;
         if (a.notification_cooldown != 30) result.agent.notification_cooldown = a.notification_cooldown;
         if (!a.suppress_when_focused) result.agent.suppress_when_focused = false;
+        if (a.notify_on) |v| {
+            const duped = try allocator.alloc([]const u8, v.len);
+            for (v, 0..) |name, i| {
+                duped[i] = try allocator.dupe(u8, name);
+            }
+            result.agent.notify_on = duped;
+        }
+        if (!a.protocol) result.agent.protocol = false;
+        if (!a.heuristic_fallback) result.agent.heuristic_fallback = false;
+    }
+
+    // Sidebar
+    if (file.sidebar) |sb| {
+        if (sb.visible) |v| {
+            if (std.meta.stringToEnum(Config.Sidebar.Visibility, v)) |e| {
+                result.sidebar.visible = e;
+            } else std.log.warn("[sidebar] visible: unknown value '{s}' (auto, always, never)", .{v});
+        }
+        if (sb.side) |v| {
+            if (std.meta.stringToEnum(Config.Sidebar.Side, v)) |e| {
+                result.sidebar.side = e;
+            } else std.log.warn("[sidebar] side: unknown value '{s}' (left, right)", .{v});
+        }
+        if (sb.width) |w| result.sidebar.width = @intCast(std.math.clamp(w, 16, 120));
+        if (sb.collapsed) result.sidebar.collapsed = true;
     }
 
     // Status bar
