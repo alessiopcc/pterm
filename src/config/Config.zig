@@ -38,6 +38,8 @@ pub const Config = struct {
     agent: Agent = .{},
     // [status_bar]
     status_bar: StatusBar = .{},
+    /// Agent sidebar.
+    sidebar: Sidebar = .{},
     // theme = "..." top-level key
     theme: ?[]const u8 = null,
     // [keybindings] — raw action=combo pairs from TOML, passed to buildMap at runtime
@@ -95,6 +97,17 @@ pub const Config = struct {
     pub const StatusBar = struct {
         /// Whether the status bar is visible. visible by default.
         visible: bool = true,
+    };
+
+    /// Agent sidebar config.
+    pub const Sidebar = struct {
+        pub const Visibility = enum { auto, always, never };
+        pub const Side = enum { left, right };
+        /// auto: shown while at least one agent pane exists.
+        visible: Visibility = .auto,
+        side: Side = .left,
+        /// Width in columns (chrome font).
+        width: u32 = 32,
     };
 
     /// Search config (empty stub for v1, no regex, no history).

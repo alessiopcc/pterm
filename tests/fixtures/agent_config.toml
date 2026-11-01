@@ -13,3 +13,8 @@ heuristic_fallback = false
 
 [status_bar]
 visible = false
+
+[sidebar]
+visible = "always"
+side = "right"
+width = 500

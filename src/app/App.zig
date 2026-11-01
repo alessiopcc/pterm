@@ -37,6 +37,7 @@ const render_state = @import("render_state");
 const theme_mod = @import("theme");
 const keybindings = @import("keybindings");
 const callbacks = @import("callbacks.zig");
+const agents = @import("agents.zig");
 const utils = @import("utils.zig");
 
 const TermIO = termio_mod.TermIO;
@@ -259,6 +260,16 @@ pub const App = struct {
 
     // Pending pane operations (main thread -> render thread, mutex-protected)
     pending_ops: std.ArrayListUnmanaged(PaneOp),
+
+    // Agent overview (sidebar + board)
+    /// Sidebar currently shown (main thread decides, render thread reads).
+    sidebar_shown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// User toggle overriding [sidebar] visible; null = follow config.
+    sidebar_user: ?bool = null,
+    /// Board overlay open.
+    board_visible: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Board selection (main thread).
+    board_sel: @import("agent_overview").Board.Selection = .{},
     pending_ops_mutex: pio.Mutex,
 
     /// Protects pane_data and tab_manager from concurrent access
@@ -857,6 +868,9 @@ pub const App = struct {
                 }
             }
 
+            // Show/hide the agent sidebar (auto mode follows agent panes).
+            agents.updateSidebarVisibility(self);
+
             // Periodic frame request so the render thread re-polls foreground
             // process names even when nothing else is happening. Without this
             // a pane that becomes an agent while idle stays stuck in `idle`
@@ -1024,14 +1038,7 @@ pub const App = struct {
     /// agent focus mode to size and hit-test the source pane fullscreen.
     pub fn contentRect(self: *App) Rect {
         const fb = self.window.getFramebufferSize();
-        const tab_bar_h = TabBarRenderer.computeHeight(self.chrome_cell_height);
-        const sb_h: u32 = if (self.config.status_bar.visible)
-            @import("status_bar_renderer").StatusBarRenderer.statusBarHeight(self.chrome_cell_height)
-        else
-            0;
-        const chrome = tab_bar_h + sb_h;
-        const h: u32 = if (fb.height > chrome) fb.height - chrome else 0;
-        return .{ .x = 0, .y = @intCast(tab_bar_h), .w = fb.width, .h = h };
+        return agents.contentRectFor(self, fb.width, fb.height);
     }
 
     /// Effective on-screen bounds for a pane. In agent focus mode, the source

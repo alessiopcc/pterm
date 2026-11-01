@@ -18,6 +18,8 @@ const status_bar_mod = @import("status_bar_renderer");
 const bell_state_mod = @import("bell_state");
 const system_beep = @import("system_beep");
 const actions = @import("actions.zig");
+const agents = @import("agents.zig");
+const overview = @import("agent_overview");
 
 const OpenGLBackend = opengl_backend_mod.OpenGLBackend;
 const FontGrid = fontgrid_mod.FontGrid;
@@ -309,8 +311,8 @@ pub fn renderThreadMain(self: *App) void {
                         if (pd_ptr.*.bell_state.show_badge) {
                             bell_badges_buf[ti] = true;
                         }
-                        // Agent waiting badge
-                        if (pd_ptr.*.agent_state.show_badge) {
+                        // Agent badge: shown for any agent activity (colored below)
+                        if (pd_ptr.*.agent_state.state.load(.acquire) != .idle) {
                             agent_badges_buf[ti] = true;
                         }
                         // Agent tab icon
@@ -318,6 +320,17 @@ pub fn renderThreadMain(self: *App) void {
                             agent_tab_buf[ti] = true;
                         }
                     }
+                }
+            }
+
+            // Tab dot color: the tab's most urgent agent state.
+            var agent_colors_buf: [64]u32 = undefined;
+            {
+                const ov_colors = agents.colors(self);
+                for (self.tab_manager.tabs.items, 0..) |tab, ti| {
+                    if (ti >= 64) break;
+                    const st = agents.tabState(self, tab.root, self.frame_arena.allocator()) orelse .idle;
+                    agent_colors_buf[ti] = ov_colors.forState(st);
                 }
             }
 
@@ -336,6 +349,7 @@ pub fn renderThreadMain(self: *App) void {
                     .bell_badge_color = self.renderer_palette.ui_bell_badge.toU32(),
                     .tab_bell_badges = bell_badges_buf[0..badge_count],
                     .tab_agent_badges = agent_badges_buf[0..badge_count],
+                    .tab_agent_colors = agent_colors_buf[0..badge_count],
                     .tab_is_agent = agent_tab_buf[0..badge_count],
                     .agent_mode_active = self.tab_manager.agent_mode_active,
                 },
@@ -354,22 +368,15 @@ pub fn renderThreadMain(self: *App) void {
                 0;
 
             if (self.tab_manager.getActiveTab()) |active_tab| {
-                const content_y: i32 = @intCast(tab_bar_height);
-                const total_chrome = tab_bar_height + status_bar_height;
-                const content_h: u32 = if (fb.height > total_chrome) fb.height - total_chrome else 0;
-                const available = Rect{
-                    .x = 0,
-                    .y = content_y,
-                    .w = fb.width,
-                    .h = content_h,
-                };
+                // Pane area: window minus tab bar, status bar and agent sidebar.
+                const available = agents.contentRectFor(self, fb.width, fb.height);
 
                 // Fill content area with default bg to cover cell-grid rounding gaps
                 backend.drawFilledRect(RendererRect{
-                    .x = 0,
-                    .y = content_y,
-                    .w = fb.width,
-                    .h = content_h,
+                    .x = available.x,
+                    .y = available.y,
+                    .w = available.w,
+                    .h = available.h,
                 }, self.renderer_palette.default_bg);
 
                 // Agent focus mode: render only the source pane at full content rect.
@@ -651,6 +658,32 @@ pub fn renderThreadMain(self: *App) void {
                     }, lighter);
                 }
 
+                // Agent sidebar
+                if (agents.sidebarRect(self, fb.width, fb.height)) |sb_rect| {
+                    backend.setFullViewport();
+                    const entries = blk: {
+                        self.pane_mutex.lock();
+                        defer self.pane_mutex.unlock();
+                        break :blk agents.collectEntries(self, self.frame_arena.allocator(), 0);
+                    };
+                    var sidebar_ctx = TabBarRenderCtx{
+                        .backend = &backend,
+                        .font_grid = self.font_grid,
+                        .chrome_font_grid = self.chrome_font_grid,
+                    };
+                    overview.Sidebar.render(
+                        entries,
+                        agents.toOverviewRect(sb_rect),
+                        agents.metrics(self),
+                        agents.colors(self),
+                        @intCast(pio.nanoTimestamp()),
+                        self.config.sidebar.side == .left,
+                        statusBarDrawRect,
+                        overviewDrawText,
+                        @ptrCast(&sidebar_ctx),
+                    );
+                }
+
                 // Render status bar at window bottom
                 if (self.config.status_bar.visible and status_bar_height > 0) {
                     backend.setFullViewport();
@@ -697,6 +730,8 @@ pub fn renderThreadMain(self: *App) void {
                         .working_color = self.renderer_palette.ansi_normal[2].toU32(),
                         .waiting_color = self.renderer_palette.ui_agent_alert.toU32(),
                         .focused_bg_color = lightenColorU32(self.renderer_palette.ui_tab_bar_bg.toU32(), 15),
+                        .done_color = self.renderer_palette.ansi_normal[4].toU32(),
+                        .error_color = self.renderer_palette.ansi_normal[1].toU32(),
                     };
 
                     var sb_render_ctx = TabBarRenderCtx{
@@ -784,6 +819,33 @@ pub fn renderThreadMain(self: *App) void {
                     shellPickerDrawRectCallback,
                     drawTextCallback,
                     @ptrCast(&sp_render_ctx),
+                );
+            }
+
+            // Agent board overlay (on top of everything)
+            if (self.board_visible.load(.acquire)) {
+                backend.setFullViewport();
+                const entries = blk: {
+                    self.pane_mutex.lock();
+                    defer self.pane_mutex.unlock();
+                    break :blk agents.collectEntries(self, self.frame_arena.allocator(), agents.board_preview_lines);
+                };
+                var board_ctx = TabBarRenderCtx{
+                    .backend = &backend,
+                    .font_grid = self.font_grid,
+                    .chrome_font_grid = self.chrome_font_grid,
+                };
+                overview.Board.render(
+                    entries,
+                    self.board_sel,
+                    fb.width,
+                    fb.height,
+                    agents.metrics(self),
+                    agents.colors(self),
+                    @intCast(pio.nanoTimestamp()),
+                    overlayDrawRect,
+                    overviewDrawText,
+                    @ptrCast(&board_ctx),
                 );
             }
 
@@ -875,14 +937,27 @@ fn drawTextCallback(text: []const u8, px_x: i32, px_y: i32, color: Compositor.Co
     const font_grid = rc.chrome_font_grid orelse rc.font_grid;
     const metrics = font_grid.getMetrics();
 
-    // Build CellInstance array for each byte in the string
+    // Build CellInstance array, one per codepoint (UTF-8 decoded; invalid
+    // bytes are drawn as single characters).
     var instances: [128]renderer_types.CellInstance = undefined;
     var count: usize = 0;
 
     const ascender: i32 = @intFromFloat(metrics.ascender);
-    for (text) |byte| {
+    var i: usize = 0;
+    while (i < text.len) {
         if (count >= 128) break;
-        const glyph = font_grid.getGlyph(@as(u21, byte)) catch continue;
+        const seq_len = std.unicode.utf8ByteSequenceLength(text[i]) catch 1;
+        const cp: u21 = blk: {
+            if (seq_len > 1 and i + seq_len <= text.len) {
+                if (std.unicode.utf8Decode(text[i..][0..seq_len])) |c| {
+                    i += seq_len;
+                    break :blk c;
+                } else |_| {}
+            }
+            i += 1;
+            break :blk text[i - 1];
+        };
+        const glyph = font_grid.getGlyph(cp) catch continue;
 
         // Compute vertical offset: same as pane rendering (ascender - bearing_y)
         const sby: i32 = ascender - glyph.bearing_y;
@@ -975,6 +1050,21 @@ fn statusBarDrawRect(x: i32, y: i32, w: u32, h: u32, color: u32, ctx: *anyopaque
     const rc: *TabBarRenderCtx = @ptrCast(@alignCast(ctx));
     const c = renderer_types.Color.fromU32(color);
     rc.backend.drawFilledRect(.{ .x = x, .y = y, .w = w, .h = h }, c);
+}
+
+/// Rect callback that honours alpha (board backdrop).
+fn overlayDrawRect(x: i32, y: i32, w: u32, h: u32, color: u32, ctx: *anyopaque) void {
+    const rc: *TabBarRenderCtx = @ptrCast(@alignCast(ctx));
+    const c = renderer_types.Color.fromU32(color);
+    if (c.a == 255) {
+        rc.backend.drawFilledRect(.{ .x = x, .y = y, .w = w, .h = h }, c);
+    } else {
+        rc.backend.drawFilledRectAlpha(.{ .x = x, .y = y, .w = w, .h = h }, c);
+    }
+}
+
+fn overviewDrawText(text: []const u8, px_x: i32, px_y: i32, color: u32, ctx: *anyopaque) void {
+    drawTextCallback(text, px_x, px_y, color, ctx);
 }
 
 fn statusBarDrawText(text: []const u8, px_x: i32, px_y: i32, color: u32, scale: f32, ctx: *anyopaque) void {

@@ -541,6 +541,7 @@ pub const Surface = struct {
             .decrease_font_size => self.changeFontSize(-1.0),
             .reset_font_size => self.resetFontSize(),
             .scroll_page_up, .scroll_page_down => {}, // App-level: scrolls pane scrollback
+            .toggle_agent_sidebar, .toggle_agent_board => {}, // App-level
             .new_tab, .close_tab, .next_tab, .prev_tab => {},
             .split_horizontal, .split_vertical => {},
             .focus_next_pane, .focus_prev_pane => {},

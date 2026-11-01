@@ -2,6 +2,7 @@
 const std = @import("std");
 const pio = @import("pio");
 const app_mod = @import("App.zig");
+const agents = @import("agents.zig");
 const App = app_mod.App;
 const PaneData = app_mod.PaneData;
 const callbacks = @import("callbacks.zig");
@@ -185,6 +186,8 @@ pub fn dispatchAction(self: *App, action: keybindings.Action) void {
                 advanceAgentSource(self);
             }
         },
+        .toggle_agent_sidebar => agents.toggleSidebar(self),
+        .toggle_agent_board => agents.toggleBoard(self),
         // Shell switching
         .change_shell => actionOpenShellPicker(self),
         .scroll_to_top, .scroll_to_bottom => {},
@@ -554,20 +557,7 @@ pub fn resizeAllPanes(self: *App) void {
         entry.value_ptr.*.suppressAgentOutputUntil(deadline);
     }
     const metrics = self.font_grid.getMetrics();
-    const tab_bar_height = TabBarRenderer.computeHeight(self.chrome_cell_height);
-    const status_bar_height: u32 = if (self.config.status_bar.visible)
-        StatusBarRenderer.statusBarHeight(self.chrome_cell_height)
-    else
-        0;
-    const content_y: i32 = @intCast(tab_bar_height);
-    const total_chrome = tab_bar_height + status_bar_height;
-    const content_h: u32 = if (fb.height > total_chrome) fb.height - total_chrome else 0;
-    const available = Rect{
-        .x = 0,
-        .y = content_y,
-        .w = fb.width,
-        .h = content_h,
-    };
+    const available = agents.contentRectFor(self, fb.width, fb.height);
     const padding = self.config.grid_padding();
 
     // Agent focus mode: only the source pane is visible, sized to the full

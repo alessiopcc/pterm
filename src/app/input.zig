@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 const pio = @import("pio");
 const app_mod = @import("App.zig");
+const agents = @import("agents.zig");
 const App = app_mod.App;
 const PaneData = app_mod.PaneData;
 const actions = @import("actions.zig");
@@ -62,6 +63,11 @@ pub fn handleKeyInput(self: *App, key: glfw.Key, action: glfw.Action, mods: glfw
             self.requestFrame();
         }
     }
+
+    // Agent board captures the keyboard while open.
+    if (action == .press or action == .repeat) {
+        if (agents.handleBoardKey(self, key)) return;
+    } else if (self.board_visible.load(.acquire)) return;
 
     // Intercept input when shell picker is visible
     if (self.shell_picker.visible) {
@@ -395,6 +401,11 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
                 }
             }
         }
+    }
+
+    // Agent board / sidebar clicks
+    if (button == .left and action == .press) {
+        if (agents.handleClick(self, fb.width, fb.height, fb_x, fb_y)) return;
     }
 
     // Check status bar click: focus the corresponding pane

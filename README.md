@@ -40,6 +40,12 @@ tools like Claude Code are waiting for input.
   foreground process matches the configured list (`claude`, `codex`,
   `opencode` by default), recent output = working, quiet = needs you.
   Desktop notifications fire for needs you, error and done.
+- **Agent sidebar and board** -- A sidebar (left by default, shown
+  automatically while agents run) lists every agent pane grouped into needs
+  you, working, done and idle, with elapsed time and the agent's message;
+  click a row to jump to the pane. `Ctrl+Alt+D` opens a full-window board
+  with Needs you / Working / Done columns and a preview of each pane.
+  Tabs show a dot colored by their most urgent agent state.
 - **Agent focus mode** -- `Ctrl+Alt+A` (or the `A` square at the leading edge
   of the tab bar) takes over the window with the agent pane that needs you
   (then errors, then done, then working) at full size. `Ctrl+Alt+N` advances
@@ -156,6 +162,11 @@ heuristic_fallback = true   # infer state for agents that don't report
 [url]
 enabled = true
 
+[sidebar]
+visible = "auto"   # auto (while agents run), always, never
+side = "left"      # left, right
+width = 32         # columns
+
 [status_bar]
 visible = true
 ```
@@ -221,6 +232,8 @@ reserved and cannot be overridden.
 | Toggle agent tab marker | `Ctrl+Shift+A` |
 | Agent focus mode toggle | `Ctrl+Alt+A` |
 | Agent focus next waiting | `Ctrl+Alt+N` |
+| Toggle agent sidebar | `Ctrl+Alt+S` |
+| Toggle agent board | `Ctrl+Alt+D` |
 | Change shell | `Ctrl+Shift+S` |
 | Font size +/−/reset | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` |
 | Copy / Paste | `Ctrl+C` / `Ctrl+V` |

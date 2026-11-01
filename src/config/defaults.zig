@@ -145,6 +145,12 @@ pub fn dumpConfig() void {
         \\# protocol = true           # agent status reports (OSC 7501 / 9;4 / 9 / 777)
         \\# heuristic_fallback = true # infer state for agents that don't report
         \\
+        \\[sidebar]
+        \\# Agent sidebar
+        \\# visible = "auto"   # auto (while agents run), always, never
+        \\# side = "left"      # left, right
+        \\# width = 32         # columns
+        \\
         \\[status_bar]
         \\# Status bar visibility
         \\# visible = true

@@ -41,6 +41,10 @@ pub const TabBarConfig = struct {
     /// null means no agent badge info available (skip rendering).
     tab_agent_badges: ?[]const bool = null,
 
+    /// Per-tab agent badge color (most urgent agent state). When null the
+    /// badge uses `agent_alert`.
+    tab_agent_colors: ?[]const ColorU32 = null,
+
     /// Per-tab agent tab flags (any pane in tab has is_agent_tab).
     /// null means no agent tab info available (skip rendering).
     tab_is_agent: ?[]const bool = null,
@@ -306,7 +310,8 @@ pub const TabBarRenderer = struct {
                     // Position: right of bell badge area, with 4px gap
                     const agent_badge_x = tab_x + @as(i32, @intCast(tab_w)) - cell_w_int * 4;
                     const agent_badge_cy = tab_y + @divFloor(@as(i32, @intCast(tab_h)), 2);
-                    drawDiamond(agent_badge_x, agent_badge_cy, agent_badge_r, config.agent_alert, draw_rect_fn, draw_ctx);
+                    const badge_color = if (config.tab_agent_colors) |cs| (if (idx < cs.len) cs[idx] else config.agent_alert) else config.agent_alert;
+                    drawDiamond(agent_badge_x, agent_badge_cy, agent_badge_r, badge_color, draw_rect_fn, draw_ctx);
                 }
             }
 

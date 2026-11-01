@@ -320,6 +320,9 @@ test "agent fields parsed from TOML" {
     try testing.expectEqualStrings("waiting", config.agent.notify_on[0]);
     try testing.expectEqual(false, config.agent.protocol);
     try testing.expectEqual(false, config.agent.heuristic_fallback);
+    try testing.expectEqual(Config.Sidebar.Visibility.always, config.sidebar.visible);
+    try testing.expectEqual(Config.Sidebar.Side.right, config.sidebar.side);
+    try testing.expectEqual(@as(u32, 120), config.sidebar.width); // clamped
     try testing.expectEqual(false, config.status_bar.visible);
 }
 

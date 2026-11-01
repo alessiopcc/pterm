@@ -115,6 +115,12 @@ const FileAgent = struct {
     heuristic_fallback: bool = true,
 };
 
+const FileSidebar = struct {
+    visible: ?[]const u8 = null,
+    side: ?[]const u8 = null,
+    width: ?i64 = null,
+};
+
 const FileStatusBar = struct {
     visible: bool = true,
 };
@@ -154,6 +160,7 @@ const FileConfig = struct {
     bell: ?FileBell = null,
     theme: ?[]const u8 = null,
     agent: ?FileAgent = null,
+    sidebar: ?FileSidebar = null,
     status_bar: ?FileStatusBar = null,
 };
 
@@ -331,6 +338,11 @@ fn mergeConfigs(base: Config, over: Config) Config {
     // Status bar
     if (!over.status_bar.visible) result.status_bar.visible = over.status_bar.visible;
 
+    // Sidebar
+    if (over.sidebar.visible != .auto) result.sidebar.visible = over.sidebar.visible;
+    if (over.sidebar.side != .left) result.sidebar.side = over.sidebar.side;
+    if (over.sidebar.width != 32) result.sidebar.width = over.sidebar.width;
+
     // Theme
     if (over.theme) |v| result.theme = v;
 
@@ -495,6 +507,21 @@ fn applyFileConfig(allocator: std.mem.Allocator, base: Config, file: FileConfig)
         }
         if (!a.protocol) result.agent.protocol = false;
         if (!a.heuristic_fallback) result.agent.heuristic_fallback = false;
+    }
+
+    // Sidebar
+    if (file.sidebar) |sb| {
+        if (sb.visible) |v| {
+            if (std.meta.stringToEnum(Config.Sidebar.Visibility, v)) |e| {
+                result.sidebar.visible = e;
+            } else std.log.warn("[sidebar] visible: unknown value '{s}' (auto, always, never)", .{v});
+        }
+        if (sb.side) |v| {
+            if (std.meta.stringToEnum(Config.Sidebar.Side, v)) |e| {
+                result.sidebar.side = e;
+            } else std.log.warn("[sidebar] side: unknown value '{s}' (left, right)", .{v});
+        }
+        if (sb.width) |w| result.sidebar.width = @intCast(std.math.clamp(w, 16, 120));
     }
 
     // Status bar

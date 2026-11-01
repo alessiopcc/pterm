@@ -65,6 +65,8 @@ pub const Action = enum {
     toggle_agent_tab,
     agent_focus_toggle,
     agent_focus_next,
+    toggle_agent_sidebar,
+    toggle_agent_board,
     // Shell switching
     change_shell,
     none,
@@ -413,6 +415,8 @@ pub fn defaultBindings() []const DefaultBinding {
         .{ .action = .toggle_agent_tab, .combo_str = "ctrl+shift+a" },
         .{ .action = .agent_focus_toggle, .combo_str = "ctrl+alt+a" },
         .{ .action = .agent_focus_next, .combo_str = "ctrl+alt+n" },
+        .{ .action = .toggle_agent_sidebar, .combo_str = "ctrl+alt+s" },
+        .{ .action = .toggle_agent_board, .combo_str = "ctrl+alt+d" },
         // Shell switching
         .{ .action = .change_shell, .combo_str = "ctrl+shift+s" },
     };
