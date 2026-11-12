@@ -14,6 +14,7 @@ const Action = kb.Action;
 const KeyCombo = kb.KeyCombo;
 const KeyId = kb.KeyId;
 const Modifiers = kb.Modifiers;
+pub const UserBinding = kb.UserBinding;
 const SpecialKey = kb.SpecialKey;
 
 /// Format a KeyCombo back to its string representation (e.g., "ctrl+shift+t").
@@ -42,6 +43,40 @@ pub fn formatKeyCombo(combo: KeyCombo, buf: []u8) []const u8 {
 }
 
 /// Run the interactive keybinding configuration TUI.
+/// Write the keybindings in effect (defaults plus `user_bindings`) to `out`,
+/// one action per line, followed by any config warnings.
+/// Fixed keys (copy, paste, font size) are marked, since they can't be rebound.
+pub fn writeList(allocator: Allocator, user_bindings: ?[]const kb.UserBinding, out: *std.Io.Writer) !void {
+    var map = try kb.buildMap(allocator, user_bindings);
+    defer map.deinit();
+
+    const info = @typeInfo(Action).@"enum";
+    inline for (info.field_names, info.field_values) |name, value| {
+        const action: Action = @fromBackingInt(@intCast(value));
+        if (action != .none) {
+            try out.print("{s:<24}", .{name});
+            var found = false;
+            var combo_buf: [64]u8 = undefined;
+            var iter = map.map.iterator();
+            while (iter.next()) |entry| {
+                if (entry.value_ptr.* != action) continue;
+                if (found) try out.writeAll(", ");
+                try out.writeAll(formatKeyCombo(entry.key_ptr.*, &combo_buf));
+                found = true;
+            }
+            // Copy is handled by the reserved clipboard path, not the map.
+            if (action == .copy) {
+                try out.writeAll("ctrl+c");
+                found = true;
+            }
+            if (!found) try out.writeAll("(unbound)");
+            if (kb.isReservedAction(action)) try out.writeAll("  (fixed)");
+            try out.writeAll("\n");
+        }
+    }
+    for (map.warnings.items) |w| try out.print("warning: {s}\n", .{w});
+}
+
 pub fn run(allocator: Allocator, config_path: []const u8, _: ?[]const kb.UserBinding) !void {
     // Load existing keybindings from config file
     var loaded_bindings: std.ArrayListUnmanaged(kb.UserBinding) = .empty;
