@@ -402,7 +402,13 @@ pub fn renderThreadMain(self: *App) void {
             else
                 0;
 
-            if (self.tab_manager.getActiveTab()) |active_tab| {
+            // Hold pane_mutex from picking the active tab until its panes are
+            // drawn: closing a tab (main thread) frees the tab's tree under
+            // this lock, and the tree is walked below.
+            self.pane_mutex.lock();
+            const active_tab_opt = self.tab_manager.getActiveTab();
+            if (active_tab_opt == null) self.pane_mutex.unlock();
+            if (active_tab_opt) |active_tab| {
                 // Pane area: window minus tab bar, status bar and agent sidebar.
                 const available = agents.contentRectFor(self, fb.width, fb.height);
 
@@ -429,7 +435,6 @@ pub fn renderThreadMain(self: *App) void {
                     break :lbl tree_ops.collectLeafInfos(active_tab.root, self.frame_arena.allocator()) catch &.{};
                 };
 
-                self.pane_mutex.lock();
                 for (leaf_infos) |info| {
                     if (self.pane_data.get(info.pane_id)) |pd| {
                         {
@@ -731,14 +736,17 @@ pub fn renderThreadMain(self: *App) void {
                     {
                         self.pane_mutex.lock();
                         defer self.pane_mutex.unlock();
-                        const current_leaf_infos = tree_ops.collectLeafInfos(active_tab.root, self.frame_arena.allocator()) catch &.{};
+                        // Look the tab up again: it may have closed since the
+                        // lock was released after drawing the panes.
+                        const cur_tab = self.tab_manager.getActiveTab();
+                        const current_leaf_infos = if (cur_tab) |t| tree_ops.collectLeafInfos(t.root, self.frame_arena.allocator()) catch &.{} else &.{};
                         for (current_leaf_infos) |li| {
                             if (pane_count >= 32) break;
                             if (self.pane_data.get(li.pane_id)) |lpd| {
                                 pane_infos[pane_count] = .{
                                     .pane_number = @intCast(pane_count + 1),
                                     .state = lpd.agent_state.state.load(.acquire),
-                                    .is_focused = li.pane_id == active_tab.focused_pane_id,
+                                    .is_focused = li.pane_id == cur_tab.?.focused_pane_id,
                                 };
                                 pane_count += 1;
                             }

@@ -6,7 +6,10 @@ const keybindings = @import("keybindings");
 
 /// Map GLFW key code to lowercase ASCII character for keybinding lookup.
 pub fn glfwKeyToChar(key: glfw.Key) ?u21 {
-    const code: u32 = @intCast(@backingInt(key));
+    // GLFW reports keys it can't map as -1 (`.unknown`).
+    const raw = @backingInt(key);
+    if (raw < 0) return null;
+    const code: u32 = @intCast(raw);
     // A-Z (GLFW codes 65-90) -> lowercase 'a'-'z'
     if (code >= 65 and code <= 90) return @intCast(code + 32);
     // 0-9 (GLFW codes 48-57) -> '0'-'9'
