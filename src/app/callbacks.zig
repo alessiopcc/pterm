@@ -272,14 +272,22 @@ pub fn bellCallback(ctx: ?*anyopaque) void {
         // preferredNotifChannel = "terminal_bell"): one-shot "needs you".
         // Agents that report status are not affected (reports win). Only
         // while an agent is running in the pane (agent_present).
+        var agent_bell = false;
         if (pd.agent_present.load(.acquire)) {
             if (g_screen_change_app) |app| {
-                if (app.config.agent.protocol) pd.agent_state.notifyWaiting("", pio.nanoTimestamp());
+                if (app.config.agent.protocol) {
+                    pd.agent_state.notifyWaiting("", pio.nanoTimestamp());
+                    agent_bell = true;
+                }
                 app.requestFrame();
             }
         }
         if (pd.agent_state.state.load(.acquire) == .working) return;
         _ = pd.bell_state.trigger();
+        // The tab shows an agent's bell as its "needs you" dot, which clears
+        // with the agent state. Skip the bell badge, which would stay until
+        // the tab is visited.
+        if (agent_bell) pd.bell_state.clearBadge();
     }
 }
 
