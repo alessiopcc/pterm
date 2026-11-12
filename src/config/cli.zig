@@ -2,7 +2,7 @@
 ///
 /// Parses command-line flags: --version, --init-config, --config, --font-size,
 /// --title, --cols, --rows, --working-dir, --dump-config, --check-config,
-/// --set-keybindings, --perf, --debug-keys.
+/// --set-keybindings, --list-keybindings, --perf, --debug-keys.
 /// CLI flags have highest priority in the four-tier config pipeline.
 const std = @import("std");
 const Config = @import("Config.zig").Config;
@@ -17,6 +17,7 @@ pub const CliArgs = struct {
     dump_config: bool = false, // --dump-config
     check_config: bool = false, // --check-config
     set_keybindings: bool = false, // --set-keybindings
+    list_keybindings: bool = false, // --list-keybindings
     layout: ?[]const u8 = null, // --layout <name>
     perf_logging: bool = false, // --perf
     debug_keys: bool = false, // --debug-keys
@@ -60,6 +61,8 @@ pub fn parse(allocator: std.mem.Allocator, process_args: std.process.Args) !CliA
             result.check_config = true;
         } else if (std.mem.eql(u8, arg, "--set-keybindings")) {
             result.set_keybindings = true;
+        } else if (std.mem.eql(u8, arg, "--list-keybindings")) {
+            result.list_keybindings = true;
         } else if (std.mem.eql(u8, arg, "--layout")) {
             if (args.next()) |v| result.layout = try allocator.dupe(u8, v);
         } else if (std.mem.eql(u8, arg, "--perf")) {
@@ -103,6 +106,7 @@ fn printHelp(cli_config_path: ?[]const u8, allocator: std.mem.Allocator) void {
         \\  --dump-config         Print default config to stdout
         \\  --check-config        Validate config and exit
         \\  --set-keybindings     Interactive keybinding configuration
+        \\  --list-keybindings    Print the keybindings in effect and exit
         \\  --layout <name>       Start with named layout preset
         \\  --perf                Enable performance logging
         \\  --debug-keys          Log keystrokes to pterm_debug.log

@@ -214,6 +214,9 @@ new_tab = "ctrl+t"
 Set an action to `"none"` to unbind it. Clipboard keys (`Ctrl+C`/`Ctrl+V`) are
 reserved and cannot be overridden.
 
+To see the bindings currently in effect, including your overrides, run
+`pterm --list-keybindings`.
+
 <details>
 <summary>Default keybindings</summary>
 
@@ -322,6 +325,7 @@ pterm [options]
   --dump-config         Print full default config
   --check-config        Validate config file
   --set-keybindings     Interactive keybinding editor
+  --list-keybindings    Print the keybindings in effect
 
   --version             Print version
   --help                Show help

@@ -27,6 +27,11 @@ pub fn main(init: std.process.Init) !void {
     // Arena for CLI args and config strings — freed at process exit
     const arena_alloc = init.arena.allocator();
 
+    // Print-only flags need the terminal pterm was started from.
+    if (builtin.os.tag == .windows and try printsOnly(arena_alloc, init.minimal.args)) {
+        attachParentConsole();
+    }
+
     // Parse CLI args (string values duped into arena)
     const cli_args = try cli_mod.parse(arena_alloc, init.minimal.args);
 
@@ -105,6 +110,25 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
 
+    // Handle --list-keybindings: print the bindings from the loaded config
+    if (cli_args.list_keybindings) {
+        const config = Config.load(arena_alloc, cli_args) catch |err| {
+            std.log.err("Config error: {}", .{err});
+            std.process.exit(1);
+        };
+        const user_bindings: ?[]const keybinding_tui.UserBinding = if (config.keybindings.len > 0)
+            @ptrCast(config.keybindings)
+        else
+            null;
+        var out: std.Io.Writer.Allocating = .init(arena_alloc);
+        try keybinding_tui.writeList(arena_alloc, user_bindings, &out.writer);
+        std.Io.File.stdout().writeStreamingAll(io, out.written()) catch |err| {
+            std.log.err("Failed to write keybindings: {}", .{err});
+            std.process.exit(1);
+        };
+        std.process.exit(0);
+    }
+
     // Resolve config path and log it
     const resolved_config_path = cli_args.config_path orelse (defaults_mod.defaultConfigPathAlloc(arena_alloc) catch null);
     if (resolved_config_path) |p| {
@@ -152,4 +176,74 @@ pub fn main(init: std.process.Init) !void {
 
     try app.start();
     try app.run();
+}
+
+/// Flags that print and exit without opening a window.
+const print_only_flags = [_][]const u8{
+    "--help", "-h", "--version", "--list-keybindings", "--dump-config", "--check-config", "--init-config",
+};
+
+fn printsOnly(arena: std.mem.Allocator, process_args: std.process.Args) !bool {
+    var args = try process_args.iterateAllocator(arena);
+    defer args.deinit();
+    _ = args.next(); // exe name
+    while (args.next()) |arg| {
+        for (print_only_flags) |flag| {
+            if (std.mem.eql(u8, arg, flag)) return true;
+        }
+    }
+    return false;
+}
+
+const win = struct {
+    const HANDLE = std.os.windows.HANDLE;
+    const ATTACH_PARENT_PROCESS: u32 = 0xFFFF_FFFF;
+    const STD_OUTPUT_HANDLE: u32 = 0xFFFF_FFF5; // (DWORD)-11
+    const STD_ERROR_HANDLE: u32 = 0xFFFF_FFF4; // (DWORD)-12
+    const GENERIC_READ_WRITE: u32 = 0xC000_0000;
+    const FILE_SHARE_READ_WRITE: u32 = 0x3;
+    const OPEN_EXISTING: u32 = 3;
+
+    extern "kernel32" fn AttachConsole(process_id: u32) callconv(.winapi) i32;
+    extern "kernel32" fn SetStdHandle(std_handle: u32, handle: HANDLE) callconv(.winapi) i32;
+    extern "kernel32" fn CreateFileW(
+        name: [*:0]const u16,
+        access: u32,
+        share: u32,
+        security: ?*anyopaque,
+        disposition: u32,
+        flags: u32,
+        template: ?HANDLE,
+    ) callconv(.winapi) HANDLE;
+};
+
+/// The Windows build is a GUI program, so a terminal that starts it doesn't
+/// give it stdout or stderr, and anything printed is lost. Attach to the
+/// parent's console and point the missing handles at it. Handles that are
+/// already set (output piped or redirected) are kept.
+fn attachParentConsole() void {
+    const params = std.os.windows.peb().ProcessParameters;
+    const need_out = !hasHandle(&params.hStdOutput);
+    const need_err = !hasHandle(&params.hStdError);
+    if (!need_out and !need_err) return;
+    if (win.AttachConsole(win.ATTACH_PARENT_PROCESS) == 0) return;
+    const conout = win.CreateFileW(
+        std.unicode.utf8ToUtf16LeStringLiteral("CONOUT$"),
+        win.GENERIC_READ_WRITE,
+        win.FILE_SHARE_READ_WRITE,
+        null,
+        win.OPEN_EXISTING,
+        0,
+        null,
+    );
+    if (conout == std.os.windows.INVALID_HANDLE_VALUE) return;
+    if (need_out) _ = win.SetStdHandle(win.STD_OUTPUT_HANDLE, conout);
+    if (need_err) _ = win.SetStdHandle(win.STD_ERROR_HANDLE, conout);
+}
+
+/// The std handle fields are typed non-null, but a GUI process gets 0 there.
+/// Read the raw value so the check isn't optimized away.
+fn hasHandle(field: *const std.os.windows.HANDLE) bool {
+    const raw = @as(*const volatile usize, @ptrCast(field)).*;
+    return raw != 0 and raw != @intFromPtr(std.os.windows.INVALID_HANDLE_VALUE);
 }
