@@ -56,6 +56,17 @@ pub const Tab = struct {
         return new_id;
     }
 
+    /// Leave zoom: put the full tree back and free the single-leaf root.
+    pub fn unzoom(self: *Tab) void {
+        if (!self.is_zoomed) return;
+        if (self.zoom_saved_root) |saved| {
+            PaneTree.destroyNode(self.allocator, self.root);
+            self.root = saved;
+            self.zoom_saved_root = null;
+        }
+        self.is_zoomed = false;
+    }
+
     /// Close the focused pane.
     /// Returns the new focused pane_id, or null if this was the last pane in the tab.
     pub fn closeFocused(self: *Tab) ?u32 {
@@ -105,6 +116,22 @@ test "Tab.splitFocused creates new pane" {
     try std.testing.expectEqual(@as(u32, 1), new_id);
     try std.testing.expectEqual(@as(u32, 1), tab.focused_pane_id); // focus moves to new pane
     try std.testing.expectEqual(@as(u32, 2), tab.next_pane_id);
+}
+
+test "Tab.unzoom restores the full tree" {
+    const alloc = std.testing.allocator;
+    var tab = try Tab.init(alloc);
+    defer tab.deinit();
+
+    _ = try tab.splitFocused(.vertical);
+    tab.zoom_saved_root = tab.root;
+    tab.root = try PaneTree.createLeaf(alloc, tab.focused_pane_id, null);
+    tab.is_zoomed = true;
+
+    tab.unzoom();
+    try std.testing.expect(!tab.is_zoomed);
+    try std.testing.expect(tab.zoom_saved_root == null);
+    try std.testing.expectEqual(@as(usize, 2), tab.paneCount());
 }
 
 test "Tab.closeFocused returns sibling" {

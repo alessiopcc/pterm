@@ -223,7 +223,7 @@ To see the bindings currently in effect, including your overrides, run
 | Action | Shortcut |
 |--------|----------|
 | New tab | `Ctrl+Shift+T` |
-| Close tab | `Ctrl+Shift+W` |
+| Close tab (asks first if it has more than one pane) | `Ctrl+Shift+W` |
 | Next tab | `Ctrl+Tab` |
 | Previous tab | `Ctrl+Shift+Tab` |
 | Go to tab 1-9 | `Alt+1` ... `Alt+9` |

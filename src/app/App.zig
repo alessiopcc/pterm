@@ -89,6 +89,7 @@ const TabBarRenderer = layout_mod.TabBarRenderer.TabBarRenderer;
 const LayoutPreset = layout_mod.LayoutPreset;
 const PresetPicker = layout_mod.PresetPicker.PresetPicker;
 const ShellPicker = layout_mod.ShellPicker.ShellPicker;
+const ConfirmPrompt = layout_mod.ConfirmPrompt.ConfirmPrompt;
 const ShellPickerColors = layout_mod.ShellPicker.ShellPickerColors;
 const ShellInfo = shell_mod.ShellInfo;
 
@@ -281,6 +282,11 @@ pub const App = struct {
 
     // Shell picker overlay
     shell_picker: ShellPicker,
+    // "Close tab with N panes?" prompt and the tab it is about. The tab count
+    // is kept so a prompt is dropped if tabs closed while it was open.
+    confirm_prompt: ConfirmPrompt,
+    confirm_close_tab: ?struct { idx: usize, tab_count: usize } = null,
+    swallow_next_char: bool = false,
     available_shells: ?[]ShellInfo = null,
     available_shell_display: [16][128]u8 = undefined,
     available_shell_display_slices: [16][]const u8 = undefined,
@@ -510,6 +516,7 @@ pub const App = struct {
             ),
             .preset_picker = .{},
             .shell_picker = .{},
+            .confirm_prompt = .{},
             .pending_layout_name = options.layout_name,
             .pending_ops = .empty,
             .pending_ops_mutex = .{},
