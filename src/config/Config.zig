@@ -171,6 +171,9 @@ pub const Config = struct {
         cursor_text: ?[]const u8 = null,
         selection_bg: ?[]const u8 = null,
         selection_fg: ?[]const u8 = null,
+        /// Text closer than this contrast ratio to its background is moved
+        /// toward the text color until it reaches it. 1 turns it off.
+        minimum_contrast: f32 = default_minimum_contrast,
         ui: UiColors = .{},
         normal: AnsiNormal = .{},
         bright: AnsiBright = .{},
@@ -228,6 +231,7 @@ pub const Config = struct {
     pub const default_rows: i64 = 55;
     pub const default_padding: f32 = 4.0;
     pub const default_opacity: f32 = 1.0;
+    pub const default_minimum_contrast: f32 = 3.0;
     pub const default_scrollback: i64 = 10_000;
     pub const default_tab_title_interval: i64 = 1000;
     pub const min_font_size: f32 = 4.0;
@@ -330,6 +334,7 @@ pub const Config = struct {
         if (file.colors.cursor_text) |v| result.colors.cursor_text = v;
         if (file.colors.selection_bg) |v| result.colors.selection_bg = v;
         if (file.colors.selection_fg) |v| result.colors.selection_fg = v;
+        if (file.colors.minimum_contrast != default_minimum_contrast) result.colors.minimum_contrast = file.colors.minimum_contrast;
 
         // UI Colors
         if (file.colors.ui.tab_bar_bg) |v| result.colors.ui.tab_bar_bg = v;
@@ -420,6 +425,12 @@ pub const Config = struct {
         if (self.window.rows < min_rows or self.window.rows > max_rows) {
             std.log.warn("Invalid window.rows={}, resetting to default {}", .{ self.window.rows, default_rows });
             self.window.rows = default_rows;
+        }
+
+        // Minimum contrast: a ratio from 1 (off) to 21 (black on white)
+        if (!(self.colors.minimum_contrast >= 1.0 and self.colors.minimum_contrast <= 21.0)) {
+            std.log.warn("Invalid colors.minimum_contrast={d:.2}, clamping to 1-21", .{self.colors.minimum_contrast});
+            self.colors.minimum_contrast = if (std.math.isNan(self.colors.minimum_contrast)) default_minimum_contrast else std.math.clamp(self.colors.minimum_contrast, 1.0, 21.0);
         }
 
         // Opacity: clamp to 0.0-1.0

@@ -117,21 +117,33 @@ test "ColorPalette has all required fields" {
 test "resolve256 with config palette returns correct ANSI normal colors" {
     const palette = builtin_themes.get("default").?;
     const rp = try palette.toRendererPalette();
-    // Index 0 = normal black (#45475A)
+    // Index 0 = normal black (#11111B, Catppuccin Crust)
+    const black = rp.resolve256(0);
+    try std.testing.expectEqual(@as(u8, 0x11), black.r);
+    try std.testing.expectEqual(@as(u8, 0x11), black.g);
+    try std.testing.expectEqual(@as(u8, 0x1B), black.b);
+}
+
+test "catppuccin-mocha keeps the official black and bright black" {
+    const rp = try builtin_themes.get("catppuccin-mocha").?.toRendererPalette();
     const black = rp.resolve256(0);
     try std.testing.expectEqual(@as(u8, 0x45), black.r);
     try std.testing.expectEqual(@as(u8, 0x47), black.g);
     try std.testing.expectEqual(@as(u8, 0x5A), black.b);
+    const bright_black = rp.resolve256(8);
+    try std.testing.expectEqual(@as(u8, 0x58), bright_black.r);
+    try std.testing.expectEqual(@as(u8, 0x5B), bright_black.g);
+    try std.testing.expectEqual(@as(u8, 0x70), bright_black.b);
 }
 
 test "resolve256 with config palette returns correct ANSI bright colors" {
     const palette = builtin_themes.get("default").?;
     const rp = try palette.toRendererPalette();
-    // Index 15 = bright white (#A6ADC8)
+    // Index 15 = bright white (#BAC2DE), brighter than white (#A6ADC8)
     const bw = rp.resolve256(15);
-    try std.testing.expectEqual(@as(u8, 0xA6), bw.r);
-    try std.testing.expectEqual(@as(u8, 0xAD), bw.g);
-    try std.testing.expectEqual(@as(u8, 0xC8), bw.b);
+    try std.testing.expectEqual(@as(u8, 0xBA), bw.r);
+    try std.testing.expectEqual(@as(u8, 0xC2), bw.g);
+    try std.testing.expectEqual(@as(u8, 0xDE), bw.b);
 }
 
 test "resolve256 color cube index 16 = black (0,0,0)" {
