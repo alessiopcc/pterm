@@ -179,6 +179,32 @@ pub const PaneData = struct {
     /// Scrollback viewport offset: 0 = live (bottom), >0 = scrolled up N lines into history.
     scroll_offset: u32 = 0,
 
+    /// The last finished frame, kept while the program redraws under
+    /// synchronized output (mode 2026), so the half-drawn screen is never
+    /// shown. Cells are owned by `held_alloc`. Guarded by the terminal mutex.
+    held_frame: ?render_state.Snapshot = null,
+    held_alloc: ?std.mem.Allocator = null,
+    /// When the hold began, for the timeout. Guarded by the terminal mutex.
+    held_since_ns: i64 = 0,
+
+    /// Longest a program may hold the screen before pterm draws anyway.
+    pub const max_hold_ns: i64 = std.time.ns_per_s;
+
+    /// The frame to draw instead of the live screen, if a hold is on and
+    /// hasn't timed out. Call with the terminal mutex held.
+    pub fn heldFrame(self: *const PaneData, now_ns: i64) ?render_state.Snapshot {
+        const frame = self.held_frame orelse return null;
+        if (now_ns - self.held_since_ns > max_hold_ns) return null;
+        return frame;
+    }
+
+    /// Drop the held frame. Call with the terminal mutex held, or once the
+    /// parse thread has stopped.
+    pub fn releaseHeldFrame(self: *PaneData) void {
+        if (self.held_frame) |f| if (self.held_alloc) |a| a.free(f.cells);
+        self.held_frame = null;
+    }
+
     /// Copy the pane's current folder (live, else the start folder) into buf.
     pub fn currentFolder(self: *PaneData, buf: []u8) []const u8 {
         self.cwd_mutex.lock();
@@ -795,6 +821,7 @@ pub const App = struct {
         if (self.pane_data.get(pane_id)) |pd| {
             // Stop TermIO threads
             pd.termio.stop();
+            pd.releaseHeldFrame();
 
             // Free per-pane row cache
             pd.row_cache.invalidate();
