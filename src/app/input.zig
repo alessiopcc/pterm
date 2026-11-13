@@ -64,6 +64,21 @@ pub fn handleKeyInput(self: *App, key: glfw.Key, action: glfw.Action, mods: glfw
         }
     }
 
+    // Close-tab prompt captures the keyboard while open.
+    if (self.confirm_prompt.visible) {
+        switch (key) {
+            .y, .n => {
+                // The letter's char event comes after this key event.
+                self.swallow_next_char = true;
+                actions.answerConfirmPrompt(self, key == .y);
+            },
+            .enter, .kp_enter => actions.answerConfirmPrompt(self, true),
+            .escape => actions.answerConfirmPrompt(self, false),
+            else => {},
+        }
+        return;
+    }
+
     // Agent board captures the keyboard while open.
     if (action == .press or action == .repeat) {
         if (agents.handleBoardKey(self, key)) return;
@@ -162,6 +177,12 @@ pub fn handleKeyInput(self: *App, key: glfw.Key, action: glfw.Action, mods: glfw
 /// Handle character input: route to focused pane.
 pub fn handleCharInput(self: *App, codepoint: u32) void {
     const cp: u21 = if (codepoint <= 0x10FFFF) @intCast(codepoint) else return;
+    // The prompt's y / n keys must not reach the pane.
+    if (self.confirm_prompt.visible) return;
+    if (self.swallow_next_char) {
+        self.swallow_next_char = false;
+        return;
+    }
 
     // When search is open, printable chars go to search query
     if (self.getFocusedPaneData()) |pd| {
@@ -199,6 +220,11 @@ pub fn handleCharInput(self: *App, codepoint: u32) void {
 
 /// Handle mouse button: hit-test tab bar, pane borders, pane area.
 pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Action, mods: glfw.Mods) void {
+    // A click while the close-tab prompt is open dismisses it.
+    if (self.confirm_prompt.visible) {
+        if (action == .press) actions.answerConfirmPrompt(self, false);
+        return;
+    }
     // Handle drag release
     if (action == .release and button == .left) {
         if (self.window_resize_active) {
@@ -278,7 +304,7 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
         if (button == .middle) {
             const hit = TabBarRenderer.hitTest(fb_x, fb_y, self.tab_manager.tabCount(), self.chrome_cell_width, self.chrome_cell_height, fb.width);
             switch (hit) {
-                .tab => |idx| self.actionCloseTabByIndex(idx),
+                .tab => |idx| actions.requestCloseTab(self, idx),
                 else => {},
             }
             return;
@@ -295,7 +321,7 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
         );
         switch (hit) {
             .close_tab => |idx| {
-                self.actionCloseTabByIndex(idx);
+                actions.requestCloseTab(self, idx);
             },
             .new_tab => {
                 self.actionNewTab();

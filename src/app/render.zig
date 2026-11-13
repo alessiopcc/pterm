@@ -866,6 +866,32 @@ pub fn renderThreadMain(self: *App) void {
                 );
             }
 
+            // Close-tab confirmation
+            if (self.confirm_prompt.visible) {
+                // Dim, don't hide, the tab that is about to close.
+                backend.drawFilledRectAlpha(.{ .x = 0, .y = 0, .w = fb.width, .h = fb.height }, renderer_types.Color.fromU32(0x000000A0));
+                var cp_render_ctx = TabBarRenderCtx{
+                    .backend = &backend,
+                    .font_grid = self.font_grid,
+                };
+                self.confirm_prompt.render(
+                    metrics.cell_width,
+                    metrics.cell_height,
+                    fb.width,
+                    fb.height,
+                    .{
+                        .bg = 0x2A2A3AFF,
+                        .border = self.renderer_palette.ui_pane_border.toU32(),
+                        .fg = self.renderer_palette.default_fg.toU32(),
+                        .hint = self.renderer_palette.ansi_bright[0].toU32(),
+                        .overlay_bg = 0,
+                    },
+                    shellPickerDrawRectCallback,
+                    drawTextCallback,
+                    @ptrCast(&cp_render_ctx),
+                );
+            }
+
             // Agent board overlay (on top of everything)
             if (self.board_visible.load(.acquire)) {
                 backend.setFullViewport();
