@@ -59,6 +59,13 @@ pub const Observer = struct {
     /// Window title changed (OSC 0 / 2). Borrowed slice.
     onTitle: ?*const fn (ctx: ?*anyopaque, title: []const u8) void = null,
 
+    /// Synchronized output (mode 2026) began (`true`) or ended (`false`).
+    /// Called on the parse thread with the terminal mutex held. When a hold
+    /// begins the screen holds the last finished frame, so a renderer can
+    /// capture it here and show it until the hold ends. Receives `hold_ctx`.
+    onRenderHold: ?*const fn (ctx: ?*anyopaque, held: bool) void = null,
+    hold_ctx: ?*anyopaque = null,
+
     /// Reply to the program (query responses). Receives `write_ctx`.
     /// When null the terminal answers no queries.
     onWritePty: ?*const fn (ctx: ?*anyopaque, data: []const u8) void = null,

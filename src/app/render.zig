@@ -454,13 +454,20 @@ pub fn renderThreadMain(self: *App) void {
                             }
 
                             // Snapshot under mutex
+                            // While the program redraws under synchronized
+                            // output, draw its last finished frame instead.
                             const snapshot = pd.termio.lockTerminal();
-                            const snap = render_state.snapshotCells(
-                                self.frame_arena.allocator(),
-                                snapshot,
-                                &self.renderer_palette,
-                                pd.scroll_offset,
-                            ) catch {
+                            const held = pd.heldFrame(@truncate(pio.nanoTimestamp()));
+                            if (held != null) self.requestFrame(); // recheck when the hold times out
+                            const snap = (if (held) |h|
+                                render_state.cloneSnapshot(self.frame_arena.allocator(), h)
+                            else
+                                render_state.snapshotCells(
+                                    self.frame_arena.allocator(),
+                                    snapshot,
+                                    &self.renderer_palette,
+                                    pd.scroll_offset,
+                                )) catch {
                                 pd.termio.unlockTerminal();
                                 continue;
                             };
