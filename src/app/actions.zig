@@ -128,10 +128,12 @@ pub fn dispatchAction(self: *App, action: keybindings.Action) void {
         // Tab reorder
         .move_tab_left => {
             self.tab_manager.moveTabLeft();
+            syncTabIndices(self);
             self.requestFrame();
         },
         .move_tab_right => {
             self.tab_manager.moveTabRight();
+            syncTabIndices(self);
             self.requestFrame();
         },
 
@@ -257,7 +259,63 @@ pub fn actionNewTab(self: *App) void {
 
 /// Close the active tab and all its panes.
 pub fn actionCloseTab(self: *App) void {
-    actionCloseTabByIndex(self, self.tab_manager.active_idx);
+    requestCloseTab(self, self.tab_manager.active_idx);
+}
+
+/// Close a tab the user asked to close. A tab with more than one pane asks
+/// first; a single-pane tab closes right away.
+pub fn requestCloseTab(self: *App, idx: usize) void {
+    const tab = self.tab_manager.getTab(idx) orelse return;
+    const panes = tab.paneCount();
+    if (panes <= 1) {
+        actionCloseTabByIndex(self, idx);
+        return;
+    }
+    var buf: [64]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "Close tab {d} with {d} panes?", .{ idx + 1, panes }) catch "Close this tab?";
+    self.confirm_prompt.open(msg);
+    self.confirm_close_tab = .{ .idx = idx, .tab_count = self.tab_manager.tabCount() };
+    self.requestFrame();
+}
+
+/// Answer the open confirm prompt.
+pub fn answerConfirmPrompt(self: *App, yes: bool) void {
+    const pending = self.confirm_close_tab;
+    self.confirm_prompt.close();
+    self.confirm_close_tab = null;
+    self.requestFrame();
+    if (!yes) return;
+    const p = pending orelse return;
+    // Tabs closed while the prompt was open: the index may point elsewhere.
+    if (p.tab_count != self.tab_manager.tabCount()) return;
+    actionCloseTabByIndex(self, p.idx);
+}
+
+/// Drop an open close-tab prompt (its tab index may no longer be valid).
+fn cancelConfirmPrompt(self: *App) void {
+    if (self.confirm_close_tab == null) return;
+    self.confirm_prompt.close();
+    self.confirm_close_tab = null;
+}
+
+/// Point every pane's `tab_index` at the tab that holds it. Run after tabs
+/// are removed, reordered or added from an existing pane.
+pub fn syncTabIndices(self: *App) void {
+    for (self.tab_manager.tabs.items, 0..) |*t, i| {
+        const leaves = tree_ops.collectLeaves(t.zoom_saved_root orelse t.root, self.allocator) catch continue;
+        defer self.allocator.free(leaves);
+        for (leaves) |pane_id| {
+            if (self.pane_data.get(pane_id)) |pd| pd.tab_index = @intCast(i);
+        }
+    }
+}
+
+/// Index of the tab that holds `pane_id`, including panes hidden by zoom.
+fn findTabOfPane(self: *App, pane_id: u32) ?usize {
+    for (self.tab_manager.tabs.items, 0..) |*t, i| {
+        if (tree_ops.findLeaf(t.zoom_saved_root orelse t.root, pane_id) != null) return i;
+    }
+    return null;
 }
 
 /// Close a specific tab by index and all its panes.
@@ -278,6 +336,8 @@ pub fn actionCloseTabByIndex(self: *App, idx: usize) void {
         self.window.handle.setShouldClose(true);
         return;
     }
+    cancelConfirmPrompt(self);
+    syncTabIndices(self);
     resizeAllPanes(self);
     self.requestFrame();
 }
@@ -369,6 +429,8 @@ pub fn actionClosePane(self: *App) void {
     const tab = self.tab_manager.getActiveTab() orelse return;
     const old_pane_id = tab.focused_pane_id;
 
+    // Zoomed: close in the full tree, not the single-pane zoom view.
+    tab.unzoom();
     const result = tab.closeFocused();
     self.destroyPane(old_pane_id);
 
@@ -383,7 +445,10 @@ pub fn actionClosePane(self: *App) void {
         const close_result = self.tab_manager.closeTab(idx);
         if (close_result == .last_tab_closed) {
             self.window.handle.setShouldClose(true);
+            return;
         }
+        cancelConfirmPrompt(self);
+        syncTabIndices(self);
         resizeAllPanes(self);
         _ = updateTabTitles(self);
         self.requestFrame();
@@ -405,9 +470,15 @@ pub fn actionClosePaneById(self: *App, pane_id: u32) void {
     self.pane_mutex.lock();
     defer self.pane_mutex.unlock();
 
-    const pd = self.pane_data.get(pane_id) orelse return;
-    const tab_idx = pd.tab_index;
+    if (self.pane_data.get(pane_id) == null) return;
+    // Look the tab up instead of trusting the pane's `tab_index`, so a pane
+    // whose tab moved still closes.
+    const tab_idx = findTabOfPane(self, pane_id) orelse {
+        self.destroyPane(pane_id);
+        return;
+    };
     const tab = self.tab_manager.getTab(tab_idx) orelse return;
+    tab.unzoom();
 
     const leaf = tree_ops.findLeaf(tab.root, pane_id) orelse {
         self.destroyPane(pane_id);
@@ -431,6 +502,8 @@ pub fn actionClosePaneById(self: *App, pane_id: u32) void {
         self.window.handle.setShouldClose(true);
         return;
     }
+    cancelConfirmPrompt(self);
+    syncTabIndices(self);
     resizeAllPanes(self);
     _ = updateTabTitles(self);
     self.requestFrame();
@@ -441,12 +514,7 @@ pub fn actionZoomPane(self: *App) void {
     const tab = self.tab_manager.getActiveTab() orelse return;
 
     if (tab.is_zoomed) {
-        // Unzoom: restore saved root
-        if (tab.zoom_saved_root) |saved| {
-            tab.root = saved;
-            tab.zoom_saved_root = null;
-        }
-        tab.is_zoomed = false;
+        tab.unzoom();
     } else {
         // Zoom: save current root, create single-leaf root for focused pane
         tab.zoom_saved_root = tab.root;
@@ -524,6 +592,7 @@ pub fn actionBreakOut(self: *App) void {
     const tab = self.tab_manager.getActiveTab() orelse return;
     const pane_id = tab.focused_pane_id;
 
+    tab.unzoom();
     // Only break out if there's more than one pane
     if (tab.paneCount() <= 1) return;
 
@@ -539,6 +608,7 @@ pub fn actionBreakOut(self: *App) void {
     new_tab.focused_pane_id = pane_id;
     new_tab.next_pane_id = pane_id + 1;
 
+    syncTabIndices(self);
     resizeAllPanes(self);
     self.requestFrame();
 }

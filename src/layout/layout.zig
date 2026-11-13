@@ -12,6 +12,7 @@ pub const TabBarRenderer = @import("TabBarRenderer.zig");
 pub const LayoutPreset = @import("LayoutPreset.zig");
 pub const PresetPicker = @import("PresetPicker.zig");
 pub const ShellPicker = @import("ShellPicker.zig");
+pub const ConfirmPrompt = @import("ConfirmPrompt.zig");
 
 test {
     // Pull in all module tests
@@ -25,4 +26,5 @@ test {
     _ = LayoutPreset;
     _ = PresetPicker;
     _ = ShellPicker;
+    _ = ConfirmPrompt;
 }
