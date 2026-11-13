@@ -43,7 +43,11 @@ const std = @import("std");
 // Theme definitions
 // ---------------------------------------------------------------
 
-/// PTerm default (Catppuccin Mocha — matches existing hardcoded palette).
+/// PTerm default: Catppuccin Mocha, tuned for terminal programs.
+/// Black is Crust, darker than the background, because programs like k9s
+/// paint their background with it (Catppuccin's gray Surface 1 makes them
+/// look washed out). Bright black is Overlay 1 so faint text stays readable.
+/// Everything else matches catppuccin_mocha_theme.
 const default_theme = ColorPalette{
     .foreground = "#CDD6F4",
     .background = "#1E1E2E",
@@ -52,24 +56,24 @@ const default_theme = ColorPalette{
     .selection_bg = "#45475A",
     .selection_fg = "#CDD6F4",
     .normal = .{
-        "#45475A", // black
+        "#11111B", // black (Crust)
         "#F38BA8", // red
         "#A6E3A1", // green
         "#F9E2AF", // yellow
         "#89B4FA", // blue
         "#F5C2E7", // magenta
         "#94E2D5", // cyan
-        "#BAC2DE", // white
+        "#A6ADC8", // white
     },
     .bright = .{
-        "#585B70", // bright black
-        "#F38BA8", // bright red
-        "#A6E3A1", // bright green
-        "#F9E2AF", // bright yellow
-        "#89B4FA", // bright blue
-        "#F5C2E7", // bright magenta
-        "#94E2D5", // bright cyan
-        "#A6ADC8", // bright white
+        "#7F849C", // bright black (Overlay 1)
+        "#F37799", // bright red
+        "#89D88B", // bright green
+        "#EBD391", // bright yellow
+        "#74A8FC", // bright blue
+        "#F2AEDE", // bright magenta
+        "#6BD7CA", // bright cyan
+        "#BAC2DE", // bright white
     },
     .ui = .{
         .tab_bar_bg = .{ 0x18, 0x18, 0x25 },
@@ -278,7 +282,14 @@ const nord_theme = ColorPalette{
 };
 
 /// Catppuccin Mocha (identical to default — provided as explicit theme name).
-const catppuccin_mocha_theme = default_theme;
+/// Catppuccin Mocha, the official terminal palette
+/// (https://github.com/catppuccin/palette, ansiColors).
+const catppuccin_mocha_theme = blk: {
+    var t = default_theme;
+    t.normal[0] = "#45475A"; // black (Surface 1)
+    t.bright[0] = "#585B70"; // bright black (Surface 2)
+    break :blk t;
+};
 
 /// One Dark (https://github.com/one-dark/vscode-one-dark-theme)
 const one_dark_theme = ColorPalette{

@@ -35,6 +35,7 @@ working_dir = "~"    # default = home dir; set path to override, "" = inherit CW
 # cursor_text = "#1e1e2e"
 # selection_bg = "#45475a"
 # selection_fg = "#cdd6f4"
+# minimum_contrast = 3.0   # lift text too close to its background (1 = off, max 21)
 
 [colors.ui]
 # tab_bar_bg = "#181825"

@@ -83,6 +83,9 @@ pub const RendererPalette = struct {
     ui_url_hover: Color,
     ui_bell_flash: Color,
     ui_bell_badge: Color,
+    /// Text closer than this contrast ratio to its background is lightened
+    /// (or darkened) until it reaches it. 1 turns it off.
+    minimum_contrast: f32 = 1.0,
 
     /// Resolve a 256-color index using this palette's ANSI colors.
     /// Indices 0-7: normal, 8-15: bright, 16-231: 6x6x6 cube, 232-255: grayscale.
@@ -307,9 +310,11 @@ pub fn buildRendererPaletteFromConfig(colors: anytype, theme_name: ?[]const u8) 
         .ui = overlayUiColors(base_palette.ui, colors.ui),
     };
 
-    return buildRendererPalette(merged) catch {
+    var result = buildRendererPalette(merged) catch blk: {
         // If any user-provided hex string is invalid, fall back to full defaults
         std.log.warn("Invalid color in config, falling back to default theme", .{});
-        return defaultRendererPalette();
+        break :blk defaultRendererPalette();
     };
+    result.minimum_contrast = colors.minimum_contrast;
+    return result;
 }
