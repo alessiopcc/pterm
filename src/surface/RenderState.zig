@@ -152,12 +152,14 @@ pub fn snapshotCells(
             var fg = default_fg;
             var bg = default_bg;
             var inverse = false;
+            var faint = false;
 
             if (cell.style_id != 0) {
                 const style = pin_val.style(cell);
                 fg = resolveColor(style.fg_color, default_fg, pal);
                 bg = resolveColor(style.bg_color, default_bg, pal);
                 inverse = style.flags.inverse;
+                faint = style.flags.faint;
             }
 
             // ghostty-vt stores "bg-only" cells (produced by ECH/ED/EL with a
@@ -176,6 +178,8 @@ pub fn snapshotCells(
                 },
                 .codepoint, .codepoint_grapheme => {},
             }
+
+            adjustTextColor(&fg, &bg, inverse, faint, default_fg, if (pal) |p| p.minimum_contrast else 1.0);
 
             // Get base codepoint directly from ghostty-vt cell.
             const cp = cell.codepoint();
@@ -222,6 +226,38 @@ pub fn snapshotCells(
         .cursor_visible = cursor_vis,
         .in_scrollback = clamped_offset > 0,
     };
+}
+
+/// Faint text (SGR 2) and minimum contrast. With `inverse` the text is drawn
+/// in `bg` on `fg`, so that one is adjusted. Faint text is mixed halfway
+/// toward its background; then text below `min_contrast` against its
+/// background is moved toward the theme's text color until it reaches it.
+fn adjustTextColor(fg: *Color, bg: *Color, inverse: bool, faint: bool, default_fg: Color, min_contrast: f32) void {
+    if (!faint and min_contrast <= 1.0) return;
+    const text = if (inverse) bg else fg;
+    const back = if (inverse) fg.* else bg.*;
+    if (faint) text.* = text.mix(back, 0.5);
+    if (min_contrast > 1.0) text.* = text.withMinContrast(back, min_contrast, default_fg);
+}
+
+test "faint text is mixed halfway toward its background" {
+    var fg: Color = .{ .r = 200, .g = 200, .b = 200 };
+    var bg: Color = .{ .r = 0, .g = 0, .b = 0 };
+    adjustTextColor(&fg, &bg, false, true, fg, 1.0);
+    try std.testing.expectEqual(@as(u8, 100), fg.r);
+    try std.testing.expectEqual(@as(u8, 0), bg.r);
+}
+
+test "minimum contrast adjusts the drawn text of inverse cells" {
+    const dark: Color = .{ .r = 0x1e, .g = 0x1e, .b = 0x2e };
+    const crust: Color = .{ .r = 0x11, .g = 0x11, .b = 0x1b };
+    const text: Color = .{ .r = 0xcd, .g = 0xd6, .b = 0xf4 };
+    // Inverse: text is drawn in `bg` (crust) on `fg` (dark).
+    var fg = dark;
+    var bg = crust;
+    adjustTextColor(&fg, &bg, true, false, text, 3.0);
+    try std.testing.expect(fg.eql(dark));
+    try std.testing.expect(bg.contrast(dark) >= 3.0);
 }
 
 /// Pass 2: Build CellInstance arrays from snapshot. Call WITHOUT the mutex.

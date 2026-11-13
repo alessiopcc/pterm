@@ -200,6 +200,19 @@ Individual colors can be overridden under `[colors]`, `[colors.normal]`,
 `[colors.bright]`, and `[colors.ui]` -- overrides take precedence over the
 active theme.
 
+`default` is Catppuccin Mocha with a darker black (Crust), so programs that
+paint their background black, like k9s, look right, and a lighter bright black
+for readable comments. `catppuccin-mocha` is the official palette.
+
+Text too close to its background is lifted to a minimum contrast ratio, 3:1 by
+default, and faint text (SGR 2) is drawn dimmer but never below that ratio.
+Change it with `minimum_contrast` under `[colors]`; `1` turns it off:
+
+```toml
+[colors]
+minimum_contrast = 4.5
+```
+
 ### Keybindings
 
 All actions are rebindable. Set them under `[keybindings]` in your config:

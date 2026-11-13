@@ -25,7 +25,95 @@ pub const Color = struct {
     pub fn eql(self: Color, other: Color) bool {
         return self.r == other.r and self.g == other.g and self.b == other.b and self.a == other.a;
     }
+
+    /// Relative luminance (WCAG 2), 0 = black, 1 = white.
+    pub fn luminance(self: Color) f32 {
+        return 0.2126 * srgb_to_linear[self.r] + 0.7152 * srgb_to_linear[self.g] + 0.0722 * srgb_to_linear[self.b];
+    }
+
+    /// Contrast ratio (WCAG 2) between two colors, from 1 to 21.
+    pub fn contrast(self: Color, other: Color) f32 {
+        const a = self.luminance();
+        const b = other.luminance();
+        return (@max(a, b) + 0.05) / (@min(a, b) + 0.05);
+    }
+
+    /// Mix toward `other`: t = 0 gives self, t = 1 gives other.
+    pub fn mix(self: Color, other: Color, t: f32) Color {
+        const s = struct {
+            fn ch(a: u8, b: u8, f: f32) u8 {
+                const af: f32 = @floatFromInt(a);
+                const bf: f32 = @floatFromInt(b);
+                return @intFromFloat(@round(af + (bf - af) * f));
+            }
+        };
+        return .{ .r = s.ch(self.r, other.r, t), .g = s.ch(self.g, other.g, t), .b = s.ch(self.b, other.b, t), .a = self.a };
+    }
+
+    /// Text color with at least `min` contrast against `bg`. Moves the text
+    /// toward `toward` (normally the theme's text color), or toward white or
+    /// black if that isn't far enough, by the smallest step that reaches it.
+    /// Returns self unchanged when it already has enough contrast.
+    pub fn withMinContrast(self: Color, bg: Color, min: f32, toward: Color) Color {
+        if (min <= 1.0 or self.contrast(bg) >= min) return self;
+        const white: Color = .{ .r = 255, .g = 255, .b = 255 };
+        const black: Color = .{ .r = 0, .g = 0, .b = 0 };
+        const extreme = if (white.contrast(bg) >= black.contrast(bg)) white else black;
+        const target = if (toward.contrast(bg) >= min) toward else extreme;
+        if (target.contrast(bg) < min) return target;
+        // Binary search the smallest mix that reaches the contrast.
+        var lo: f32 = 0;
+        var hi: f32 = 1;
+        for (0..12) |_| {
+            const mid = (lo + hi) / 2;
+            if (self.mix(target, mid).contrast(bg) >= min) hi = mid else lo = mid;
+        }
+        return self.mix(target, hi);
+    }
 };
+
+/// sRGB channel value to linear light, for luminance.
+const srgb_to_linear: [256]f32 = blk: {
+    @setEvalBranchQuota(1_000_000);
+    var t: [256]f32 = undefined;
+    for (0..256) |i| {
+        const v: f32 = @as(f32, @floatFromInt(i)) / 255.0;
+        t[i] = if (v <= 0.03928) v / 12.92 else std.math.pow(f32, (v + 0.055) / 1.055, 2.4);
+    }
+    break :blk t;
+};
+
+test "contrast of black and white is 21" {
+    const c = (Color{ .r = 0, .g = 0, .b = 0 }).contrast(.{ .r = 255, .g = 255, .b = 255 });
+    try std.testing.expectApproxEqAbs(@as(f32, 21.0), c, 0.01);
+}
+
+test "withMinContrast lifts text too close to its background" {
+    const bg: Color = .{ .r = 0x1e, .g = 0x1e, .b = 0x2e };
+    const crust: Color = .{ .r = 0x11, .g = 0x11, .b = 0x1b };
+    const fg: Color = .{ .r = 0xcd, .g = 0xd6, .b = 0xf4 };
+    const lifted = crust.withMinContrast(bg, 3.0, fg);
+    try std.testing.expect(lifted.contrast(bg) >= 3.0);
+    // Only just enough: not all the way to the text color.
+    try std.testing.expect(lifted.contrast(bg) < 3.3);
+}
+
+test "withMinContrast leaves readable text alone" {
+    const bg: Color = .{ .r = 0x1e, .g = 0x1e, .b = 0x2e };
+    const red: Color = .{ .r = 0xf3, .g = 0x8b, .b = 0xa8 };
+    try std.testing.expect(red.withMinContrast(bg, 3.0, red).eql(red));
+    // 1 turns it off.
+    const crust: Color = .{ .r = 0x11, .g = 0x11, .b = 0x1b };
+    try std.testing.expect(crust.withMinContrast(bg, 1.0, red).eql(crust));
+}
+
+test "withMinContrast darkens text on a light background" {
+    const bg: Color = .{ .r = 0xfd, .g = 0xf6, .b = 0xe3 };
+    const fg: Color = .{ .r = 0xee, .g = 0xe8, .b = 0xd5 };
+    const lifted = fg.withMinContrast(bg, 3.0, fg);
+    try std.testing.expect(lifted.contrast(bg) >= 3.0);
+    try std.testing.expect(lifted.luminance() < fg.luminance());
+}
 
 /// Default color palette -- Catppuccin Mocha (from UI-SPEC).
 pub const palette = struct {
@@ -36,26 +124,26 @@ pub const palette = struct {
 
     /// ANSI 16 normal colors (indices 0-7).
     pub const ansi_normal = [8]Color{
-        .{ .r = 0x45, .g = 0x47, .b = 0x5a }, // 0: Black
+        .{ .r = 0x11, .g = 0x11, .b = 0x1b }, // 0: Black
         .{ .r = 0xf3, .g = 0x8b, .b = 0xa8 }, // 1: Red
         .{ .r = 0xa6, .g = 0xe3, .b = 0xa1 }, // 2: Green
         .{ .r = 0xf9, .g = 0xe2, .b = 0xaf }, // 3: Yellow
         .{ .r = 0x89, .g = 0xb4, .b = 0xfa }, // 4: Blue
         .{ .r = 0xf5, .g = 0xc2, .b = 0xe7 }, // 5: Magenta
         .{ .r = 0x94, .g = 0xe2, .b = 0xd5 }, // 6: Cyan
-        .{ .r = 0xba, .g = 0xc2, .b = 0xde }, // 7: White
+        .{ .r = 0xa6, .g = 0xad, .b = 0xc8 }, // 7: White
     };
 
     /// ANSI 16 bright colors (indices 8-15).
     pub const ansi_bright = [8]Color{
-        .{ .r = 0x58, .g = 0x5b, .b = 0x70 }, // 8: Bright Black
-        .{ .r = 0xf3, .g = 0x8b, .b = 0xa8 }, // 9: Bright Red
-        .{ .r = 0xa6, .g = 0xe3, .b = 0xa1 }, // 10: Bright Green
-        .{ .r = 0xf9, .g = 0xe2, .b = 0xaf }, // 11: Bright Yellow
-        .{ .r = 0x89, .g = 0xb4, .b = 0xfa }, // 12: Bright Blue
-        .{ .r = 0xf5, .g = 0xc2, .b = 0xe7 }, // 13: Bright Magenta
-        .{ .r = 0x94, .g = 0xe2, .b = 0xd5 }, // 14: Bright Cyan
-        .{ .r = 0xa6, .g = 0xad, .b = 0xc8 }, // 15: Bright White
+        .{ .r = 0x7f, .g = 0x84, .b = 0x9c }, // 8: Bright Black
+        .{ .r = 0xf3, .g = 0x77, .b = 0x99 }, // 9: Bright Red
+        .{ .r = 0x89, .g = 0xd8, .b = 0x8b }, // 10: Bright Green
+        .{ .r = 0xeb, .g = 0xd3, .b = 0x91 }, // 11: Bright Yellow
+        .{ .r = 0x74, .g = 0xa8, .b = 0xfc }, // 12: Bright Blue
+        .{ .r = 0xf2, .g = 0xae, .b = 0xde }, // 13: Bright Magenta
+        .{ .r = 0x6b, .g = 0xd7, .b = 0xca }, // 14: Bright Cyan
+        .{ .r = 0xba, .g = 0xc2, .b = 0xde }, // 15: Bright White
     };
 
     /// Resolve a 256-color index to an RGB Color.

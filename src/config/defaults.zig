@@ -84,6 +84,7 @@ pub fn dumpConfig() void {
         \\# cursor_text = "#1e1e2e"
         \\# selection_bg = "#45475a"
         \\# selection_fg = "#cdd6f4"
+        \\# minimum_contrast = 3.0   # lift text too close to its background (1 = off, max 21)
         \\
         \\[colors.ui]
         \\# tab_bar_bg = "#181825"
@@ -102,18 +103,7 @@ pub fn dumpConfig() void {
         \\
         \\[colors.normal]
         \\# Override individual ANSI colors (0-7). Unset colors use the active theme.
-        \\# black = "#45475A"
-        \\# red = "#F38BA8"
-        \\# green = "#A6E3A1"
-        \\# yellow = "#F9E2AF"
-        \\# blue = "#89B4FA"
-        \\# magenta = "#F5C2E7"
-        \\# cyan = "#94E2D5"
-        \\# white = "#BAC2DE"
-        \\
-        \\[colors.bright]
-        \\# Override individual bright ANSI colors (8-15). Unset colors use the active theme.
-        \\# black = "#585B70"
+        \\# black = "#11111B"
         \\# red = "#F38BA8"
         \\# green = "#A6E3A1"
         \\# yellow = "#F9E2AF"
@@ -121,6 +111,17 @@ pub fn dumpConfig() void {
         \\# magenta = "#F5C2E7"
         \\# cyan = "#94E2D5"
         \\# white = "#A6ADC8"
+        \\
+        \\[colors.bright]
+        \\# Override individual bright ANSI colors (8-15). Unset colors use the active theme.
+        \\# black = "#7F849C"
+        \\# red = "#F37799"
+        \\# green = "#89D88B"
+        \\# yellow = "#EBD391"
+        \\# blue = "#74A8FC"
+        \\# magenta = "#F2AEDE"
+        \\# cyan = "#6BD7CA"
+        \\# white = "#BAC2DE"
         \\
         \\[search]
         \\# Empty for v1 (plain text search only)

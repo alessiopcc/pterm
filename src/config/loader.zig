@@ -86,6 +86,7 @@ const FileColors = struct {
     cursor_text: ?[]const u8 = null,
     selection_bg: ?[]const u8 = null,
     selection_fg: ?[]const u8 = null,
+    minimum_contrast: ?f64 = null,
     ui: ?FileUiColors = null,
     normal: ?FileAnsiNormal = null,
     bright: ?FileAnsiBright = null,
@@ -305,6 +306,7 @@ fn mergeConfigs(base: Config, over: Config) Config {
     if (over.colors.cursor_text) |v| result.colors.cursor_text = v;
     if (over.colors.selection_bg) |v| result.colors.selection_bg = v;
     if (over.colors.selection_fg) |v| result.colors.selection_fg = v;
+    if (over.colors.minimum_contrast != Config.default_minimum_contrast) result.colors.minimum_contrast = over.colors.minimum_contrast;
 
     // UI Colors
     if (over.colors.ui.tab_bar_bg) |v| result.colors.ui.tab_bar_bg = v;
@@ -441,6 +443,7 @@ fn applyFileConfig(allocator: std.mem.Allocator, base: Config, file: FileConfig)
         if (c.cursor_text) |v| result.colors.cursor_text = try allocator.dupe(u8, v);
         if (c.selection_bg) |v| result.colors.selection_bg = try allocator.dupe(u8, v);
         if (c.selection_fg) |v| result.colors.selection_fg = try allocator.dupe(u8, v);
+        if (c.minimum_contrast) |v| result.colors.minimum_contrast = @floatCast(v);
 
         if (c.ui) |ui| {
             if (ui.tab_bar_bg) |v| result.colors.ui.tab_bar_bg = try allocator.dupe(u8, v);
