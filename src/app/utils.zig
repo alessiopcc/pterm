@@ -45,7 +45,17 @@ pub fn glfwModsToModifiers(mods: glfw.Mods) keybindings.Modifiers {
 /// Detect if cursor is on a window edge for resize (5px grab zone).
 pub const resize_grab = 5;
 
+/// Pixels the cursor may wander before a press counts as a drag (and two
+/// presses still count as a double-click). Scales with the display.
+pub fn dragThreshold(self: *App) i32 {
+    const scale = self.window.getContentScale();
+    return @max(2, @as(i32, @intFromFloat(@round(4.0 * scale))));
+}
+
+/// Which window edges are under the cursor. None while maximized: a maximized
+/// window cannot be resized, and its edges are the title bar and screen sides.
 pub fn detectWindowEdge(self: *App, x: i32, y: i32) App.WindowEdge {
+    if (self.window.isMaximized()) return .{};
     const fb = self.window.getFramebufferSize();
     const w: i32 = @intCast(fb.width);
     const h: i32 = @intCast(fb.height);

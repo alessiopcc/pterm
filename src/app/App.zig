@@ -351,18 +351,24 @@ pub const App = struct {
     border_drag_start_ratio: f32,
     border_drag_is_vertical: bool,
 
-    // Window drag state (frameless window drag via tab bar)
+    // Window drag from the title bar. Windows hands the drag to the OS; other
+    // platforms move the window by hand once the cursor passes a threshold.
     window_drag_active: bool,
     window_drag_moved: bool,
-    window_drag_tab_hit: ?usize, // Tab index if drag started on a tab (click-to-switch on release)
     window_drag_screen_x: i32,
     window_drag_screen_y: i32,
 
     // Title bar double-click detection (maximize/restore)
     titlebar_last_click_time: i128,
+    titlebar_last_click_x: i32 = 0,
+    titlebar_last_click_y: i32 = 0,
 
     // Window control hover state (0=none, 1=minimize, 2=maximize, 3=close)
     hovered_control: u8,
+
+    // Last position GLFW reported, in event order. Clicks hit-test here, not
+    // at wherever the mouse is by the time the click is handled.
+    last_cursor_pos: ?[2]f64 = null,
 
     // Suppress activity for N frames after resize (async redraws cause false positives)
     suppress_activity_frames: std.atomic.Value(u32),
@@ -561,7 +567,6 @@ pub const App = struct {
             .border_drag_is_vertical = false,
             .window_drag_active = false,
             .window_drag_moved = false,
-            .window_drag_tab_hit = null,
             .window_drag_screen_x = 0,
             .window_drag_screen_y = 0,
             .titlebar_last_click_time = 0,
@@ -1067,6 +1072,11 @@ pub const App = struct {
     }
     pub fn resetFontSize(self: *App) void {
         actions.resetFontSize(self);
+    }
+
+    /// Cursor position for the event being handled (see `last_cursor_pos`).
+    pub fn cursorPos(self: *App) [2]f64 {
+        return self.last_cursor_pos orelse self.window.handle.getCursorPos();
     }
 
     pub fn requestFrame(self: *App) void {
