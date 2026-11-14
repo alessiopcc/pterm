@@ -44,12 +44,16 @@ tools like Claude Code are waiting for input.
   Codex "Action Required"), which stays accurate through quiet stretches
   such as subagent runs; the title text becomes the sidebar message. Without
   a title glyph it falls back to inference: when the foreground process
-  matches the configured list (`claude`, `codex`, `opencode` by default),
+  matches the configured list (`claude`, `codex`, `opencode`, `pi` by
+  default; agents that run on node, bun or deno, like pi, are matched by
+  their package),
   recent output = working, quiet = idle, and a bell
   = needs you (for Claude Code, set `"preferredNotifChannel":
   "terminal_bell"`). Desktop notifications fire for needs you, error and
   done. An agent leaves the sidebar when it exits (unread done / error stay
-  until you look).
+  until you look after it exits). On Windows, GUI apps and background jobs
+  started from the shell (e.g. `Start-Job`) do not count as running in the
+  pane.
 - **Agent sidebar and board** -- A sidebar (left by default, shown
   automatically while agents run) lists every agent pane grouped into needs
   you, working, done and idle, with the working folder, elapsed time and the
@@ -163,7 +167,7 @@ mode = "none"       # visual, sound, both, none
 
 [agent]
 enabled = true
-processes = ["claude", "codex", "opencode"]  # inference fallback
+processes = ["claude", "codex", "opencode", "pi"]  # inference fallback
 notifications = true
 notify_on = ["waiting", "error", "done"]     # states that notify
 suppress_when_focused = true

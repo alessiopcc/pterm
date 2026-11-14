@@ -135,7 +135,7 @@ pub fn dumpConfig() void {
         \\[agent]
         \\# Agent monitoring and notification settings
         \\# enabled = true
-        \\# processes = ["claude", "opencode", "codex"]  # process names that trigger waiting-state flash
+        \\# processes = ["claude", "opencode", "codex", "pi"]  # process names that trigger waiting-state flash
         \\# poll_interval_ms = 500   # foreground-process poll cadence
         \\# quiet_threshold_ms = 500 # output quiet threshold before leaving "working"
         \\# notifications = true
