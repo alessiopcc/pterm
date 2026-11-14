@@ -137,6 +137,12 @@ pub fn dropDone(self: *ProgramStatus) bool {
     return self.removeWhere({}, isDone);
 }
 
+/// The user has seen the pane after the program exited: drop done and
+/// error records.
+pub fn dropOutcomes(self: *ProgramStatus) bool {
+    return self.removeWhere({}, isOutcome);
+}
+
 /// The record that decides the pane's state, or null if the table is empty.
 pub fn top(self: *const ProgramStatus) ?*const Record {
     var best: ?*const Record = null;
@@ -192,6 +198,10 @@ fn isTransient(_: void, rec: *const Record) bool {
 
 fn isDone(_: void, rec: *const Record) bool {
     return rec.state == .done;
+}
+
+fn isOutcome(_: void, rec: *const Record) bool {
+    return rec.state == .done or rec.state == .errored;
 }
 
 /// Copy printable text (no control characters), truncated to `dst`.

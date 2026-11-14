@@ -11,9 +11,11 @@
 ///   - Windows: ConPTY has no foreground-process API, so we snapshot the full
 ///     process list via CreateToolhelp32Snapshot and walk descendants of the
 ///     shell PID, picking the agent if one is running (the outermost, not the
-///     helpers it spawns), else the most-recently-started leaf. Long-lived
-///     helpers the shell keeps for itself (nu plugins) are not "running in"
-///     the pane.
+///     helpers it spawns), else the most-recently-started leaf. Processes not
+///     on the pane's console are not "running in" the pane, nor is anything
+///     they start: long-lived shell helpers (nu plugins), GUI apps started
+///     from the shell (no console), and background jobs with a console of
+///     their own (e.g. pwsh Start-Job, which gets its own conhost).
 const std = @import("std");
 const pio = @import("pio");
 const builtin = @import("builtin");
@@ -148,6 +150,32 @@ extern "kernel32" fn GetProcessTimes(
 ) callconv(.winapi) BOOL;
 
 const PROCESS_QUERY_LIMITED_INFORMATION: DWORD = 0x1000;
+const PROCESS_VM_READ: DWORD = 0x0010;
+
+const PROCESS_BASIC_INFORMATION = extern struct {
+    ExitStatus: usize = 0,
+    PebBaseAddress: ?*anyopaque = null,
+    AffinityMask: usize = 0,
+    BasePriority: i32 = 0,
+    UniqueProcessId: usize = 0,
+    InheritedFromUniqueProcessId: usize = 0,
+};
+
+extern "ntdll" fn NtQueryInformationProcess(
+    ProcessHandle: HANDLE,
+    ProcessInformationClass: DWORD,
+    ProcessInformation: *anyopaque,
+    ProcessInformationLength: DWORD,
+    ReturnLength: ?*DWORD,
+) callconv(.winapi) i32;
+
+extern "kernel32" fn ReadProcessMemory(
+    hProcess: HANDLE,
+    lpBaseAddress: ?*const anyopaque,
+    lpBuffer: *anyopaque,
+    nSize: usize,
+    lpNumberOfBytesRead: ?*usize,
+) callconv(.winapi) BOOL;
 
 fn queryWindows(in: QueryInput, out: *ProcessName) bool {
     const shell_pid = in.shell_pid orelse return false;
@@ -213,8 +241,18 @@ fn queryWindows(in: QueryInput, out: *ProcessName) bool {
         var i: usize = 0;
         while (i < count) : (i += 1) {
             if (ppids[i] != parent) continue;
-            const name = names[i][0..name_lens[i]];
+            var name = names[i][0..name_lens[i]];
             if (parent == shell_pid_u and isShellHelper(name)) continue;
+            // An agent running on node / bun / deno: name it after its package.
+            if (isScriptHost(name)) {
+                var cl_buf: [1024]u8 = undefined;
+                if (readCommandLine(pids[i], &cl_buf)) |cl| if (scriptAgent(cl)) |agent| {
+                    @memcpy(names[i][0..agent.len], agent);
+                    name_lens[i] = @intCast(agent.len);
+                    name = names[i][0..agent.len];
+                };
+            }
+            if (pids[i] != shell_pid_u and !onPaneConsole(pids[i], pids[0..count], ppids[0..count], names[0..count], name_lens[0..count])) continue;
             // Enqueue this descendant
             if (qtail < queue.len) {
                 queue[qtail] = pids[i];
@@ -251,6 +289,62 @@ fn queryWindows(in: QueryInput, out: *ProcessName) bool {
     return false;
 }
 
+/// Whether `pid` shares the pane's console. A process with its own console
+/// has that console's conhost as a child; a GUI or detached process has no
+/// console at all. Unknown (access denied) counts as on the console.
+fn onPaneConsole(pid: DWORD, pids: []const DWORD, ppids: []const DWORD, names: []const [32]u8, name_lens: []const u32) bool {
+    for (pids, ppids, names, name_lens) |p, pp, *n, len| {
+        _ = p;
+        if (pp != pid) continue;
+        if (isConsoleHost(n[0..len])) return false;
+    }
+    return hasConsole(pid) orelse true;
+}
+
+fn isConsoleHost(name: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(name, "conhost") or std.ascii.eqlIgnoreCase(name, "OpenConsole");
+}
+
+/// ProcessParameters->ConsoleHandle is null for GUI and detached processes.
+/// Null when it can't be read (other bitness, access denied).
+fn hasConsole(pid: DWORD) ?bool {
+    if (@sizeOf(usize) != 8) return null;
+    const h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, 0, pid) orelse return null;
+    defer _ = CloseHandle(h);
+    var pbi: PROCESS_BASIC_INFORMATION = .{};
+    if (NtQueryInformationProcess(h, 0, &pbi, @sizeOf(PROCESS_BASIC_INFORMATION), null) != 0) return null;
+    const peb = @intFromPtr(pbi.PebBaseAddress orelse return null);
+    var params: usize = 0;
+    if (ReadProcessMemory(h, @ptrFromInt(peb + 0x20), @ptrCast(&params), @sizeOf(usize), null) == 0 or params == 0) return null;
+    var console: usize = 0;
+    if (ReadProcessMemory(h, @ptrFromInt(params + 0x10), @ptrCast(&console), @sizeOf(usize), null) == 0) return null;
+    return console != 0;
+}
+
+/// The process's command line (ProcessParameters->CommandLine), non-ASCII
+/// as '?', truncated to `buf`. Null when it can't be read.
+fn readCommandLine(pid: DWORD, buf: []u8) ?[]const u8 {
+    if (@sizeOf(usize) != 8) return null;
+    const h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, 0, pid) orelse return null;
+    defer _ = CloseHandle(h);
+    var pbi: PROCESS_BASIC_INFORMATION = .{};
+    if (NtQueryInformationProcess(h, 0, &pbi, @sizeOf(PROCESS_BASIC_INFORMATION), null) != 0) return null;
+    const peb = @intFromPtr(pbi.PebBaseAddress orelse return null);
+    var params: usize = 0;
+    if (ReadProcessMemory(h, @ptrFromInt(peb + 0x20), @ptrCast(&params), @sizeOf(usize), null) == 0 or params == 0) return null;
+    // UNICODE_STRING CommandLine at 0x70: Length (bytes), MaximumLength, Buffer at 0x78.
+    var len_bytes: u16 = 0;
+    if (ReadProcessMemory(h, @ptrFromInt(params + 0x70), @ptrCast(&len_bytes), 2, null) == 0) return null;
+    var str_ptr: usize = 0;
+    if (ReadProcessMemory(h, @ptrFromInt(params + 0x78), @ptrCast(&str_ptr), @sizeOf(usize), null) == 0 or str_ptr == 0) return null;
+    var wide: [1024]u16 = undefined;
+    const units = @min(@as(usize, len_bytes / 2), wide.len, buf.len);
+    if (units == 0) return null;
+    if (ReadProcessMemory(h, @ptrFromInt(str_ptr), @ptrCast(&wide), units * 2, null) == 0) return null;
+    for (wide[0..units], 0..) |u, k| buf[k] = if (u < 0x80) @intCast(u) else '?';
+    return buf[0..units];
+}
+
 fn getProcessCreationTime(pid: DWORD) u64 {
     const h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) orelse return 0;
     defer _ = CloseHandle(h);
@@ -263,6 +357,67 @@ fn getProcessCreationTime(pid: DWORD) u64 {
 }
 
 // ── Helpers ──────────────────────────────────────────────
+
+/// Agents that run on a script host, by npm package (scope dropped), and the
+/// name they go by in `agent.processes`.
+const script_agents = [_]struct { pkg: []const u8, name: []const u8 }{
+    .{ .pkg = "pi-coding-agent", .name = "pi" },
+    .{ .pkg = "claude-code", .name = "claude" },
+    .{ .pkg = "codex", .name = "codex" },
+    .{ .pkg = "opencode-ai", .name = "opencode" },
+};
+
+fn isScriptHost(name: []const u8) bool {
+    for ([_][]const u8{ "node", "bun", "deno" }) |host| {
+        if (std.ascii.eqlIgnoreCase(name, host)) return true;
+    }
+    return false;
+}
+
+/// The npm package that owns the script in a command line:
+/// `node C:\…\node_modules\@scope\pkg\dist\cli.js` gives "pkg".
+fn scriptPackage(cmdline: []const u8) ?[]const u8 {
+    const marker = "node_modules";
+    var start: usize = undefined;
+    var found = false;
+    var i: usize = 0;
+    while (std.mem.indexOfPos(u8, cmdline, i, marker)) |at| : (i = at + 1) {
+        const after = at + marker.len;
+        if (after < cmdline.len and (cmdline[after] == '/' or cmdline[after] == '\\')) {
+            start = after + 1;
+            found = true;
+        }
+    }
+    if (!found) return null;
+    var rest = cmdline[start..];
+    if (rest.len > 0 and rest[0] == '@') {
+        const sep = std.mem.indexOfAny(u8, rest, "/\\") orelse return null;
+        rest = rest[sep + 1 ..];
+    }
+    const end = std.mem.indexOfAny(u8, rest, "/\\\" ") orelse rest.len;
+    if (end == 0) return null;
+    return rest[0..end];
+}
+
+/// The agent name for a script-host command line, if it runs a known agent.
+fn scriptAgent(cmdline: []const u8) ?[]const u8 {
+    const pkg = scriptPackage(cmdline) orelse return null;
+    for (script_agents) |a| {
+        if (std.ascii.eqlIgnoreCase(pkg, a.pkg)) return a.name;
+    }
+    return null;
+}
+
+test "scriptAgent maps agent packages run by node" {
+    try std.testing.expectEqualStrings("pi", scriptAgent(
+        "\"C:\\nodejs\\node.exe\" \"C:\\nodejs\\node_modules\\@earendil-works\\pi-coding-agent\\dist\\bundle\\cli.js\"",
+    ).?);
+    try std.testing.expectEqualStrings("claude", scriptAgent("node /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js").?);
+    try std.testing.expectEqualStrings("opencode", scriptAgent("bun /x/node_modules/opencode-ai/bin/opencode").?);
+    try std.testing.expect(scriptAgent("node server.js") == null);
+    try std.testing.expect(scriptAgent("node /x/node_modules/typescript/bin/tsc") == null);
+    try std.testing.expect(scriptAgent("node /x/node_modules/") == null);
+}
 
 /// A child the shell keeps alive for itself rather than a command the user
 /// ran: nushell starts plugins from its prompt (e.g. nu_plugin_gstat in a git

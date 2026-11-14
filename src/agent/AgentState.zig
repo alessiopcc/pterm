@@ -21,7 +21,8 @@
 ///
 /// Entering waiting / errored / done raises an alert (pane flash + pending
 /// notification), at most once per FLASH_COOLDOWN_NS per state.
-/// done becomes idle once the user has seen the pane (markSeen).
+/// done becomes idle once the user has seen the pane (markSeen); error too,
+/// but only after the program has exited.
 const std = @import("std");
 const pio = @import("pio");
 
@@ -272,14 +273,19 @@ pub const AgentState = struct {
         return self.source.load(.acquire) == .reported;
     }
 
-    /// The user has looked at this pane: an unread done becomes idle.
-    pub fn markSeen(self: *AgentState, now: i128) void {
-        if (self.state.load(.acquire) != .done) return;
+    /// The user has looked at this pane: an unread done becomes idle. An
+    /// error does too once nothing runs in the pane any more; while the
+    /// program still runs, its error is current and stays.
+    pub fn markSeen(self: *AgentState, program_running: bool, now: i128) void {
+        const st = self.state.load(.acquire);
+        const clear_error = st == .errored and !program_running;
+        if (st != .done and !clear_error) return;
         self.mutex.lock();
         defer self.mutex.unlock();
-        _ = self.records.dropDone();
+        _ = if (clear_error) self.records.dropOutcomes() else self.records.dropDone();
         self.syncFromRecords(now);
-        if (self.state.load(.acquire) == .done) self.setState(.idle, now);
+        const after = self.state.load(.acquire);
+        if (after == .done or (clear_error and after == .errored)) self.setState(.idle, now);
     }
 
     /// Copy the current message into `buf`; returns the copied slice.
@@ -650,7 +656,20 @@ test "done alerts and becomes idle once seen" {
     st.applyStatus(.{ .state = .done, .msg = "tests pass" }, 1 * sec);
     try std.testing.expectEqual(S.done, st.state.load(.acquire));
     try std.testing.expectEqual(S.done, st.notify_state.load(.acquire));
-    st.markSeen(2 * sec);
+    st.markSeen(true, 2 * sec);
+    try std.testing.expectEqual(S.idle, st.state.load(.acquire));
+    try std.testing.expect(!st.hasReports());
+}
+
+test "error stays while the program runs, clears once seen after it exits" {
+    var st = AgentState{};
+    st.applyStatus(.{ .state = .err, .msg = "build failed" }, 1 * sec);
+    st.markSeen(true, 2 * sec);
+    try std.testing.expectEqual(S.errored, st.state.load(.acquire));
+
+    st.agentGone(3 * sec);
+    try std.testing.expectEqual(S.errored, st.state.load(.acquire));
+    st.markSeen(false, 4 * sec);
     try std.testing.expectEqual(S.idle, st.state.load(.acquire));
     try std.testing.expect(!st.hasReports());
 }

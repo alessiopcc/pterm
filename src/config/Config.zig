@@ -89,7 +89,7 @@ pub const Config = struct {
         heuristic_fallback: bool = true,
     };
 
-    pub const default_agent_processes = [_][]const u8{ "claude", "opencode", "codex" };
+    pub const default_agent_processes = [_][]const u8{ "claude", "opencode", "codex", "pi" };
     pub const default_notify_on = [_][]const u8{ "waiting", "error", "done" };
 
     /// Status bar config.

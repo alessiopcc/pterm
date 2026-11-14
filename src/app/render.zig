@@ -319,9 +319,11 @@ pub fn renderThreadMain(self: *App) void {
                     if (self.config.agent.enabled and !pd.isAgentOutputSuppressed(now_ns)) {
                         updateAgentStateFromProcess(self, pd);
                     }
-                    // Looking at a pane acknowledges its "done".
+                    // Looking at a pane acknowledges its "done", and its
+                    // "error" once the program has exited.
                     if (self.focused and focused_pane_id == pd.pane_id) {
-                        pd.agent_state.markSeen(now_ns);
+                        const running = pd.agent_present.load(.acquire) or !pd.at_shell;
+                        pd.agent_state.markSeen(running, now_ns);
                     }
                 }
             }
