@@ -149,7 +149,7 @@ pub fn scrollCallback(handle: *glfw.Window, _: f64, yoffset: f64) callconv(.c) v
 
     if (app.getFocusedPaneData()) |pd| {
         if (isMouseForwardingActive(pd)) {
-            const pos = app.window.handle.getCursorPos();
+            const pos = app.cursorPos();
             const fb_x: i32 = @intFromFloat(pos[0]);
             const fb_y: i32 = @intFromFloat(pos[1]);
             if (pixelToCell(app, fb_x, fb_y)) |cell| {
@@ -210,7 +210,7 @@ pub fn scrollCallback(handle: *glfw.Window, _: f64, yoffset: f64) callconv(.c) v
                     r.start_row += delta;
                     r.end_row += delta;
                 }
-                const pos = app.window.handle.getCursorPos();
+                const pos = app.cursorPos();
                 const input = @import("input.zig");
                 input.extendTextSelectionAtCursor(app, pos[0], pos[1]);
             }
@@ -224,7 +224,7 @@ pub fn mouseButtonCallback(handle: *glfw.Window, button: glfw.MouseButton, actio
 
     if (app.getFocusedPaneData()) |pd| {
         if (isMouseForwardingActive(pd)) {
-            const pos = app.window.handle.getCursorPos();
+            const pos = app.cursorPos();
             const fb_x: i32 = @intFromFloat(pos[0]);
             const fb_y: i32 = @intFromFloat(pos[1]);
             if (pixelToCell(app, fb_x, fb_y)) |cell| {
@@ -257,6 +257,7 @@ pub fn mouseButtonCallback(handle: *glfw.Window, button: glfw.MouseButton, actio
 
 pub fn cursorPosCallback(handle: *glfw.Window, xpos: f64, ypos: f64) callconv(.c) void {
     const app = Window.getUserPointer(App, handle) orelse return;
+    app.last_cursor_pos = .{ xpos, ypos };
     app.handleCursorPos(xpos, ypos);
 }
 

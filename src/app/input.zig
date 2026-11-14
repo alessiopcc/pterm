@@ -232,16 +232,10 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
             self.window_resize_edge = .{};
         }
         if (self.window_drag_active) {
-            // If released without moving, treat as a tab click
-            if (!self.window_drag_moved) {
-                if (self.window_drag_tab_hit) |idx| {
-                    self.switchToTab(idx);
-                    self.requestFrame();
-                }
-            }
             self.window_drag_active = false;
+            // A drag is not the first click of a double-click.
+            if (self.window_drag_moved) self.titlebar_last_click_time = 0;
             self.window_drag_moved = false;
-            self.window_drag_tab_hit = null;
         }
         if (self.border_drag_active) {
             self.border_drag_active = false;
@@ -272,7 +266,7 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
 
     // GLFW on Windows reports cursor positions in the same space as the
     // framebuffer (already DPI-scaled). No multiplication needed.
-    const pos = self.window.handle.getCursorPos();
+    const pos = self.cursorPos();
     const fb_x: i32 = @intFromFloat(pos[0]);
     const fb_y: i32 = @intFromFloat(pos[1]);
     const win_x = fb_x;
@@ -319,7 +313,17 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
             self.chrome_cell_height,
             fb.width,
         );
+        // Every press that is not a title-bar click ends a double-click.
+        const is_title_click = hit == .drag_region and
+            fb_y < @as(i32, @intCast(TabBarRenderer.titleBarHeight(self.chrome_cell_height)));
+        if (!is_title_click) self.titlebar_last_click_time = 0;
+
         switch (hit) {
+            .tab => |idx| {
+                // Tabs switch on press and never move the window.
+                self.switchToTab(idx);
+                self.requestFrame();
+            },
             .close_tab => |idx| {
                 actions.requestCloseTab(self, idx);
             },
@@ -337,37 +341,36 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
             .window_maximize => self.window.toggleMaximize(),
             .window_close => self.window.requestClose(),
             else => {
-                // Double-click on title bar area -> maximize/restore.
-                // Only the title-bar row qualifies; the tab-bar row (tabs +
-                // empty space between them) must not trigger maximize.
-                const title_h: i32 = @intCast(TabBarRenderer.titleBarHeight(self.chrome_cell_height));
-                if (fb_y < title_h) {
-                    const now = pio.nanoTimestamp();
-                    const elapsed_ns = now - self.titlebar_last_click_time;
-                    self.titlebar_last_click_time = now;
-                    if (elapsed_ns > 0 and elapsed_ns < 400_000_000) { // 400ms threshold
-                        self.window.toggleMaximize();
-                        self.titlebar_last_click_time = 0; // Reset to prevent triple-click trigger
-                        return;
-                    }
-                } else {
-                    // Reset so a click on the title bar after a tab click
-                    // doesn't accidentally satisfy the double-click window.
-                    self.titlebar_last_click_time = 0;
+                // Only the title row drags the window or double-clicks to
+                // maximize; leftover space in the tab row does nothing.
+                if (!is_title_click) return;
+
+                // Double-click: second press soon after and near the first.
+                const now = pio.nanoTimestamp();
+                const elapsed_ns = now - self.titlebar_last_click_time;
+                const slop = utils.dragThreshold(self);
+                const near = @abs(fb_x - self.titlebar_last_click_x) <= slop and
+                    @abs(fb_y - self.titlebar_last_click_y) <= slop;
+                if (self.titlebar_last_click_time != 0 and elapsed_ns > 0 and elapsed_ns < 500_000_000 and near) {
+                    self.titlebar_last_click_time = 0; // no triple-click
+                    self.window.toggleMaximize();
+                    return;
+                }
+                self.titlebar_last_click_time = now;
+                self.titlebar_last_click_x = fb_x;
+                self.titlebar_last_click_y = fb_y;
+
+                // Windows: the OS runs the drag (snap, restore from
+                // maximized) and returns on release.
+                if (self.window.nativeMove()) |moved| {
+                    if (moved) self.titlebar_last_click_time = 0;
+                    return;
                 }
 
-                // Tab clicks, drag region, empty space — all start a drag.
-                // If released without movement, treat as tab click (see release handler).
+                // Elsewhere: move by hand once the cursor passes the
+                // threshold (see handleCursorPos).
                 self.window_drag_active = true;
                 self.window_drag_moved = false;
-                self.window_drag_tab_hit = switch (hit) {
-                    .tab => |idx| @as(?usize, idx),
-                    else => null,
-                };
-
-                // Don't restore here — clicking a tab on a maximized window
-                // would unmaximize before release recognizes the tab click.
-                // The cursor-move handler restores on the first real drag.
                 const wpos = self.window.getPos();
                 self.window_drag_screen_x = wpos.x + win_x;
                 self.window_drag_screen_y = wpos.y + win_y;
@@ -728,7 +731,11 @@ pub fn handleCursorPos(self: *App, xpos: f64, ypos: f64) void {
         const screen_y: i32 = wpos.y + @as(i32, @intFromFloat(ypos));
         const dx = screen_x - self.window_drag_screen_x;
         const dy = screen_y - self.window_drag_screen_y;
-        if (dx != 0 or dy != 0) {
+        // A click wobbles a pixel or two; only a real drag moves the window
+        // (and restores it from maximized).
+        const slop = utils.dragThreshold(self);
+        const started = self.window_drag_moved or @abs(dx) > slop or @abs(dy) > slop;
+        if (started and (dx != 0 or dy != 0)) {
             // First real movement on a maximized window: restore to floating
             // and reposition so the cursor stays on the title bar.
             if (!self.window_drag_moved and self.window.isMaximized()) {
@@ -827,9 +834,7 @@ pub fn handleCursorPos(self: *App, xpos: f64, ypos: f64) void {
             if (edge.left or edge.right) break :blk .resize_ew;
             break :blk .resize_ns;
         };
-        if (glfw.Cursor.createStandard(shape)) |cursor| {
-            self.window.handle.setCursor(cursor);
-        } else |_| {}
+        if (standardCursor(shape)) |cursor| self.window.handle.setCursor(cursor);
         return;
     }
 
@@ -842,9 +847,7 @@ pub fn handleCursorPos(self: *App, xpos: f64, ypos: f64) void {
         findBorderAtPoint(active_tab.root, fb_x, fb_y);
     if (border_hit) |border_info| {
         const shape: glfw.Cursor.Shape = if (border_info.is_vertical) .resize_ew else .resize_ns;
-        if (glfw.Cursor.createStandard(shape)) |cursor| {
-            self.window.handle.setCursor(cursor);
-        } else |_| {}
+        if (standardCursor(shape)) |cursor| self.window.handle.setCursor(cursor);
     } else {
         // URL hover detection + pointing hand cursor
         if (self.config.url.enabled) {
@@ -911,6 +914,22 @@ pub fn handleCursorPos(self: *App, xpos: f64, ypos: f64) void {
         }
         self.window.handle.setCursor(null); // Default arrow
     }
+}
+
+/// Resize cursors, created once. Creating one per mouse move leaked a cursor
+/// on every event. GLFW frees them all at terminate.
+var resize_cursors: [4]?*glfw.Cursor = .{ null, null, null, null };
+
+fn standardCursor(shape: glfw.Cursor.Shape) ?*glfw.Cursor {
+    const slot: usize = switch (shape) {
+        .resize_ew => 0,
+        .resize_ns => 1,
+        .resize_nwse => 2,
+        .resize_nesw => 3,
+        else => return glfw.Cursor.createStandard(shape) catch null,
+    };
+    if (resize_cursors[slot] == null) resize_cursors[slot] = glfw.Cursor.createStandard(shape) catch null;
+    return resize_cursors[slot];
 }
 
 /// Handle key input when search is open. Intercepts all keys.

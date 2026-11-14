@@ -194,6 +194,26 @@ pub const Window = struct {
         self.handle.setPos(x, y);
     }
 
+    /// Windows: let the OS move the window, as if the title bar were native
+    /// (Aero Snap, drag-down to restore from maximized, drag threshold).
+    /// Blocks until the button is released. Returns whether the window
+    /// moved, or null on other platforms (the caller moves it by hand).
+    pub fn nativeMove(self: *Window) ?bool {
+        if (comptime builtin.os.tag != .windows) return null;
+        const hwnd = glfw.getWin32Window(self.handle) orelse return null;
+        const before = self.getPos();
+        _ = win32.ReleaseCapture();
+        _ = win32.SendMessageW(hwnd, win32.WM_NCLBUTTONDOWN, win32.HTCAPTION, 0);
+        // The OS move loop ate the button-up: post one so GLFW's own
+        // button state (and its mouse capture) is released too.
+        const pos = self.handle.getCursorPos();
+        const x: u32 = @bitCast(@as(i32, @intFromFloat(pos[0])));
+        const y: u32 = @bitCast(@as(i32, @intFromFloat(pos[1])));
+        _ = win32.PostMessageW(hwnd, win32.WM_LBUTTONUP, 0, @intCast((x & 0xFFFF) | ((y & 0xFFFF) << 16)));
+        const after = self.getPos();
+        return before.x != after.x or before.y != after.y;
+    }
+
     /// Check if the window is maximized.
     pub fn isMaximized(self: *const Window) bool {
         return self.handle.getAttribute(.maximized);
@@ -220,4 +240,10 @@ const win32 = if (builtin.os.tag == .windows) struct {
     extern "user32" fn GetWindowLongPtrW(hWnd: HWND, nIndex: i32) callconv(.c) isize;
     extern "user32" fn SetWindowLongPtrW(hWnd: HWND, nIndex: i32, dwNewLong: isize) callconv(.c) isize;
     extern "user32" fn SetWindowPos(hWnd: HWND, hWndInsertAfter: ?HWND, x: i32, y: i32, cx: i32, cy: i32, uFlags: u32) callconv(.c) i32;
+    const WM_NCLBUTTONDOWN: u32 = 0x00A1;
+    const WM_LBUTTONUP: u32 = 0x0202;
+    const HTCAPTION: usize = 2;
+    extern "user32" fn ReleaseCapture() callconv(.c) i32;
+    extern "user32" fn SendMessageW(hWnd: HWND, msg: u32, wParam: usize, lParam: isize) callconv(.c) isize;
+    extern "user32" fn PostMessageW(hWnd: HWND, msg: u32, wParam: usize, lParam: isize) callconv(.c) i32;
 } else struct {};
