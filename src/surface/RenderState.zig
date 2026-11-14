@@ -224,6 +224,16 @@ pub fn snapshotCells(
     };
 }
 
+/// A frame copied out of the terminal by `snapshotCells`.
+pub const Snapshot = @typeInfo(@typeInfo(@TypeOf(snapshotCells)).@"fn".return_type.?).error_union.payload;
+
+/// Copy a snapshot, cells included, into `allocator`.
+pub fn cloneSnapshot(allocator: std.mem.Allocator, snap: Snapshot) !Snapshot {
+    var copy = snap;
+    copy.cells = try allocator.dupe(CellSnapshot, snap.cells);
+    return copy;
+}
+
 /// Pass 2: Build CellInstance arrays from snapshot. Call WITHOUT the mutex.
 /// Shapes text through HarfBuzz for ligature support, with dirty-row caching.
 /// Accepts an optional RendererPalette for config-driven cursor and background colors.

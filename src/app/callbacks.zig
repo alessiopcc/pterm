@@ -24,6 +24,7 @@ const FileWatcher = watcher_mod.FileWatcher;
 const mouse = @import("mouse");
 const layout_mod = @import("layout");
 const tree_ops = layout_mod.tree_ops;
+const render_state = @import("render_state");
 
 /// Check if the focused pane's terminal has SGR mouse forwarding active.
 /// Must be called without the terminal lock held.
@@ -352,6 +353,30 @@ pub fn wireObserver(pd: *PaneData, protocol: bool) void {
     obs.onNotification = if (protocol) agentNotificationCallback else null;
     obs.onPromptStart = if (protocol) agentPromptStartCallback else null;
     obs.onTitle = if (protocol) agentTitleCallback else null;
+    obs.onRenderHold = renderHoldCallback;
+    obs.hold_ctx = @ptrCast(pd);
+}
+
+/// Synchronized output began or ended, from the parse thread with the
+/// terminal mutex held. On begin, copy the finished frame so the renderer
+/// shows it, not the redraw in progress. Without this a program that
+/// clears the screen and reprints its history is seen scrolling from the top.
+pub fn renderHoldCallback(ctx: ?*anyopaque, held: bool) void {
+    const pd: *PaneData = @ptrCast(@alignCast(ctx orelse return));
+    const app = g_screen_change_app orelse return;
+    pd.releaseHeldFrame();
+    if (held) {
+        const snap = render_state.snapshotCells(
+            app.allocator,
+            pd.termio.terminal,
+            &app.renderer_palette,
+            pd.scroll_offset,
+        ) catch return;
+        pd.held_frame = snap;
+        pd.held_alloc = app.allocator;
+        pd.held_since_ns = @truncate(pio.nanoTimestamp());
+    }
+    app.requestFrame();
 }
 
 /// Per-pane screen change callback.

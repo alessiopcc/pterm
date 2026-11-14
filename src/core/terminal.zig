@@ -94,6 +94,12 @@ pub const PTermTerminal = struct {
         }
         if (self.observer.onPromptStart != null) handler.effects.semantic_prompt = &effectSemanticPrompt;
         if (self.observer.onTitle != null) handler.effects.title_changed = &effectTitleChanged;
+        if (self.observer.onRenderHold != null) handler.effects.render_hold = &effectRenderHold;
+    }
+
+    fn effectRenderHold(handler: *Handler, held: bool) void {
+        const self = fromHandler(handler);
+        if (self.observer.onRenderHold) |cb| cb(self.observer.hold_ctx, held);
     }
 
     fn effectTitleChanged(handler: *Handler) void {
@@ -192,7 +198,12 @@ pub const PTermTerminal = struct {
     }
 
     /// Resize the terminal.
+    /// A resize ends synchronized output, as the program redraws for the new size.
     pub fn resize(self: *PTermTerminal, cols: u16, rows: u16) !void {
+        if (self.terminal.modes.get(.synchronized_output)) {
+            self.terminal.modes.set(.synchronized_output, false);
+            if (self.observer.onRenderHold) |cb| cb(self.observer.hold_ctx, false);
+        }
         try self.terminal.resize(self.allocator, .{ .cols = cols, .rows = rows });
         self.config.cols = cols;
         self.config.rows = rows;
