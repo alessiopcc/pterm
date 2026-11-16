@@ -691,11 +691,22 @@ pub const Surface = struct {
     /// text in \e[200~ ... \e[201~ so the shell treats it as a single
     /// paste event rather than executing each line individually.
     pub fn pasteFromClipboard(self: *Surface) void {
-        const clip = glfw.getClipboardString(self.window.handle) orelse return;
+        const raw = glfw.getClipboardString(self.window.handle) orelse return;
 
         const snapshot = self.termio.lockTerminal();
         const bracketed = @constCast(snapshot).isBracketedPasteEnabled();
         self.termio.unlockTerminal();
+
+        // Inside a bracketed paste the text must not be able to end the
+        // paste early: a pasted "ESC[201~" would let the rest run as typed
+        // commands. Drop ESC and the C1 CSI (U+009B) from it.
+        var clean: std.ArrayList(u8) = .empty;
+        defer clean.deinit(self.allocator);
+        const clip: []const u8 = if (bracketed) blk: {
+            clean.ensureTotalCapacity(self.allocator, raw.len) catch return;
+            stripPasteEscapes(raw, &clean);
+            break :blk clean.items;
+        } else raw;
 
         if (bracketed) {
             self.termio.writeInput("\x1b[200~") catch {};
@@ -726,6 +737,20 @@ pub const Surface = struct {
         }
         self.scheduler.markActive();
         self.requestFrame();
+    }
+
+    /// Copy `text` into `out` (capacity >= text.len) without ESC bytes or
+    /// the UTF-8 encoding of U+009B.
+    fn stripPasteEscapes(text: []const u8, out: *std.ArrayList(u8)) void {
+        var i: usize = 0;
+        while (i < text.len) : (i += 1) {
+            if (text[i] == 0x1b) continue;
+            if (text[i] == 0xc2 and i + 1 < text.len and text[i + 1] == 0x9b) {
+                i += 1;
+                continue;
+            }
+            out.appendAssumeCapacity(text[i]);
+        }
     }
 
     /// Change font size by delta points.
