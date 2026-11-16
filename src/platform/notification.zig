@@ -113,10 +113,14 @@ fn sendMacOS(title: []const u8, body: []const u8, play_sound: bool) void {
         "display notification (item 1 of argv) with title (item 2 of argv)";
     const argv = [_][]const u8{
         "/usr/bin/osascript",
-        "-e", "on run argv",
-        "-e", display,
-        "-e", "end run",
-        body,  title,
+        "-e",
+        "on run argv",
+        "-e",
+        display,
+        "-e",
+        "end run",
+        body,
+        title,
     };
 
     _ = std.process.spawn(pio.io, .{ .argv = &argv }) catch return;

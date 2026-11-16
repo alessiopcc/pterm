@@ -350,7 +350,10 @@ pub fn buildFromSnapshot(
                 if (c[row].text_cells.len > 0) cache_alloc.free(c[row].text_cells);
                 if (c[row].bg_cells.len > 0) cache_alloc.free(c[row].bg_cells);
                 if (c[row].block_cells.len > 0) cache_alloc.free(c[row].block_cells);
-                c[row] = .{ .hash = row_hash, .text_cells = new_text, .bg_cells = new_bg, .block_cells = new_block };
+                // A full buffer means this row's output may have been cut off;
+                // hash 0 keeps the partial result from being reused.
+                const truncated = text_count == text_cells.len or bg_count == bg_cells.len or block_count == block_cells.len;
+                c[row] = .{ .hash = if (truncated) 0 else row_hash, .text_cells = new_text, .bg_cells = new_bg, .block_cells = new_block };
             }
         }
     }
