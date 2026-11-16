@@ -210,7 +210,7 @@ fn parseOnePreset(allocator: std.mem.Allocator, content: []const u8, name: []con
             } else if (std.mem.eql(u8, key, "split")) {
                 current_pane.split = parseSplitDirection(value) orelse return error.InvalidSplitDirection;
             } else if (std.mem.eql(u8, key, "ratio")) {
-                current_pane.ratio = std.fmt.parseFloat(f32, value) catch 0.5;
+                current_pane.ratio = clampRatio(std.fmt.parseFloat(f32, value) catch 0.5);
             } else if (std.mem.eql(u8, key, "shell")) {
                 current_pane.shell = allocator.dupe(u8, value) catch return error.OutOfMemory;
             } else if (std.mem.eql(u8, key, "shell_args")) {
@@ -639,4 +639,18 @@ test "parseInlineStringArray: non-array returns null" {
     const alloc = std.testing.allocator;
     const result = try parseInlineStringArray(alloc, "not an array");
     try std.testing.expect(result == null);
+}
+
+/// A split ratio the layout can use: NaN, 0, 1 or beyond would give a pane
+/// no size or overflow the split arithmetic.
+fn clampRatio(r: f32) f32 {
+    if (std.math.isNan(r)) return 0.5;
+    return std.math.clamp(r, 0.05, 0.95);
+}
+
+test "clampRatio keeps ratios inside the pane range" {
+    try std.testing.expectEqual(@as(f32, 0.5), clampRatio(std.math.nan(f32)));
+    try std.testing.expectEqual(@as(f32, 0.95), clampRatio(3.0));
+    try std.testing.expectEqual(@as(f32, 0.05), clampRatio(-1.0));
+    try std.testing.expectEqual(@as(f32, 0.3), clampRatio(0.3));
 }

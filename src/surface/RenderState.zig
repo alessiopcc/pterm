@@ -286,6 +286,7 @@ pub fn buildFromSnapshot(
     const rows = snap.rows;
     const metrics = font_grid.getMetrics();
     const total: usize = @as(usize, cols) * @as(usize, rows);
+    const default_bg = if (pal) |p| p.default_bg else palette.default_bg;
 
     // Per-pane row cache: invalidate on grid resize.
     if (pane_cache) |rc| {
@@ -326,23 +327,20 @@ pub fn buildFromSnapshot(
 
         if (can_reuse) {
             for (cache.?[row].text_cells) |ci| {
-                text_cells[text_count] = ci;
-                text_count += 1;
+                push(text_cells, &text_count, ci);
             }
             for (cache.?[row].bg_cells) |ci| {
-                bg_cells[bg_count] = ci;
-                bg_count += 1;
+                push(bg_cells, &bg_count, ci);
             }
             for (cache.?[row].block_cells) |ci| {
-                block_cells[block_count] = ci;
-                block_count += 1;
+                push(block_cells, &block_count, ci);
             }
         } else {
             const t_start = text_count;
             const b_start = bg_count;
             const blk_start = block_count;
 
-            shapeRowInto(row_cells, row, cols, snap.cursor_col, cursor_on, font_grid, shaper, &metrics, text_cells, &text_count, bg_cells, &bg_count, block_cells, &block_count);
+            shapeRowInto(row_cells, row, cols, snap.cursor_col, cursor_on, font_grid, shaper, &metrics, text_cells, &text_count, bg_cells, &bg_count, block_cells, &block_count, default_bg);
 
             // Persist this row's output in the per-pane cache (persistent allocator).
             if (cache) |c| {
@@ -396,6 +394,7 @@ fn shapeRowInto(
     bg_count: *usize,
     block_buf: []CellInstance,
     block_count: *usize,
+    default_bg: Color,
 ) void {
     var run_start: u16 = 0;
     while (run_start < cols) {
@@ -403,8 +402,8 @@ fn shapeRowInto(
 
         // Wide spacer: emit WIDE_CONTINUATION flag.
         if (cell0.wide_spacer) {
-            emitBg(cell0, run_start, row, bg_buf, bg_count);
-            text_buf[text_count.*] = CellInstance{
+            emitBg(cell0, run_start, row, bg_buf, bg_count, default_bg);
+            push(text_buf, text_count, CellInstance{
                 .grid_col = run_start,
                 .grid_row = row,
                 .atlas_x = 0,
@@ -416,15 +415,14 @@ fn shapeRowInto(
                 .fg_color = 0,
                 .bg_color = 0,
                 .flags = CellFlags.WIDE_CONTINUATION,
-            };
-            text_count.* += 1;
+            });
             run_start += 1;
             continue;
         }
 
         // Skip empty cells.
         if (cell0.grapheme_len == 0 or cell0.grapheme[0] == 0) {
-            emitBg(cell0, run_start, row, bg_buf, bg_count);
+            emitBg(cell0, run_start, row, bg_buf, bg_count, default_bg);
             run_start += 1;
             continue;
         }
@@ -452,7 +450,7 @@ fn shapeRowInto(
 
         // Emit backgrounds for all cells in the run.
         for (run_start..run_end) |ci| {
-            emitBg(row_cells[ci], @intCast(ci), row, bg_buf, bg_count);
+            emitBg(row_cells[ci], @intCast(ci), row, bg_buf, bg_count, default_bg);
         }
 
         // Resolve fg/bg for the run.
@@ -505,7 +503,7 @@ fn shapeRowInto(
                 // Block pass only supports BMP codepoints (atlas_x is u16).
                 if (c.grapheme[0] > 0xFFFF) continue;
                 const cp: u16 = @intCast(c.grapheme[0]);
-                block_buf[block_count.*] = CellInstance{
+                push(block_buf, block_count, CellInstance{
                     .grid_col = @intCast(ci),
                     .grid_row = row,
                     .atlas_x = cp, // codepoint for shader
@@ -517,8 +515,7 @@ fn shapeRowInto(
                     .fg_color = fg.toU32(),
                     .bg_color = bg.toU32(),
                     .flags = 0,
-                };
-                block_count.* += 1;
+                });
             }
             run_start = run_end;
             continue;
@@ -610,11 +607,12 @@ fn shapeRowInto(
                                 if (glyphs.len == 1 and glyphs[0].glyph_id != 0) {
                                     emoji_shaped = true;
 
-                                    // Emit backgrounds for all cells in the emoji sequence.
-                                    var bg_col: u16 = run_start;
+                                    // Backgrounds for sequence cells past the run
+                                    // (the run's own were emitted above).
+                                    var bg_col: u16 = run_end;
                                     while (bg_col < seq_end) : (bg_col += 1) {
                                         if (bg_col < cols) {
-                                            emitBg(row_cells[bg_col], bg_col, row, bg_buf, bg_count);
+                                            emitBg(row_cells[bg_col], bg_col, row, bg_buf, bg_count, default_bg);
                                         }
                                     }
 
@@ -634,7 +632,7 @@ fn shapeRowInto(
                                         if (glyph_result.is_color) CellFlags.COLOR_GLYPH else @as(u16, 0);
 
                                     const sby: i32 = @as(i32, @intFromFloat(metrics.ascender)) - glyph_result.bearing_y;
-                                    text_buf[text_count.*] = CellInstance{
+                                    push(text_buf, text_count, CellInstance{
                                         .grid_col = run_start,
                                         .grid_row = row,
                                         .atlas_x = glyph_result.region.x,
@@ -646,13 +644,12 @@ fn shapeRowInto(
                                         .fg_color = fg.toU32(),
                                         .bg_color = bg.toU32(),
                                         .flags = glyph_flags,
-                                    };
-                                    text_count.* += 1;
+                                    });
 
                                     // Emit WIDE_CONTINUATION for remaining columns.
                                     var cont_col: u16 = run_start + 1;
                                     while (cont_col < seq_end) : (cont_col += 1) {
-                                        text_buf[text_count.*] = CellInstance{
+                                        push(text_buf, text_count, CellInstance{
                                             .grid_col = cont_col,
                                             .grid_row = row,
                                             .atlas_x = 0,
@@ -664,8 +661,7 @@ fn shapeRowInto(
                                             .fg_color = 0,
                                             .bg_color = 0,
                                             .flags = CellFlags.WIDE_CONTINUATION,
-                                        };
-                                        text_count.* += 1;
+                                        });
                                     }
 
                                     // Skip past the entire emoji sequence.
@@ -695,17 +691,18 @@ fn shapeRowInto(
                             if (cached) |entry| {
                                 emoji_shaped = true;
 
-                                // Emit backgrounds for all cells in the emoji sequence.
-                                var bg_col: u16 = run_start;
+                                // Backgrounds for sequence cells past the run
+                                // (the run's own were emitted above).
+                                var bg_col: u16 = run_end;
                                 while (bg_col < seq_end) : (bg_col += 1) {
                                     if (bg_col < cols) {
-                                        emitBg(row_cells[bg_col], bg_col, row, bg_buf, bg_count);
+                                        emitBg(row_cells[bg_col], bg_col, row, bg_buf, bg_count, default_bg);
                                     }
                                 }
 
                                 const glyph_flags: u16 = CellFlags.COLOR_GLYPH | CellFlags.WIDE_CHAR;
                                 const sby: i32 = @as(i32, @intFromFloat(metrics.ascender)) - entry.bearing_y;
-                                text_buf[text_count.*] = CellInstance{
+                                push(text_buf, text_count, CellInstance{
                                     .grid_col = run_start,
                                     .grid_row = row,
                                     .atlas_x = entry.region.x,
@@ -717,13 +714,12 @@ fn shapeRowInto(
                                     .fg_color = fg.toU32(),
                                     .bg_color = bg.toU32(),
                                     .flags = glyph_flags,
-                                };
-                                text_count.* += 1;
+                                });
 
                                 // Emit WIDE_CONTINUATION for remaining columns.
                                 var cont_col: u16 = run_start + 1;
                                 while (cont_col < seq_end) : (cont_col += 1) {
-                                    text_buf[text_count.*] = CellInstance{
+                                    push(text_buf, text_count, CellInstance{
                                         .grid_col = cont_col,
                                         .grid_row = row,
                                         .atlas_x = 0,
@@ -735,8 +731,7 @@ fn shapeRowInto(
                                         .fg_color = 0,
                                         .bg_color = 0,
                                         .flags = CellFlags.WIDE_CONTINUATION,
-                                    };
-                                    text_count.* += 1;
+                                    });
                                 }
 
                                 run_start = seq_end;
@@ -769,7 +764,7 @@ fn shapeRowInto(
                     else
                         font_grid.getGlyph(cp) catch continue;
                     const sby: i32 = @as(i32, @intFromFloat(metrics.ascender)) - gr.bearing_y;
-                    text_buf[text_count.*] = CellInstance{
+                    push(text_buf, text_count, CellInstance{
                         .grid_col = @intCast(ci),
                         .grid_row = row,
                         .atlas_x = gr.region.x,
@@ -781,8 +776,7 @@ fn shapeRowInto(
                         .fg_color = fg.toU32(),
                         .bg_color = bg.toU32(),
                         .flags = per_cp_flags,
-                    };
-                    text_count.* += 1;
+                    });
                 }
             }
         } else {
@@ -816,7 +810,7 @@ fn shapeRowInto(
                         font_grid.getGlyphByID(0, glyph.glyph_id, false) catch {
                             const fallback = font_grid.getGlyph(cp) catch continue;
                             const sby: i32 = @as(i32, @intFromFloat(metrics.ascender)) - fallback.bearing_y;
-                            text_buf[text_count.*] = CellInstance{
+                            push(text_buf, text_count, CellInstance{
                                 .grid_col = glyph_col,
                                 .grid_row = row,
                                 .atlas_x = fallback.region.x,
@@ -828,13 +822,12 @@ fn shapeRowInto(
                                 .fg_color = fg.toU32(),
                                 .bg_color = bg.toU32(),
                                 .flags = flags,
-                            };
-                            text_count.* += 1;
+                            });
                             continue;
                         };
 
                     const sby: i32 = @as(i32, @intFromFloat(metrics.ascender)) - glyph_result.bearing_y;
-                    text_buf[text_count.*] = CellInstance{
+                    push(text_buf, text_count, CellInstance{
                         .grid_col = glyph_col,
                         .grid_row = row,
                         .atlas_x = glyph_result.region.x,
@@ -846,14 +839,13 @@ fn shapeRowInto(
                         .fg_color = fg.toU32(),
                         .bg_color = bg.toU32(),
                         .flags = flags,
-                    };
-                    text_count.* += 1;
+                    });
 
                     // Emit LIGATURE_CONTINUATION for columns covered by multi-char glyph.
                     if (glyph.num_chars > 1) {
                         var cont: u16 = 1;
                         while (cont < glyph.num_chars and glyph_col + cont < run_end) : (cont += 1) {
-                            text_buf[text_count.*] = CellInstance{
+                            push(text_buf, text_count, CellInstance{
                                 .grid_col = glyph_col + cont,
                                 .grid_row = row,
                                 .atlas_x = 0,
@@ -865,8 +857,7 @@ fn shapeRowInto(
                                 .fg_color = 0,
                                 .bg_color = 0,
                                 .flags = CellFlags.LIGATURE_CONTINUATION,
-                            };
-                            text_count.* += 1;
+                            });
                         }
                     }
                 }
@@ -877,7 +868,7 @@ fn shapeRowInto(
                     if (c.grapheme_len > 0 and c.grapheme[0] > 0 and c.grapheme[0] != ' ' and !c.wide_spacer) {
                         const gr = font_grid.getGlyph(c.grapheme[0]) catch continue;
                         const sby: i32 = @as(i32, @intFromFloat(metrics.ascender)) - gr.bearing_y;
-                        text_buf[text_count.*] = CellInstance{
+                        push(text_buf, text_count, CellInstance{
                             .grid_col = @intCast(ci),
                             .grid_row = row,
                             .atlas_x = gr.region.x,
@@ -889,8 +880,7 @@ fn shapeRowInto(
                             .fg_color = fg.toU32(),
                             .bg_color = bg.toU32(),
                             .flags = 0,
-                        };
-                        text_count.* += 1;
+                        });
                     }
                 }
             }
@@ -901,17 +891,17 @@ fn shapeRowInto(
 }
 
 /// Emit a background CellInstance for non-default backgrounds.
-fn emitBg(cell: CellSnapshot, col: u16, row: u16, buf: []CellInstance, count: *usize) void {
+fn emitBg(cell: CellSnapshot, col: u16, row: u16, buf: []CellInstance, count: *usize, default_bg: Color) void {
     var bg = cell.bg;
     if (cell.inverse) {
         bg = cell.fg;
     }
     // Compare against the default bg that was used during snapshot
-    // (already resolved from config palette in snapshotCells)
-    if (!bg.eql(palette.default_bg) and bg.a > 0) {
+    // (the theme's, resolved in snapshotCells): that one is the clear color.
+    if (!bg.eql(default_bg) and bg.a > 0) {
         var fg = cell.fg;
         if (cell.inverse) fg = cell.bg;
-        buf[count.*] = CellInstance{
+        push(buf, count, CellInstance{
             .grid_col = col,
             .grid_row = row,
             .atlas_x = 0,
@@ -923,9 +913,16 @@ fn emitBg(cell: CellSnapshot, col: u16, row: u16, buf: []CellInstance, count: *u
             .fg_color = fg.toU32(),
             .bg_color = bg.toU32(),
             .flags = 0,
-        };
-        count.* += 1;
+        });
     }
+}
+
+/// Append `ci` to `buf` unless it is full. A full buffer drops the instance
+/// (a missing glyph) rather than writing past the end.
+fn push(buf: []CellInstance, count: *usize, ci: CellInstance) void {
+    if (count.* >= buf.len) return;
+    buf[count.*] = ci;
+    count.* += 1;
 }
 
 /// Compute a hash of a row's cell content for dirty detection.

@@ -104,25 +104,22 @@ fn sendWindows(title: []const u8, body: []const u8, play_sound: bool) void {
 }
 
 /// macOS: osascript display notification.
+/// Title and body go in as script arguments, never into the script text, so
+/// quotes in them (a window title, an agent message) can't inject AppleScript.
 fn sendMacOS(title: []const u8, body: []const u8, play_sound: bool) void {
-    var script_buf: [512]u8 = undefined;
-    var script_writer: std.Io.Writer = .fixed(&script_buf);
-    const sw = &script_writer;
+    const display = if (play_sound)
+        "display notification (item 1 of argv) with title (item 2 of argv) sound name \"default\""
+    else
+        "display notification (item 1 of argv) with title (item 2 of argv)";
+    const argv = [_][]const u8{
+        "/usr/bin/osascript",
+        "-e", "on run argv",
+        "-e", display,
+        "-e", "end run",
+        body,  title,
+    };
 
-    if (play_sound) {
-        sw.print("display notification \"{s}\" with title \"{s}\" sound name \"default\"", .{ body, title }) catch return;
-    } else {
-        sw.print("display notification \"{s}\" with title \"{s}\"", .{ body, title }) catch return;
-    }
-
-    const script_slice = script_writer.buffered();
-
-    var argv_buf: [4][]const u8 = undefined;
-    argv_buf[0] = "/usr/bin/osascript";
-    argv_buf[1] = "-e";
-    argv_buf[2] = script_slice;
-
-    _ = std.process.spawn(pio.io, .{ .argv = argv_buf[0..3] }) catch return;
+    _ = std.process.spawn(pio.io, .{ .argv = &argv }) catch return;
     // Fire and forget
 }
 

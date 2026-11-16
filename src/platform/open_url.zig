@@ -65,6 +65,8 @@ pub fn openUrl(url: []const u8) void {
 
     if (builtin.os.tag == .windows) {
         var wbuf: [4096]u16 = undefined;
+        // utf8ToUtf16Le doesn't check the output length.
+        if (url.len >= wbuf.len) return;
         const n = std.unicode.utf8ToUtf16Le(wbuf[0 .. wbuf.len - 1], url) catch return;
         wbuf[n] = 0;
         const open_w = std.unicode.utf8ToUtf16LeStringLiteral("open");

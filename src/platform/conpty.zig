@@ -296,6 +296,9 @@ pub const ConPty = struct {
         // Convert shell path from UTF-8 to UTF-16 for CreateProcessW
         var cmd_line_buf: [2048]u16 = undefined;
         const shell_slice = std.mem.span(shell_path);
+        // utf8ToUtf16Le doesn't check the output length; a UTF-8 string never
+        // needs more UTF-16 units than it has bytes.
+        if (shell_slice.len >= cmd_line_buf.len) return ConPtyError.CreateProcessFailed;
         var pos: usize = std.unicode.utf8ToUtf16Le(&cmd_line_buf, shell_slice) catch return ConPtyError.CreateProcessFailed;
         // Append args if present
         if (args) |arg_list| {
@@ -306,7 +309,9 @@ pub const ConPty = struct {
                 cmd_line_buf[pos] = ' ';
                 pos += 1;
                 const arg_slice = std.mem.span(arg);
-                const written = std.unicode.utf8ToUtf16Le(cmd_line_buf[pos..], arg_slice) catch break;
+                // Leave the last unit for the terminating NUL.
+                if (arg_slice.len > cmd_line_buf.len - 1 - pos) break;
+                const written = std.unicode.utf8ToUtf16Le(cmd_line_buf[pos .. cmd_line_buf.len - 1], arg_slice) catch break;
                 pos += written;
             }
         }
@@ -318,7 +323,12 @@ pub const ConPty = struct {
         _ = InitializeProcThreadAttributeList(null, 1, 0, &attr_list_size);
 
         const attr_buf = self.allocator.alloc(u8, attr_list_size) catch return ConPtyError.AllocFailed;
-        errdefer self.allocator.free(attr_buf);
+        // deinit frees attribute_list_buf, so a failed spawn must clear the
+        // field when it frees the buffer, or deinit frees it a second time.
+        errdefer {
+            self.allocator.free(attr_buf);
+            self.attribute_list_buf = null;
+        }
         self.attribute_list_buf = attr_buf;
 
         const attr_list: LPPROC_THREAD_ATTRIBUTE_LIST = @ptrCast(attr_buf.ptr);
@@ -359,6 +369,7 @@ pub const ConPty = struct {
         var wd_buf: [1024]u16 = undefined;
         const wd_ptr: ?[*:0]const u16 = if (working_dir) |wd| blk: {
             const wd_slice = std.mem.span(wd);
+            if (wd_slice.len >= wd_buf.len) break :blk null;
             const wd_len = std.unicode.utf8ToUtf16Le(&wd_buf, wd_slice) catch break :blk null;
             wd_buf[wd_len] = 0;
             break :blk wd_buf[0..wd_len :0];
@@ -530,8 +541,13 @@ pub const ConPty = struct {
             effective_len -= 1;
         }
 
-        // Convert UTF-16 to UTF-8
-        const utf8_len = std.unicode.utf16LeToUtf8(buf, wbuf[0..effective_len]) catch return null;
+        // Convert UTF-16 to UTF-8. utf16LeToUtf8 doesn't check the output
+        // length, so convert into a buffer sized for the worst case (3 bytes
+        // per unit) and copy only if it fits the caller's.
+        var u8buf: [wbuf.len * 3]u8 = undefined;
+        const utf8_len = std.unicode.utf16LeToUtf8(&u8buf, wbuf[0..effective_len]) catch return null;
+        if (utf8_len > buf.len) return null;
+        @memcpy(buf[0..utf8_len], u8buf[0..utf8_len]);
         return buf[0..utf8_len];
     }
 

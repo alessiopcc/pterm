@@ -394,6 +394,26 @@ pub const OpenGLBackend = struct {
     /// Draw a complete frame from a RenderState snapshot.
     /// Four-pass pipeline: backgrounds, text, block elements, cursor.
     /// Accepts an optional background color for clear; uses default palette if null.
+    /// Upload and draw `cells` in chunks of at most `max_cells`, the size of
+    /// each instance VBO, so a large grid can't write past the buffer.
+    fn drawInstances(self: *OpenGLBackend, vbo: gl.uint, cells: []const CellInstance) void {
+        gl.BindBuffer(gl.ARRAY_BUFFER, vbo);
+        setupInstanceAttributes(vbo);
+        var start: usize = 0;
+        while (start < cells.len) {
+            const n = @min(cells.len - start, max_cells);
+            gl.BufferSubData(
+                gl.ARRAY_BUFFER,
+                0,
+                @intCast(n * @sizeOf(CellInstance)),
+                @ptrCast(cells[start..].ptr),
+            );
+            gl.DrawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, @intCast(n));
+            self.diag.draw_calls += 1;
+            start += n;
+        }
+    }
+
     pub fn drawFrame(self: *OpenGLBackend, state: *const types.RenderState, bg_color: ?Color) void {
         const start_ns = pio.nanoTimestamp();
 
@@ -427,16 +447,7 @@ pub const OpenGLBackend = struct {
 
             const bg_count = state.bg_cells.len;
             if (bg_count > 0) {
-                gl.BindBuffer(gl.ARRAY_BUFFER, self.bg_instance_vbo);
-                gl.BufferSubData(
-                    gl.ARRAY_BUFFER,
-                    0,
-                    @intCast(bg_count * @sizeOf(CellInstance)),
-                    @ptrCast(state.bg_cells.ptr),
-                );
-                setupInstanceAttributes(self.bg_instance_vbo);
-                gl.DrawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, @intCast(bg_count));
-                self.diag.draw_calls += 1;
+                self.drawInstances(self.bg_instance_vbo, state.bg_cells);
             }
         }
 
@@ -474,16 +485,7 @@ pub const OpenGLBackend = struct {
 
             const text_count = state.cells.len;
             if (text_count > 0) {
-                gl.BindBuffer(gl.ARRAY_BUFFER, self.text_instance_vbo);
-                gl.BufferSubData(
-                    gl.ARRAY_BUFFER,
-                    0,
-                    @intCast(text_count * @sizeOf(CellInstance)),
-                    @ptrCast(state.cells.ptr),
-                );
-                setupInstanceAttributes(self.text_instance_vbo);
-                gl.DrawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, @intCast(text_count));
-                self.diag.draw_calls += 1;
+                self.drawInstances(self.text_instance_vbo, state.cells);
             }
         }
 
@@ -500,16 +502,7 @@ pub const OpenGLBackend = struct {
                 gl.Enable(gl.BLEND);
                 gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-                gl.BindBuffer(gl.ARRAY_BUFFER, self.block_instance_vbo);
-                gl.BufferSubData(
-                    gl.ARRAY_BUFFER,
-                    0,
-                    @intCast(block_count * @sizeOf(CellInstance)),
-                    @ptrCast(state.block_cells.ptr),
-                );
-                setupInstanceAttributes(self.block_instance_vbo);
-                gl.DrawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, @intCast(block_count));
-                self.diag.draw_calls += 1;
+                self.drawInstances(self.block_instance_vbo, state.block_cells);
             }
         }
 

@@ -406,8 +406,9 @@ pub const Config = struct {
 
     /// Validate config values, clamping invalid ones to safe defaults.
     pub fn validate(self: *Config) void {
-        // Font size: must be in reasonable range
-        if (self.font.size <= 0.0 or self.font.size > max_font_size) {
+        // Font size: must be in reasonable range. The negated form also
+        // catches NaN, which fails every comparison.
+        if (!(self.font.size > 0.0 and self.font.size <= max_font_size)) {
             std.log.warn("Invalid font.size={d:.1}, resetting to default {d:.1}", .{ self.font.size, default_font_size });
             self.font.size = default_font_size;
         } else if (self.font.size < min_font_size) {
@@ -434,9 +435,15 @@ pub const Config = struct {
         }
 
         // Opacity: clamp to 0.0-1.0
-        if (self.window.opacity < 0.0 or self.window.opacity > 1.0) {
+        if (!(self.window.opacity >= 0.0 and self.window.opacity <= 1.0)) {
             std.log.warn("Invalid window.opacity={d:.2}, clamping to 0.0-1.0", .{self.window.opacity});
-            self.window.opacity = std.math.clamp(self.window.opacity, 0.0, 1.0);
+            self.window.opacity = if (std.math.isNan(self.window.opacity)) default_opacity else std.math.clamp(self.window.opacity, 0.0, 1.0);
+        }
+
+        // Padding: 0 to 200 pixels
+        if (!(self.window.padding >= 0.0 and self.window.padding <= 200.0)) {
+            std.log.warn("Invalid window.padding={d:.1}, resetting to default {d:.1}", .{ self.window.padding, default_padding });
+            self.window.padding = default_padding;
         }
 
         // Scrollback: must be positive
