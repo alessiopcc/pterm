@@ -79,8 +79,15 @@ pub const Tab = struct {
     }
 
     /// Get the count of panes in this tab.
+    /// The tree that holds every pane. While zoomed, `root` is a single-leaf
+    /// view and the real tree is in `zoom_saved_root`.
+    pub fn fullRoot(self: *const Tab) *PaneNode {
+        return self.zoom_saved_root orelse self.root;
+    }
+
+    /// Number of panes in the tab, including any hidden by zoom.
     pub fn paneCount(self: *Tab) usize {
-        const leaves = tree_ops.collectLeaves(self.root, self.allocator) catch return 1;
+        const leaves = tree_ops.collectLeaves(self.fullRoot(), self.allocator) catch return 1;
         defer self.allocator.free(leaves);
         return leaves.len;
     }
@@ -162,6 +169,20 @@ test "Tab.paneCount" {
 
     try std.testing.expectEqual(@as(usize, 1), tab.paneCount());
     _ = try tab.splitFocused(.vertical);
+    try std.testing.expectEqual(@as(usize, 2), tab.paneCount());
+}
+
+test "Tab.paneCount counts panes hidden by zoom" {
+    const alloc = std.testing.allocator;
+    var tab = try Tab.init(alloc);
+    defer tab.deinit();
+
+    _ = try tab.splitFocused(.vertical);
+    tab.zoom_saved_root = tab.root;
+    tab.root = try PaneTree.createLeaf(alloc, tab.focused_pane_id, null);
+    tab.is_zoomed = true;
+    try std.testing.expectEqual(@as(usize, 2), tab.paneCount());
+    tab.unzoom();
     try std.testing.expectEqual(@as(usize, 2), tab.paneCount());
 }
 

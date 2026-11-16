@@ -325,7 +325,8 @@ pub fn actionCloseTabByIndex(self: *App, idx: usize) void {
 
     const tab = self.tab_manager.getTab(idx) orelse return;
 
-    const leaves = tree_ops.collectLeaves(tab.root, self.allocator) catch return;
+    // fullRoot: a zoomed tab's other panes are hidden in zoom_saved_root.
+    const leaves = tree_ops.collectLeaves(tab.fullRoot(), self.allocator) catch return;
     defer self.allocator.free(leaves);
     for (leaves) |pane_id| {
         self.destroyPane(pane_id);
@@ -382,6 +383,12 @@ pub fn focusDirection(self: *App, direction: PaneTree.FocusDirection) void {
 /// Checks canSplit minimum before proceeding (UI-SPEC: 10x3).
 pub fn actionSplit(self: *App, direction: PaneTree.SplitDirection) void {
     const tab = self.tab_manager.getActiveTab() orelse return;
+    // Zoomed: split in the full tree. Splitting the single-leaf zoom view
+    // would put the new pane in a tree that unzoom throws away.
+    if (tab.is_zoomed) {
+        tab.unzoom();
+        resizeAllPanes(self);
+    }
     const leaf = tree_ops.findLeaf(tab.root, tab.focused_pane_id) orelse return;
     const metrics = self.font_grid.getMetrics();
 
@@ -516,9 +523,10 @@ pub fn actionZoomPane(self: *App) void {
     if (tab.is_zoomed) {
         tab.unzoom();
     } else {
-        // Zoom: save current root, create single-leaf root for focused pane
-        tab.zoom_saved_root = tab.root;
+        // Zoom: save current root, create single-leaf root for focused pane.
+        // Allocate first: a failure must leave the tab unzoomed.
         const new_root = PaneTree.createLeaf(self.allocator, tab.focused_pane_id, null) catch return;
+        tab.zoom_saved_root = tab.root;
         tab.root = new_root;
         tab.is_zoomed = true;
     }
@@ -1056,7 +1064,7 @@ pub fn activatePreset(self: *App, preset: *const LayoutPreset.LayoutPreset, repl
         self.tab_manager.agent_mode_active = false;
         self.tab_manager.agent_source = null;
         for (self.tab_manager.tabs.items) |*tab| {
-            const leaves = tree_ops.collectLeaves(tab.root, self.allocator) catch &.{};
+            const leaves = tree_ops.collectLeaves(tab.fullRoot(), self.allocator) catch &.{};
             defer if (leaves.len > 0) self.allocator.free(leaves);
             for (leaves) |pane_id| {
                 self.destroyPane(pane_id);
