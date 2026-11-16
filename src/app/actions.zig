@@ -386,6 +386,10 @@ pub fn actionSplit(self: *App, direction: PaneTree.SplitDirection) void {
     // Zoomed: split in the full tree. Splitting the single-leaf zoom view
     // would put the new pane in a tree that unzoom throws away.
     if (tab.is_zoomed) {
+        // unzoom frees the zoom tree: hold pane_mutex so the render thread
+        // isn't walking it.
+        self.pane_mutex.lock();
+        defer self.pane_mutex.unlock();
         tab.unzoom();
         resizeAllPanes(self);
     }

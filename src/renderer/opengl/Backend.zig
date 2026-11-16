@@ -401,7 +401,8 @@ pub const OpenGLBackend = struct {
         setupInstanceAttributes(vbo);
         var start: usize = 0;
         while (start < cells.len) {
-            const n = @min(cells.len - start, max_cells);
+            // usize: @min with the comptime max_cells would narrow to u15.
+            const n: usize = @min(cells.len - start, max_cells);
             gl.BufferSubData(
                 gl.ARRAY_BUFFER,
                 0,
