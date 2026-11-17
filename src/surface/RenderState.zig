@@ -683,10 +683,12 @@ fn shapeRowInto(
                         defer font_grid.allocator.free(bitmap.data);
 
                         if (bitmap.width > 0 and bitmap.height > 0) {
-                            // Insert into color atlas with a synthetic key.
+                            // Insert into color atlas with a synthetic key. The id
+                            // hashes the whole sequence: sequences that share a first
+                            // codepoint (🇺🇸 and 🇺🇦) would otherwise share a slot.
                             const atlas_key = font_types.GlyphKey{
                                 .font_index = 255, // synthetic font index for DWrite emoji
-                                .glyph_id = seq_cps[0], // use first codepoint as key discriminator
+                                .glyph_id = @truncate(std.hash.Wyhash.hash(0, std.mem.sliceAsBytes(seq_cps[0..seq_len]))),
                                 .size_px = @intFromFloat(@round(metrics.cell_height)),
                                 .is_glyph_index = true,
                             };
