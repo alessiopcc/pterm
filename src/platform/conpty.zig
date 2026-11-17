@@ -16,6 +16,7 @@
 // - https://learn.microsoft.com/en-us/windows/console/createpseudoconsole
 
 const std = @import("std");
+const win_args = @import("win_args.zig");
 const pio = @import("pio");
 const windows = std.os.windows;
 
@@ -293,26 +294,25 @@ pub const ConPty = struct {
 
     /// Spawn a child process attached to the ConPTY.
     pub fn spawn(self: *ConPty, shell_path: [*:0]const u8, args: ?[*:null]const ?[*:0]const u8, working_dir: ?[*:0]const u8) ConPtyError!void {
-        // Convert shell path from UTF-8 to UTF-16 for CreateProcessW
+        // Build the UTF-16 command line for CreateProcessW, quoting the shell
+        // path and each argument so a path like C:\Program Files\... stays
+        // one argument.
         var cmd_line_buf: [2048]u16 = undefined;
-        const shell_slice = std.mem.span(shell_path);
-        // utf8ToUtf16Le doesn't check the output length; a UTF-8 string never
-        // needs more UTF-16 units than it has bytes.
-        if (shell_slice.len >= cmd_line_buf.len) return ConPtyError.CreateProcessFailed;
-        var pos: usize = std.unicode.utf8ToUtf16Le(&cmd_line_buf, shell_slice) catch return ConPtyError.CreateProcessFailed;
+        var pos: usize = win_args.appendArg(&cmd_line_buf, 0, std.mem.span(shell_path)) catch
+            return ConPtyError.CreateProcessFailed;
         // Append args if present
         if (args) |arg_list| {
             var i: usize = 0;
             while (arg_list[i]) |arg| : (i += 1) {
                 if (i == 0) continue; // skip argv[0] (shell path already written)
-                if (pos >= cmd_line_buf.len - 1) break; // prevent overflow
+                if (pos + 1 >= cmd_line_buf.len) break; // keep room for NUL
                 cmd_line_buf[pos] = ' ';
                 pos += 1;
-                const arg_slice = std.mem.span(arg);
-                // Leave the last unit for the terminating NUL.
-                if (arg_slice.len > cmd_line_buf.len - 1 - pos) break;
-                const written = std.unicode.utf8ToUtf16Le(cmd_line_buf[pos .. cmd_line_buf.len - 1], arg_slice) catch break;
-                pos += written;
+                // An argument that doesn't fit is dropped with its space.
+                pos = win_args.appendArg(&cmd_line_buf, pos, std.mem.span(arg)) catch {
+                    pos -= 1;
+                    break;
+                };
             }
         }
         cmd_line_buf[pos] = 0;
