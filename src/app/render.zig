@@ -339,8 +339,19 @@ pub fn renderThreadMain(self: *App) void {
             // memory mid-iteration. Releasing between the two blocks let the
             // renderer walk freed Tab structs whose title_len was poisoned (0xAA).
             self.pane_mutex.lock();
-            for (self.tab_manager.tabs.items, 0..) |tab, ti| {
-                if (ti >= 64) break;
+            for (self.tab_manager.tabs.items, 0..) |*tab, ti| {
+                // Output since the last frame lights a background tab's
+                // activity dot (fullRoot: panes hidden by zoom count too).
+                const active_tab_idx = self.tab_manager.active_idx;
+                if (tree_ops.collectLeafInfos(tab.fullRoot(), self.frame_arena.allocator())) |all_infos| {
+                    for (all_infos) |info| {
+                        const pd = self.pane_data.get(info.pane_id) orelse continue;
+                        if (pd.activity_pending.swap(false, .acq_rel) and ti != active_tab_idx) {
+                            tab.has_activity = true;
+                        }
+                    }
+                } else |_| {}
+                if (ti >= 64) continue;
                 // Check if any pane in this tab has show_badge or agent state
                 const leaf_infos = tree_ops.collectLeafInfos(tab.root, self.frame_arena.allocator()) catch &.{};
                 for (leaf_infos) |info| {
@@ -820,6 +831,10 @@ pub fn renderThreadMain(self: *App) void {
 
             // Render preset picker overlay if visible
             if (self.preset_picker.visible) {
+                // The names live in the config, which a reload frees and
+                // replaces under pane_mutex.
+                self.pane_mutex.lock();
+                defer self.pane_mutex.unlock();
                 var name_ptrs: [64][]const u8 = undefined;
                 const name_count = @min(self.config.layouts.len, 64);
                 for (0..name_count) |i| {

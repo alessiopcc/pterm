@@ -132,6 +132,11 @@ pub const PaneData = struct {
     /// Per-pane bell state (per-pane flash + badge).
     bell_state: BellState = .{},
 
+    /// Set by the parse thread when the pane prints; the render thread moves
+    /// it to the tab's activity dot under `pane_mutex`. The parse thread
+    /// can't touch the tabs array: it may move while a tab is added.
+    activity_pending: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
     /// Per-pane agent monitoring state (independent per pane).
     agent_state: AgentState = .{},
 
