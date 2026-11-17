@@ -36,7 +36,8 @@ fn isAgentPane(self: *App, pd: *PaneData) bool {
 pub fn collectEntries(self: *App, alloc: std.mem.Allocator, preview_lines: usize) []Entry {
     var list: std.ArrayList(Entry) = .empty;
     for (self.tab_manager.tabs.items, 0..) |*tab, ti| {
-        const leaves = tree_ops.collectLeaves(tab.root, alloc) catch continue;
+        // fullRoot: agents in panes hidden by zoom are listed too.
+        const leaves = tree_ops.collectLeaves(tab.fullRoot(), alloc) catch continue;
         for (leaves) |pid| {
             const pd = self.pane_data.get(pid) orelse continue;
             if (!isAgentPane(self, pd)) continue;
@@ -232,9 +233,18 @@ pub fn toggleBoard(self: *App) void {
 pub fn focusPane(self: *App, pane_id: u32) void {
     if (self.tab_manager.agent_mode_active) actions.exitAgentMode(self);
     for (self.tab_manager.tabs.items, 0..) |*tab, ti| {
-        if (tree_ops.findLeaf(tab.root, pane_id) == null) continue;
+        if (tree_ops.findLeaf(tab.fullRoot(), pane_id) == null) continue;
         if (ti != self.tab_manager.active_idx) self.switchToTab(ti);
-        if (self.tab_manager.getActiveTab()) |t| t.focused_pane_id = pane_id;
+        if (self.tab_manager.getActiveTab()) |t| {
+            // A pane hidden by zoom can only be shown by unzooming.
+            if (tree_ops.findLeaf(t.root, pane_id) == null) {
+                self.pane_mutex.lock();
+                defer self.pane_mutex.unlock();
+                t.unzoom();
+                actions.resizeAllPanesLocked(self);
+            }
+            t.focused_pane_id = pane_id;
+        }
         break;
     }
     self.requestFrame();

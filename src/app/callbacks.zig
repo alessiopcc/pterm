@@ -147,14 +147,21 @@ pub fn scrollCallback(handle: *glfw.Window, _: f64, yoffset: f64) callconv(.c) v
     const app = Window.getUserPointer(App, handle) orelse return;
     if (yoffset == 0) return;
 
+    // Add up fractional (touchpad) scrolling; a direction change drops what
+    // was left over the other way.
+    if ((app.scroll_remainder > 0) != (yoffset > 0)) app.scroll_remainder = 0;
+    app.scroll_remainder += yoffset;
+
     if (app.getFocusedPaneData()) |pd| {
         if (isMouseForwardingActive(pd)) {
             const pos = app.cursorPos();
             const fb_x: i32 = @intFromFloat(pos[0]);
             const fb_y: i32 = @intFromFloat(pos[1]);
             if (pixelToCell(app, fb_x, fb_y)) |cell| {
-                // Send one scroll event per notch (3 lines worth)
-                const notches: u32 = @intFromFloat(@abs(yoffset));
+                // Send one scroll event per whole notch (3 lines worth)
+                const whole = @trunc(app.scroll_remainder);
+                app.scroll_remainder -= whole;
+                const notches: u32 = @intFromFloat(@min(@abs(whole), 1000.0));
                 const btn: mouse.MouseButton = if (yoffset > 0) .scroll_up else .scroll_down;
                 for (0..notches) |_| {
                     sendMouseEvent(pd, .{
@@ -165,6 +172,10 @@ pub fn scrollCallback(handle: *glfw.Window, _: f64, yoffset: f64) callconv(.c) v
                         .modifiers = .{},
                     });
                 }
+            } else {
+                // Outside the terminal: drop the scroll rather than replay it
+                // over the terminal later.
+                app.scroll_remainder = 0;
             }
             app.requestFrame();
             return;
@@ -172,7 +183,10 @@ pub fn scrollCallback(handle: *glfw.Window, _: f64, yoffset: f64) callconv(.c) v
 
         // Normal scrollback behavior
         const old_offset = pd.scroll_offset;
-        const lines: i32 = @intFromFloat(yoffset * 3.0);
+        const lines_f = @trunc(app.scroll_remainder * 3.0);
+        app.scroll_remainder -= lines_f / 3.0;
+        const lines: i32 = @intFromFloat(std.math.clamp(lines_f, -1_000_000, 1_000_000));
+        if (lines == 0) return;
         if (lines > 0) {
             pd.scroll_offset +|= @intCast(lines);
             const snap2 = pd.termio.lockTerminal();

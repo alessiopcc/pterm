@@ -353,7 +353,8 @@ pub fn renderThreadMain(self: *App) void {
                 } else |_| {}
                 if (ti >= 64) continue;
                 // Check if any pane in this tab has show_badge or agent state
-                const leaf_infos = tree_ops.collectLeafInfos(tab.root, self.frame_arena.allocator()) catch &.{};
+                // (fullRoot: panes hidden by zoom count too).
+                const leaf_infos = tree_ops.collectLeafInfos(tab.fullRoot(), self.frame_arena.allocator()) catch &.{};
                 for (leaf_infos) |info| {
                     if (self.pane_data.getPtr(info.pane_id)) |pd_ptr| {
                         if (pd_ptr.*.bell_state.show_badge) {
@@ -377,7 +378,7 @@ pub fn renderThreadMain(self: *App) void {
                 const ov_colors = agents.colors(self);
                 for (self.tab_manager.tabs.items, 0..) |tab, ti| {
                     if (ti >= 64) break;
-                    const st = agents.tabState(self, tab.root, self.frame_arena.allocator()) orelse .idle;
+                    const st = agents.tabState(self, tab.fullRoot(), self.frame_arena.allocator()) orelse .idle;
                     agent_colors_buf[ti] = ov_colors.forState(st);
                 }
             }
@@ -759,7 +760,7 @@ pub fn renderThreadMain(self: *App) void {
                         // Look the tab up again: it may have closed since the
                         // lock was released after drawing the panes.
                         const cur_tab = self.tab_manager.getActiveTab();
-                        const current_leaf_infos = if (cur_tab) |t| tree_ops.collectLeafInfos(t.root, self.frame_arena.allocator()) catch &.{} else &.{};
+                        const current_leaf_infos = if (cur_tab) |t| tree_ops.collectLeafInfos(t.fullRoot(), self.frame_arena.allocator()) catch &.{} else &.{};
                         for (current_leaf_infos) |li| {
                             if (pane_count >= 32) break;
                             if (self.pane_data.get(li.pane_id)) |lpd| {
@@ -775,7 +776,7 @@ pub fn renderThreadMain(self: *App) void {
                         // Count waiting panes in background (non-active) tabs
                         for (self.tab_manager.tabs.items, 0..) |bg_tab, bti| {
                             if (bti == self.tab_manager.active_idx) continue;
-                            const bg_leaves = tree_ops.collectLeafInfos(bg_tab.root, self.frame_arena.allocator()) catch &.{};
+                            const bg_leaves = tree_ops.collectLeafInfos(bg_tab.fullRoot(), self.frame_arena.allocator()) catch &.{};
                             for (bg_leaves) |bli| {
                                 if (self.pane_data.get(bli.pane_id)) |bpd| {
                                     if (bpd.agent_state.state.load(.acquire) == .waiting) {
@@ -1328,8 +1329,9 @@ pub fn processBellForPane(self: *App, pd: *PaneData, bounds: RendererRect, backe
 pub fn processAgentFlashForPane(self: *App, pd: *PaneData, bounds: RendererRect, backend: *OpenGLBackend) void {
     // Suppress-window expiry is time-based — no explicit clear needed.
     // Consume notification pending flag and fire OS notification
-    if (pd.agent_state.notification_pending.load(.acquire)) {
-        pd.agent_state.notification_pending.store(false, .release);
+    // swap: an alert the parse thread raises between a load and a store
+    // would be lost.
+    if (pd.agent_state.notification_pending.swap(false, .acq_rel)) {
         // Build pane identity string "Tab N, Pane M"
         var identity_buf: [64]u8 = undefined;
         var identity_writer: std.Io.Writer = .fixed(&identity_buf);

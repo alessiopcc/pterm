@@ -1117,6 +1117,14 @@ pub fn build(b: *std.Build) void {
     const run_open_url_tests = b.addRunArtifact(open_url_tests);
     test_step.dependOn(&run_open_url_tests.step);
 
+    // Windows command-line quoting (pure; runs on every OS)
+    const win_args_tests = b.addTest(.{ .root_module = createModule(b, .{
+        .root_source_file = b.path("src/platform/win_args.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    test_step.dependOn(&b.addRunArtifact(win_args_tests).step);
+
     // -------------------------------------------------------
     // Bell notification modules
     // -------------------------------------------------------

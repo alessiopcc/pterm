@@ -753,7 +753,8 @@ const Eligible = struct { tab_idx: usize, pane_id: u32, state: AgentState.State 
 fn collectEligible(self: *App, alloc: std.mem.Allocator) []Eligible {
     var list = std.ArrayListUnmanaged(Eligible).empty;
     for (self.tab_manager.tabs.items, 0..) |*tab, ti| {
-        const leaves = tree_ops.collectLeaves(tab.root, alloc) catch continue;
+        // fullRoot: an agent hidden by zoom can be the focus-mode source.
+        const leaves = tree_ops.collectLeaves(tab.fullRoot(), alloc) catch continue;
         defer alloc.free(leaves);
         for (leaves) |pid| {
             const pd = self.pane_data.get(pid) orelse continue;
@@ -819,6 +820,9 @@ fn activateSource(self: *App, src: AgentSource) void {
     self.tab_manager.agent_mode_active = true;
     self.tab_manager.switchTab(src.tab_idx);
     if (self.tab_manager.getActiveTab()) |t| {
+        // Unzoom when the source is hidden by zoom, so focus stays on a
+        // visible pane after focus mode ends.
+        if (tree_ops.findLeaf(t.root, src.pane_id) == null) t.unzoom();
         t.focused_pane_id = src.pane_id;
     }
     resizeAllPanesLocked(self);

@@ -375,6 +375,10 @@ pub const App = struct {
     // at wherever the mouse is by the time the click is handled.
     last_cursor_pos: ?[2]f64 = null,
 
+    // Scroll not yet applied, in wheel notches. Touchpads send fractions of
+    // a notch; they add up here until they make a whole line. Main thread.
+    scroll_remainder: f64 = 0,
+
     // Suppress activity for N frames after resize (async redraws cause false positives)
     suppress_activity_frames: std.atomic.Value(u32),
 
