@@ -5,6 +5,7 @@
 ///     escape sequences, onOutput() on raw output
 ///   - Render thread: inference (onOutput/triggerWaiting/markIdle), markSeen(),
 ///     agentGone(), consumeFlash(), updateFlash(), reads flash_active, show_badge
+///   - Every state change holds `mutex` (see setState).
 ///
 /// States: idle, working, waiting (needs you), done, errored.
 ///
@@ -220,6 +221,8 @@ pub const AgentState = struct {
     /// quiet subagent runs). Returns false when there is no hint or status
     /// records already decide.
     pub fn applyTitleHint(self: *AgentState, now: i128) bool {
+        self.mutex.lock();
+        defer self.mutex.unlock();
         if (self.hasReports()) return false;
         const new: State = switch (self.title_hint.load(.acquire)) {
             .none => return false,
@@ -277,11 +280,14 @@ pub const AgentState = struct {
     /// error does too once nothing runs in the pane any more; while the
     /// program still runs, its error is current and stays.
     pub fn markSeen(self: *AgentState, program_running: bool, now: i128) void {
+        // Cheap unlocked check first: this runs every frame for the focused pane.
+        const peek = self.state.load(.acquire);
+        if (peek != .done and peek != .errored) return;
+        self.mutex.lock();
+        defer self.mutex.unlock();
         const st = self.state.load(.acquire);
         const clear_error = st == .errored and !program_running;
         if (st != .done and !clear_error) return;
-        self.mutex.lock();
-        defer self.mutex.unlock();
         _ = if (clear_error) self.records.dropOutcomes() else self.records.dropDone();
         self.syncFromRecords(now);
         const after = self.state.load(.acquire);
@@ -335,6 +341,8 @@ pub const AgentState = struct {
 
     /// Testable variant with explicit timestamp.
     pub fn triggerWaitingWithTimestamp(self: *AgentState, now: i128) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
         if (self.hasReports()) return;
         self.setState(.waiting, now);
     }
@@ -347,6 +355,8 @@ pub const AgentState = struct {
 
     /// `now` is when the output arrived.
     pub fn onOutputWithTimestamp(self: *AgentState, now: i128) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
         if (self.hasReports()) return;
         if (self.title_hint.load(.acquire) != .none) return; // title decides
         if (self.notified_at_ns != 0 and now - self.notified_at_ns < NOTIFY_GRACE_NS) return;
@@ -360,6 +370,8 @@ pub const AgentState = struct {
     }
 
     pub fn markIdleWithTimestamp(self: *AgentState, now: i128) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
         if (self.hasReports()) return;
         if (self.title_hint.load(.acquire) != .none) return; // title decides
         if (self.state.load(.acquire) == .done) return;
@@ -369,6 +381,10 @@ pub const AgentState = struct {
 
     // ── Transitions ──
 
+    /// Caller holds `mutex`. The parse thread (status reports, notifications,
+    /// output) and the render thread (inference) both change state; without
+    /// one lock a "working" from one thread could overwrite the other's
+    /// fresh "needs you" and clear its pending notification.
     fn setState(self: *AgentState, new: State, now: i128) void {
         const old = self.state.load(.acquire);
         if (old == new) return;
