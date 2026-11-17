@@ -646,18 +646,20 @@ pub const Surface = struct {
                     result.append(alloc, ' ') catch {};
                     continue;
                 };
-                const rac = pin_val.rowAndCell();
-                const cp: u21 = rac.cell.codepoint();
-                if (cp == 0) {
-                    result.append(alloc, ' ') catch {};
-                } else {
-                    var enc_buf: [4]u8 = undefined;
-                    const enc_len = std.unicode.utf8Encode(cp, &enc_buf) catch 0;
-                    if (enc_len > 0) {
-                        result.appendSlice(alloc, enc_buf[0..enc_len]) catch {};
-                    } else {
-                        result.append(alloc, ' ') catch {};
-                    }
+                const cell = pin_val.rowAndCell().cell;
+                switch (cell.wide) {
+                    // The right half of a wide character holds no text. A
+                    // selection starting there still copies the character.
+                    .spacer_tail => {
+                        if (col == sc and col > 0) {
+                            if (screen.pages.pin(.{ .screen = .{ .x = @intCast(col - 1), .y = @intCast(content_row) } })) |prev| {
+                                appendCellText(&result, alloc, prev);
+                            }
+                        }
+                    },
+                    // Placeholder at a line end where a wide character wrapped.
+                    .spacer_head => {},
+                    else => appendCellText(&result, alloc, pin_val),
                 }
             }
 
@@ -684,6 +686,29 @@ pub const Surface = struct {
 
         // Clear selection after successful copy
         self.selection.clear();
+    }
+
+    /// Append a cell's text as UTF-8: its codepoint plus any combining marks
+    /// or joined emoji stored with it. An empty cell is a space.
+    fn appendCellText(result: *std.ArrayList(u8), alloc: std.mem.Allocator, pin_val: anytype) void {
+        const cell = pin_val.rowAndCell().cell;
+        const cp: u21 = cell.codepoint();
+        if (cp == 0) {
+            result.append(alloc, ' ') catch {};
+            return;
+        }
+        appendCodepoint(result, alloc, cp);
+        if (cell.hasGrapheme()) {
+            if (pin_val.grapheme(cell)) |extra| {
+                for (extra) |ecp| appendCodepoint(result, alloc, ecp);
+            }
+        }
+    }
+
+    fn appendCodepoint(result: *std.ArrayList(u8), alloc: std.mem.Allocator, cp: u21) void {
+        var enc_buf: [4]u8 = undefined;
+        const enc_len = std.unicode.utf8Encode(cp, &enc_buf) catch return;
+        result.appendSlice(alloc, enc_buf[0..enc_len]) catch {};
     }
 
     /// Paste clipboard contents to terminal PTY.

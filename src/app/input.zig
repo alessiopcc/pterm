@@ -55,15 +55,6 @@ pub fn handleKeyInput(self: *App, key: glfw.Key, action: glfw.Action, mods: glfw
         }
     }
 
-    // Reset scrollback viewport on keypress (snap to live terminal)
-    if (self.getFocusedPaneData()) |pd| {
-        if (pd.scroll_offset > 0) {
-            pd.scroll_offset = 0;
-            pd.surface.scroll_offset = 0;
-            self.requestFrame();
-        }
-    }
-
     // Close-tab prompt captures the keyboard while open.
     if (self.confirm_prompt.visible) {
         switch (key) {
@@ -122,9 +113,7 @@ pub fn handleKeyInput(self: *App, key: glfw.Key, action: glfw.Action, mods: glfw
         };
 
         if (keybindings.isReservedClipboardKey(combo)) {
-            if (self.getFocusedPaneData()) |pd| {
-                pd.surface.handleClipboardAction(combo);
-            }
+            clipboardAction(self, combo);
             return;
         }
 
@@ -142,9 +131,7 @@ pub fn handleKeyInput(self: *App, key: glfw.Key, action: glfw.Action, mods: glfw
         };
 
         if (keybindings.isReservedClipboardKey(combo)) {
-            if (self.getFocusedPaneData()) |pd| {
-                pd.surface.handleClipboardAction(combo);
-            }
+            clipboardAction(self, combo);
             return;
         }
 
@@ -170,8 +157,39 @@ pub fn handleKeyInput(self: *App, key: glfw.Key, action: glfw.Action, mods: glfw
 
     // Fall through to focused pane for VT encoding
     if (self.getFocusedPaneData()) |pd| {
+        // Input for the program: show the live screen. A modifier alone
+        // isn't input (Shift is held for Shift+PageUp).
+        if (!isModifierKey(key)) snapToBottom(self, pd);
         pd.surface.handleKeyInput(key, action, mods);
     }
+}
+
+fn isModifierKey(key: glfw.Key) bool {
+    return switch (key) {
+        .left_shift, .right_shift, .left_control, .right_control, .left_alt, .right_alt, .left_super, .right_super => true,
+        else => false,
+    };
+}
+
+/// Leave scrollback and show the live screen.
+fn snapToBottom(self: *App, pd: *PaneData) void {
+    if (pd.scroll_offset == 0) return;
+    pd.scroll_offset = 0;
+    pd.surface.scroll_offset = 0;
+    self.requestFrame();
+}
+
+/// Ctrl+C / Ctrl+V. Copying reads the selection at the current scroll
+/// position, so it must not snap first; Ctrl+C without a selection and
+/// paste send input, so they snap to the live screen.
+fn clipboardAction(self: *App, combo: keybindings.KeyCombo) void {
+    const pd = self.getFocusedPaneData() orelse return;
+    const is_copy = switch (combo.key) {
+        .char => |c| c == 'c',
+        .special => false,
+    } and pd.surface.selection.range != null;
+    if (!is_copy) snapToBottom(self, pd);
+    pd.surface.handleClipboardAction(combo);
 }
 
 /// Handle character input: route to focused pane.
@@ -201,9 +219,7 @@ pub fn handleCharInput(self: *App, codepoint: u32) void {
     };
 
     if (keybindings.isReservedClipboardKey(combo)) {
-        if (self.getFocusedPaneData()) |pd| {
-            pd.surface.handleClipboardAction(combo);
-        }
+        clipboardAction(self, combo);
         return;
     }
 
@@ -214,6 +230,7 @@ pub fn handleCharInput(self: *App, codepoint: u32) void {
 
     // Fall through to focused pane
     if (self.getFocusedPaneData()) |pd| {
+        snapToBottom(self, pd);
         pd.surface.handleCharInput(codepoint);
     }
 }
