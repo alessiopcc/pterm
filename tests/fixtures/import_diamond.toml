@@ -1,0 +1,9 @@
+import = ["import_diamond_left.toml", "import_diamond_right.toml"]
+
+[keybindings]
+split_vertical = "f6"
+
+[layout.right]
+[[layout.right.tab]]
+[[layout.right.tab.pane]]
+dir = "~/own"

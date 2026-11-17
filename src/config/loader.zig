@@ -191,12 +191,14 @@ pub fn loadFile(
     // Canonicalize path for cycle detection
     const canon_path = allocator.dupe(u8, path) catch return error.OutOfMemory;
 
-    // Check for cycles
+    // Check for cycles. `visited` holds the files still being loaded (the
+    // import stack), so a file imported from two places is not a cycle.
     if (visited.contains(canon_path)) {
         allocator.free(canon_path);
         return error.ImportCycleDetected;
     }
     visited.put(canon_path, {}) catch return error.OutOfMemory;
+    defer if (visited.fetchRemove(canon_path)) |kv| allocator.free(kv.key);
 
     // Read file contents
     const content = readFileContents(allocator, path) catch |err| {
@@ -225,6 +227,11 @@ pub fn loadFile(
     // Start with defaults as base
     var config = Config.defaults();
 
+    // Keybindings and layouts from imports, in import order; this file's
+    // own entries are added last so they win.
+    var keys: std.ArrayListUnmanaged(Config.KeybindingEntry) = .empty;
+    var layouts: std.ArrayListUnmanaged(LayoutPreset.LayoutPreset) = .empty;
+
     // Process imports first (imported configs provide base, current file overrides)
     if (file_cfg.import) |imports| {
         for (imports) |import_path| {
@@ -241,8 +248,10 @@ pub fn loadFile(
                         continue;
                     },
                     error.ImportCycleDetected => {
+                        // Skip only the import that closes the cycle; the
+                        // rest of the config still loads.
                         std.log.warn("Import cycle detected involving {s}, skipping", .{import_path});
-                        return error.ImportCycleDetected;
+                        continue;
                     },
                     else => {
                         std.log.warn("Failed to load import {s}: {}", .{ import_path, err });
@@ -251,6 +260,8 @@ pub fn loadFile(
                 }
             };
             config = mergeConfigs(config, imported);
+            keys.appendSlice(allocator, imported.keybindings) catch return error.OutOfMemory;
+            addLayouts(allocator, &layouts, imported.layouts) catch return error.OutOfMemory;
         }
     }
 
@@ -259,15 +270,35 @@ pub fn loadFile(
     config = applyFileConfig(allocator, config, file_cfg) catch return error.OutOfMemory;
 
     // Parse [keybindings] section manually (dynamic keys, not in FileConfig)
-    config.keybindings = parseKeybindingsSection(allocator, content) catch &.{};
+    const own_keys = parseKeybindingsSection(allocator, content) catch &.{};
+    keys.appendSlice(allocator, own_keys) catch return error.OutOfMemory;
+    config.keybindings = keys.toOwnedSlice(allocator) catch return error.OutOfMemory;
 
     // Parse [layout.*] sections manually (dynamic preset names, not in FileConfig)
-    config.layouts = LayoutPreset.parsePresets(allocator, content) catch |err| blk: {
+    const own_layouts = LayoutPreset.parsePresets(allocator, content) catch |err| blk: {
         std.log.warn("Failed to parse layout presets: {}", .{err});
         break :blk &.{};
     };
+    addLayouts(allocator, &layouts, own_layouts) catch return error.OutOfMemory;
+    config.layouts = layouts.toOwnedSlice(allocator) catch return error.OutOfMemory;
 
     return config;
+}
+
+/// Append `add` to `list`; a preset with the same name replaces the earlier one.
+fn addLayouts(
+    allocator: std.mem.Allocator,
+    list: *std.ArrayListUnmanaged(LayoutPreset.LayoutPreset),
+    add: []const LayoutPreset.LayoutPreset,
+) !void {
+    for (add) |preset| {
+        for (list.items) |*existing| {
+            if (std.mem.eql(u8, existing.name, preset.name)) {
+                existing.* = preset;
+                break;
+            }
+        } else try list.append(allocator, preset);
+    }
 }
 
 /// Merge two configs: `over` overrides `base`.

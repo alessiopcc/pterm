@@ -1,0 +1,9 @@
+import = ["import_diamond_common.toml"]
+
+[window]
+cols = 99
+
+[layout.right]
+[[layout.right.tab]]
+[[layout.right.tab.pane]]
+dir = "~/imported"

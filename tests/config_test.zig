@@ -75,10 +75,41 @@ test "import chain: child overrides base, inherits unset fields" {
     try testing.expectEqual(@as(i64, 30), config.window.rows);
 }
 
-test "import cycle detection returns error" {
+test "import cycle skips the cyclic import and keeps the rest" {
     const allocator = std.heap.page_allocator;
-    const result = loader.loadConfigFromPath(allocator, "tests/fixtures/import_cycle_a.toml");
-    try testing.expectError(error.ImportCycleDetected, result);
+    // a imports b, b imports a: the import back to a is skipped.
+    const config = try loader.loadConfigFromPath(allocator, "tests/fixtures/import_cycle_a.toml");
+    try testing.expectEqual(@as(f32, 13.0), config.font.size);
+}
+
+test "import diamond loads shared file twice and merges keybindings and layouts" {
+    const allocator = std.heap.page_allocator;
+    // import_diamond imports left and right; both import common.
+    const config = try loader.loadConfigFromPath(allocator, "tests/fixtures/import_diamond.toml");
+    try testing.expectEqual(@as(f32, 12.0), config.font.size);
+    try testing.expectEqual(@as(i64, 31), config.window.rows);
+    try testing.expectEqual(@as(i64, 99), config.window.cols);
+
+    // Imported keybinding kept; this file's own binding comes last so it wins.
+    var has_new_tab = false;
+    for (config.keybindings) |kb| {
+        if (std.mem.eql(u8, kb.action_name, "new_tab") and std.mem.eql(u8, kb.combo_str, "f9")) has_new_tab = true;
+    }
+    try testing.expect(has_new_tab);
+    const last = config.keybindings[config.keybindings.len - 1];
+    try testing.expectEqualStrings("split_vertical", last.action_name);
+
+    // Imported layout kept; a same-named layout in this file replaces the import's.
+    try testing.expectEqual(@as(usize, 2), config.layouts.len);
+    var found_common = false;
+    for (config.layouts) |p| {
+        if (std.mem.eql(u8, p.name, "common")) found_common = true;
+        if (std.mem.eql(u8, p.name, "right")) {
+            // `~` is expanded when parsed; compare the end.
+            try testing.expect(std.mem.endsWith(u8, p.tabs[0].panes[0].dir.?, "own"));
+        }
+    }
+    try testing.expect(found_common);
 }
 
 test "max depth exceeded returns error" {

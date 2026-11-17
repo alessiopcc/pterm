@@ -1,4 +1,4 @@
 import = ["import_cycle_b.toml"]
 
 [font]
-size = 10.0
+size = 13.0
