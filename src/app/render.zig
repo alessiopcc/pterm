@@ -760,7 +760,7 @@ pub fn renderThreadMain(self: *App) void {
                         // Look the tab up again: it may have closed since the
                         // lock was released after drawing the panes.
                         const cur_tab = self.tab_manager.getActiveTab();
-                        const current_leaf_infos = if (cur_tab) |t| tree_ops.collectLeafInfos(t.root, self.frame_arena.allocator()) catch &.{} else &.{};
+                        const current_leaf_infos = if (cur_tab) |t| tree_ops.collectLeafInfos(t.fullRoot(), self.frame_arena.allocator()) catch &.{} else &.{};
                         for (current_leaf_infos) |li| {
                             if (pane_count >= 32) break;
                             if (self.pane_data.get(li.pane_id)) |lpd| {

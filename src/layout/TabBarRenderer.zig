@@ -316,7 +316,8 @@ pub const TabBarRenderer = struct {
             }
 
             // Tab close button — red geometric X, vertically centered
-            if (hasCloseButton(tab_w, cell_w_int)) {
+            // Same unscaled width as hitTest, so a drawn X is always clickable.
+            if (hasCloseButton(tab_w, @intFromFloat(config.cell_width))) {
                 const close_cx = tab_x + @as(i32, @intCast(tab_w)) - cell_w_int;
                 const close_cy = tab_y + @divFloor(@as(i32, @intCast(tab_h)), 2);
                 const close_arm: u32 = @intFromFloat(config.cell_height * 0.15);

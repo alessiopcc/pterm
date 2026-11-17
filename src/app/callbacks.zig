@@ -172,6 +172,10 @@ pub fn scrollCallback(handle: *glfw.Window, _: f64, yoffset: f64) callconv(.c) v
                         .modifiers = .{},
                     });
                 }
+            } else {
+                // Outside the terminal: drop the scroll rather than replay it
+                // over the terminal later.
+                app.scroll_remainder = 0;
             }
             app.requestFrame();
             return;

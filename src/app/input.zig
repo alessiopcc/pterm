@@ -483,10 +483,12 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
             }
 
             // Build the same pane_number->pane_id mapping used in render
-            const leaf_infos = tree_ops.collectLeafInfos(active_tab.root, std.heap.page_allocator) catch &.{};
+            // (panes hidden by zoom included).
+            const leaf_infos = tree_ops.collectLeafInfos(active_tab.fullRoot(), std.heap.page_allocator) catch &.{};
             defer if (leaf_infos.len > 0) std.heap.page_allocator.free(leaf_infos);
 
             var sb_pane_infos: [32]status_bar_mod.PaneStatusInfo = undefined;
+            var sb_pane_ids: [32]u32 = undefined;
             var sb_count: usize = 0;
             for (leaf_infos) |li| {
                 if (sb_count >= 32) break;
@@ -496,16 +498,17 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
                         .state = .idle,
                         .is_focused = false,
                     };
+                    sb_pane_ids[sb_count] = li.pane_id;
                     sb_count += 1;
                 }
             }
 
             if (StatusBarRenderer.hitTest(sb_pane_infos[0..sb_count], fb_x, self.chrome_cell_height)) |pane_number| {
-                // pane_number is 1-indexed, leaf_infos is 0-indexed
+                // pane_number is 1-indexed
                 const idx = pane_number - 1;
-                if (idx < leaf_infos.len) {
-                    active_tab.focused_pane_id = leaf_infos[idx].pane_id;
-                    self.requestFrame();
+                if (idx < sb_count) {
+                    // Unzooms when the pane is hidden by zoom.
+                    agents.focusPane(self, sb_pane_ids[idx]);
                     return;
                 }
             }
