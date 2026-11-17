@@ -432,6 +432,7 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
             self.border_drag_is_vertical = border_info.is_vertical;
             self.border_drag_start_pos = if (border_info.is_vertical) pos[0] else pos[1];
             self.border_drag_start_ratio = border_info.branch.branch.ratio;
+            self.border_drag_children = .{ border_info.branch.branch.first, border_info.branch.branch.second };
             return;
         }
     }
@@ -682,20 +683,25 @@ pub fn extendTextSelectionAtCursor(self: *App, xpos: f64, ypos: f64) void {
     const pid = self.text_select_pane_id orelse return;
     const pd = self.pane_data.get(pid) orelse return;
     _ = self.tab_manager.getActiveTab() orelse return;
+    const c = cursorCell(self, pid, xpos, ypos) orelse return;
+    pd.surface.selection.update(@intCast(c.row), c.col);
+    self.requestFrame();
+}
+
+/// The viewport cell under a window-space cursor position in a pane,
+/// clamped to the pane's top-left.
+fn cursorCell(self: *App, pid: u32, xpos: f64, ypos: f64) ?struct { row: u32, col: u16 } {
     const m = self.font_grid.getMetrics();
     const cw: u32 = @intFromFloat(m.cell_width);
     const ch: u32 = @intFromFloat(m.cell_height);
-    if (cw == 0 or ch == 0) return;
-    const bounds = self.getEffectivePaneBounds(pid) orelse return;
+    if (cw == 0 or ch == 0) return null;
+    const bounds = self.getEffectivePaneBounds(pid) orelse return null;
     const pad: i32 = @intFromFloat(self.config.grid_padding());
     const rel_x = @as(i32, @intFromFloat(xpos)) - bounds.x - pad;
     const rel_y = @as(i32, @intFromFloat(ypos)) - bounds.y - pad;
     const clamped_x: u32 = if (rel_x < 0) 0 else @intCast(rel_x);
     const clamped_y: u32 = if (rel_y < 0) 0 else @intCast(rel_y);
-    const col: u16 = @intCast(@min(clamped_x / cw, 65535));
-    const row: u32 = clamped_y / ch;
-    pd.surface.selection.update(@intCast(row), col);
-    self.requestFrame();
+    return .{ .row = clamped_y / ch, .col = @intCast(@min(clamped_x / cw, 65535)) };
 }
 
 /// Handle cursor position for border drag resize and cursor shape.
@@ -783,6 +789,21 @@ pub fn handleCursorPos(self: *App, xpos: f64, ypos: f64) void {
 
     if (self.border_drag_active) {
         const branch = self.border_drag_branch orelse return;
+        // A pane closing or a layout change mid-drag can free the split, or
+        // reuse its memory for another one (close promoting a nested split).
+        // Rotation keeps the split but turns its axis.
+        const still_there = if (self.tab_manager.getActiveTab()) |t|
+            tree_ops.containsBranch(t.root, branch) and
+                branch.branch.first == self.border_drag_children[0] and
+                branch.branch.second == self.border_drag_children[1] and
+                (branch.branch.direction == .vertical) == self.border_drag_is_vertical
+        else
+            false;
+        if (!still_there) {
+            self.border_drag_active = false;
+            self.border_drag_branch = null;
+            return;
+        }
         const b = &branch.branch;
         const parent_bounds = getNodeBounds(branch);
 
@@ -810,12 +831,18 @@ pub fn handleCursorPos(self: *App, xpos: f64, ypos: f64) void {
     }
 
     // Text selection: start selection on first drag movement (single click deferred)
+    // Start only once the drag reaches another cell: a click jitters a
+    // pixel or two, and a one-cell selection would swallow the next Esc.
     if (self.text_select_pending) {
         if (self.text_select_pane_id) |pid| {
             if (self.pane_data.get(pid)) |pd| {
-                pd.surface.selection.begin(@intCast(self.text_select_start_row), self.text_select_start_col, .normal);
-                self.text_select_active = true;
-                self.text_select_pending = false;
+                if (cursorCell(self, pid, xpos, ypos)) |c| {
+                    if (c.row != self.text_select_start_row or c.col != self.text_select_start_col) {
+                        pd.surface.selection.begin(@intCast(self.text_select_start_row), self.text_select_start_col, .normal);
+                        self.text_select_active = true;
+                        self.text_select_pending = false;
+                    }
+                }
             }
         }
     }

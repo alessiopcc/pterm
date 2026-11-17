@@ -300,6 +300,15 @@ pub fn findResizableBranch(leaf_node: *PaneNode, resize_dir: FocusDirection) ?*P
     }
 }
 
+/// Whether `target` is a branch node in the tree under `node`. Lets a
+/// caller that kept a branch pointer check it wasn't freed or moved out.
+pub fn containsBranch(node: *PaneNode, target: *PaneNode) bool {
+    switch (node.*) {
+        .branch => |b| return node == target or containsBranch(b.first, target) or containsBranch(b.second, target),
+        .leaf => return false,
+    }
+}
+
 /// Find the leaf node with a given pane_id in the tree.
 pub fn findLeaf(node: *PaneNode, pane_id: u32) ?*PaneNode {
     switch (node.*) {
@@ -488,6 +497,21 @@ test "close promotes sibling" {
     try std.testing.expectEqual(@as(?u32, 1), result);
     // Root should now be a leaf with pane_id 1
     try std.testing.expectEqual(@as(u32, 1), root.leaf.pane_id);
+    PaneTree.destroyNode(alloc, root);
+}
+
+test "containsBranch fails once close turns the branch into a leaf" {
+    const alloc = std.testing.allocator;
+    const root = try PaneTree.createLeaf(alloc, 0, null);
+    _ = try split(alloc, root, .vertical, 1);
+    _ = try split(alloc, root.branch.second, .horizontal, 2);
+    const inner = root.branch.second;
+    try std.testing.expect(containsBranch(root, root));
+    try std.testing.expect(containsBranch(root, inner));
+
+    _ = close(alloc, inner.branch.first);
+    try std.testing.expect(!containsBranch(root, inner));
+    try std.testing.expect(containsBranch(root, root));
     PaneTree.destroyNode(alloc, root);
 }
 
