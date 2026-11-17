@@ -213,6 +213,20 @@ pub fn scrollCallback(handle: *glfw.Window, _: f64, yoffset: f64) callconv(.c) v
         // the scroll delta to keep them anchored to the same content, then
         // update the endpoint to match the current cursor position.
         const new_offset = pd.scroll_offset;
+        // Scrolling while the button is still down in the clicked cell is a
+        // drag too: start the selection at the clicked cell (in the old
+        // viewport) so the shift below keeps it on the clicked text.
+        if (new_offset != old_offset and app.text_select_pending) {
+            const active_tab = app.tab_manager.getActiveTab();
+            const drag_pid = app.text_select_pane_id;
+            if (active_tab != null and drag_pid != null and
+                active_tab.?.focused_pane_id == drag_pid.?)
+            {
+                pd.surface.selection.begin(@intCast(app.text_select_start_row), app.text_select_start_col, .normal);
+                app.text_select_active = true;
+                app.text_select_pending = false;
+            }
+        }
         if (new_offset != old_offset and app.text_select_active) {
             const active_tab = app.tab_manager.getActiveTab();
             const drag_pid = app.text_select_pane_id;

@@ -1123,9 +1123,12 @@ pub fn respawnShell(self: *App, pd: *PaneData, shell_name: []const u8) !void {
     pd.termio.terminal.observer.screen_change_ctx = @ptrCast(pd);
 
     // Start TermIO reader thread (must happen after attachPty and observer wiring).
-    // The old shell is gone, so a failure here can only be reported.
+    // The old shell is gone, so on failure stop whatever started and mark
+    // the pane exited: the main loop then closes it like any exited shell.
     pd.termio.start() catch |err| {
-        std.log.err("Shell switch: reader thread failed to start in pane {d}: {}", .{ pd.pane_id, err });
+        std.log.err("Shell switch: worker threads failed to start in pane {d}: {}", .{ pd.pane_id, err });
+        pd.termio.stop();
+        if (pd.termio.reader) |*r| r.exited.store(true, .release);
         return;
     };
 

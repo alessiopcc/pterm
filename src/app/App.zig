@@ -355,6 +355,9 @@ pub const App = struct {
     border_drag_start_pos: f64,
     border_drag_start_ratio: f32,
     border_drag_is_vertical: bool,
+    /// The dragged split's children at drag start: a layout change that
+    /// reuses the split's memory (close promoting a nested split) changes them.
+    border_drag_children: [2]?*PaneNode = .{ null, null },
 
     // Window drag from the title bar. Windows hands the drag to the OS; other
     // platforms move the window by hand once the cursor passes a threshold.

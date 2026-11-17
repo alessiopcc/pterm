@@ -432,6 +432,7 @@ pub fn handleMouseButton(self: *App, button: glfw.MouseButton, action: glfw.Acti
             self.border_drag_is_vertical = border_info.is_vertical;
             self.border_drag_start_pos = if (border_info.is_vertical) pos[0] else pos[1];
             self.border_drag_start_ratio = border_info.branch.branch.ratio;
+            self.border_drag_children = .{ border_info.branch.branch.first, border_info.branch.branch.second };
             return;
         }
     }
@@ -788,8 +789,16 @@ pub fn handleCursorPos(self: *App, xpos: f64, ypos: f64) void {
 
     if (self.border_drag_active) {
         const branch = self.border_drag_branch orelse return;
-        // A pane closing or a layout change mid-drag can free the split.
-        const still_there = if (self.tab_manager.getActiveTab()) |t| tree_ops.containsBranch(t.root, branch) else false;
+        // A pane closing or a layout change mid-drag can free the split, or
+        // reuse its memory for another one (close promoting a nested split).
+        // Rotation keeps the split but turns its axis.
+        const still_there = if (self.tab_manager.getActiveTab()) |t|
+            tree_ops.containsBranch(t.root, branch) and
+                branch.branch.first == self.border_drag_children[0] and
+                branch.branch.second == self.border_drag_children[1] and
+                (branch.branch.direction == .vertical) == self.border_drag_is_vertical
+        else
+            false;
         if (!still_there) {
             self.border_drag_active = false;
             self.border_drag_branch = null;
