@@ -1044,7 +1044,33 @@ pub fn respawnShell(self: *App, pd: *PaneData, shell_name: []const u8) !void {
         }
     }
 
-    // --- TEARDOWN (same order as destroyPane) ---
+    // --- BUILD the new shell first: on failure the old pane stays intact ---
+    var new_termio = try TermIO.init(self.allocator, TermIOConfig{
+        .cols = actual_cols,
+        .rows = actual_rows,
+        .scrollback_lines = self.config.scrollback_lines(),
+    });
+    errdefer new_termio.deinit();
+
+    var new_pty = try Pty.init(self.allocator, .{
+        .cols = actual_cols,
+        .rows = actual_rows,
+    });
+    errdefer new_pty.deinit();
+
+    // Resolve and spawn the selected shell
+    const shell_config = shell_mod.resolveShell(self.allocator, shell_name, null);
+    defer shell_config.deinit();
+    try new_pty.spawn(shell_config.path, shell_config.args, null);
+
+    // termio is repointed below, once it is in place.
+    const new_surface = try Surface.init(self.allocator, self.config, &self.window, &new_termio, .{
+        .perf_logging = self.perf_logging,
+        .debug_keys = false,
+    });
+    errdefer comptime unreachable;
+
+    // --- TEARDOWN the old shell (same order as destroyPane) ---
     pd.termio.stop();
     pd.row_cache.invalidate();
     pd.search_state.deinit(self.allocator);
@@ -1053,28 +1079,11 @@ pub fn respawnShell(self: *App, pd: *PaneData, shell_name: []const u8) !void {
     pd.pty.deinit();
     pd.termio.deinit();
 
-    // --- RESPAWN (same sequence as createPane lines 487-586) ---
-    pd.termio = try TermIO.init(self.allocator, TermIOConfig{
-        .cols = actual_cols,
-        .rows = actual_rows,
-        .scrollback_lines = self.config.scrollback_lines(),
-    });
-
-    pd.pty = try Pty.init(self.allocator, .{
-        .cols = actual_cols,
-        .rows = actual_rows,
-    });
-
-    // Resolve and spawn the selected shell
-    const shell_config = shell_mod.resolveShell(self.allocator, shell_name, null);
-    defer shell_config.deinit();
-    try pd.pty.spawn(shell_config.path, shell_config.args, null);
+    // --- MOVE the new shell in ---
+    pd.termio = new_termio;
+    pd.pty = new_pty;
+    pd.surface = new_surface;
     pd.termio.attachPty(&pd.pty);
-
-    pd.surface = try Surface.init(self.allocator, self.config, &self.window, &pd.termio, .{
-        .perf_logging = self.perf_logging,
-        .debug_keys = false,
-    });
 
     // Fix up internal pointers (Pitfall 1 -- CRITICAL: surface holds raw pointers
     // into termio/window that are invalidated when respawn replaces the structs).
@@ -1113,8 +1122,12 @@ pub fn respawnShell(self: *App, pd: *PaneData, shell_name: []const u8) !void {
     pd.termio.terminal.observer.onScreenChange = &callbacks.screenChangeCallback;
     pd.termio.terminal.observer.screen_change_ctx = @ptrCast(pd);
 
-    // Start TermIO reader thread (must happen after attachPty and observer wiring)
-    try pd.termio.start();
+    // Start TermIO reader thread (must happen after attachPty and observer wiring).
+    // The old shell is gone, so a failure here can only be reported.
+    pd.termio.start() catch |err| {
+        std.log.err("Shell switch: reader thread failed to start in pane {d}: {}", .{ pd.pane_id, err });
+        return;
+    };
 
     std.log.info("Shell switched to '{s}' in pane {d}", .{ shell_name, pd.pane_id });
 }
