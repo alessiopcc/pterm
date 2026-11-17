@@ -235,8 +235,11 @@ jobs:
           CODENAME=$(lsb_release -cs)
           printf 'deb [arch=arm64] http://ports.ubuntu.com/ %s main restricted universe\n' "$CODENAME" | sudo tee /etc/apt/sources.list.d/arm64-ports.list
           printf 'deb [arch=arm64] http://ports.ubuntu.com/ %s-updates main restricted universe\n' "$CODENAME" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
+          # Security updates too: the amd64 side has them, and multiarch packages
+          # must match versions across architectures or apt wants to downgrade.
+          printf 'deb [arch=arm64] http://ports.ubuntu.com/ %s-security main restricted universe\n' "$CODENAME" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
           sudo apt-get update
-          sudo apt-get install -y libx11-dev:arm64 libxcursor-dev:arm64 libxrandr-dev:arm64 libxinerama-dev:arm64 libxi-dev:arm64 libgl-dev:arm64 libfontconfig-dev:arm64
+          sudo apt-get install -y --allow-downgrades libx11-dev:arm64 libxcursor-dev:arm64 libxrandr-dev:arm64 libxinerama-dev:arm64 libxi-dev:arm64 libgl-dev:arm64 libfontconfig-dev:arm64
 
       - name: Extract version
         id: version
