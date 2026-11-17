@@ -316,7 +316,7 @@ pub const TabBarRenderer = struct {
             }
 
             // Tab close button — red geometric X, vertically centered
-            {
+            if (hasCloseButton(tab_w, cell_w_int)) {
                 const close_cx = tab_x + @as(i32, @intCast(tab_w)) - cell_w_int;
                 const close_cy = tab_y + @divFloor(@as(i32, @intCast(tab_h)), 2);
                 const close_arm: u32 = @intFromFloat(config.cell_height * 0.15);
@@ -406,7 +406,7 @@ pub const TabBarRenderer = struct {
             const tab_idx: usize = @intCast(@divFloor(rel_x, @as(i32, @intCast(tab_w))));
             if (tab_idx < tab_count) {
                 const tab_right: i32 = tabs_origin_x + @as(i32, @intCast(@as(u32, @intCast(tab_idx + 1)) * tab_w));
-                if (x >= tab_right - cell_w_int * 2) {
+                if (hasCloseButton(tab_w, cell_w_int) and x >= tab_right - cell_w_int * 2) {
                     return .{ .close_tab = tab_idx };
                 }
                 return .{ .tab = tab_idx };
@@ -414,6 +414,13 @@ pub const TabBarRenderer = struct {
         }
 
         return .{ .drag_region = {} };
+    }
+
+    /// A tab gets a close button only when it is wide enough to keep room to
+    /// click it elsewhere: the button covers the last two cells, so on a
+    /// narrower tab every click would close it.
+    pub fn hasCloseButton(tab_w: u32, cell_w_int: i32) bool {
+        return @as(i64, tab_w) >= @as(i64, cell_w_int) * 6;
     }
 
     /// Check if a point (framebuffer coords) is in the controls area.
@@ -447,6 +454,27 @@ test "TabBarRenderer.hitTest window close" {
         .window_close => {},
         else => return error.TestUnexpectedResult,
     }
+}
+
+test "TabBarRenderer.hitTest narrow tab selects instead of closing" {
+    // 800px wide, 40 tabs: each tab is under 6 cells, so no close button.
+    var x: i32 = 30;
+    while (x < 700) : (x += 3) {
+        switch (TabBarRenderer.hitTest(x, 30, 40, 8.0, 17.0, 800)) {
+            .close_tab => return error.TestUnexpectedResult,
+            else => {},
+        }
+    }
+    // A wide tab still has its close button at the right edge.
+    var found_close = false;
+    x = 30;
+    while (x < 700) : (x += 1) {
+        switch (TabBarRenderer.hitTest(x, 30, 2, 8.0, 17.0, 800)) {
+            .close_tab => found_close = true,
+            else => {},
+        }
+    }
+    try std.testing.expect(found_close);
 }
 
 test "TabBarRenderer.hitTest tab region" {
