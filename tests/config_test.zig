@@ -137,6 +137,17 @@ test "Config.validate resets invalid font_size to default" {
     try testing.expectEqual(@as(f32, 10.0), config.font.size);
 }
 
+test "Config.validate resets NaN and out-of-range floats" {
+    var config = Config.defaults();
+    config.font.size = std.math.nan(f32);
+    config.window.opacity = std.math.nan(f32);
+    config.window.padding = -5.0;
+    config.validate();
+    try testing.expectEqual(@as(f32, 10.0), config.font.size);
+    try testing.expectEqual(@as(f32, 1.0), config.window.opacity);
+    try testing.expectEqual(@as(f32, 4.0), config.window.padding);
+}
+
 test "Config.validate resets negative font_size to default" {
     var config = Config.defaults();
     config.font.size = -5.0;

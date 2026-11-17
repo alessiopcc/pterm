@@ -1076,6 +1076,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    if (target.result.os.tag == .windows) open_url_mod.linkSystemLibrary("shell32", .{});
 
     const version_check_mod = createModule(b, .{
         .root_source_file = b.path("src/platform/version_check.zig"),

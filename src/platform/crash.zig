@@ -247,6 +247,8 @@ fn writeMinidump(
     // handle. Zig's File API opens via NtCreateFile and produces handles that
     // MiniDumpWriteDump rejects with ERROR_NOACCESS on some setups.
     var path_w_buf: [1024]u16 = undefined;
+    // utf8ToUtf16Le doesn't check the output length.
+    if (path.len >= path_w_buf.len) return error.PathTooLong;
     const path_w_len = std.unicode.utf8ToUtf16Le(&path_w_buf, path) catch return error.PathConvert;
     if (path_w_len >= path_w_buf.len) return error.PathTooLong;
     path_w_buf[path_w_len] = 0;

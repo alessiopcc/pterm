@@ -288,6 +288,7 @@ pub fn parseKeyCombo(combo_str: []const u8) ParseError!KeyCombo {
 
     // All parts except last are modifiers, last is the key
     for (parts[0 .. parts_count - 1]) |part| {
+        if (part.len > 64) return ParseError.InvalidKeyCombo;
         const lower = toLowerBuf(part);
         const mod_str = lower[0..part.len];
 
@@ -307,7 +308,7 @@ pub fn parseKeyCombo(combo_str: []const u8) ParseError!KeyCombo {
     key_part = parts[parts_count - 1];
     const key_str = key_part orelse return ParseError.InvalidKeyCombo;
 
-    if (key_str.len == 0) return ParseError.InvalidKeyCombo;
+    if (key_str.len == 0 or key_str.len > 64) return ParseError.InvalidKeyCombo;
 
     // Try to match as special key
     const lower_key = toLowerBuf(key_str);
@@ -583,6 +584,12 @@ test "parseKeyCombo: ctrl+c" {
     try std.testing.expect(combo.key.eql(.{ .char = 'c' }));
     try std.testing.expect(combo.mods.ctrl);
     try std.testing.expect(!combo.mods.shift);
+}
+
+test "parseKeyCombo: rejects parts longer than 64 characters" {
+    const long: [80]u8 = @splat('a');
+    try std.testing.expectError(ParseError.InvalidKeyCombo, parseKeyCombo(long ++ "+c"));
+    try std.testing.expectError(ParseError.InvalidKeyCombo, parseKeyCombo("ctrl+" ++ long));
 }
 
 test "parseKeyCombo: ctrl+shift+t" {
