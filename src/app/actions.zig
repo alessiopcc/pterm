@@ -126,12 +126,17 @@ pub fn dispatchAction(self: *App, action: keybindings.Action) void {
         .focus_pane_right => focusDirection(self, .right),
 
         // Tab reorder
+        // Swapping moves Tab structs the render thread reads under pane_mutex.
         .move_tab_left => {
+            self.pane_mutex.lock();
+            defer self.pane_mutex.unlock();
             self.tab_manager.moveTabLeft();
             syncTabIndices(self);
             self.requestFrame();
         },
         .move_tab_right => {
+            self.pane_mutex.lock();
+            defer self.pane_mutex.unlock();
             self.tab_manager.moveTabRight();
             syncTabIndices(self);
             self.requestFrame();
@@ -140,9 +145,11 @@ pub fn dispatchAction(self: *App, action: keybindings.Action) void {
         // Zoom
         .zoom_pane => actionZoomPane(self),
         .equalize_panes => {
+            self.pane_mutex.lock();
+            defer self.pane_mutex.unlock();
             if (self.tab_manager.getActiveTab()) |tab| {
                 tree_ops.equalize(tab.root);
-                resizeAllPanes(self);
+                resizeAllPanesLocked(self);
                 self.requestFrame();
             }
         },
@@ -232,29 +239,36 @@ pub fn dispatchAction(self: *App, action: keybindings.Action) void {
 
 /// Create a new tab with a single pane.
 pub fn actionNewTab(self: *App) void {
-    const tab = self.tab_manager.createTab() catch return;
-    const pane_id = self.createPane(null, null, null) catch return;
+    const new_tab_idx: u32 = blk: {
+        // createTab can move the tabs array and createPane grows pane_data;
+        // the render thread walks both under pane_mutex.
+        self.pane_mutex.lock();
+        defer self.pane_mutex.unlock();
 
-    // Wire the new tab's root leaf to this pane
-    tab.root.leaf.pane_id = pane_id;
-    tab.focused_pane_id = pane_id;
-    tab.next_pane_id = pane_id + 1;
+        const tab = self.tab_manager.createTab() catch return;
+        const pane_id = self.createPane(null, null, null) catch return;
 
-    // Set tab_index on the pane and start TermIO
-    const new_tab_idx: u32 = @intCast(self.tab_manager.tabCount() - 1);
+        // Wire the new tab's root leaf to this pane
+        tab.root.leaf.pane_id = pane_id;
+        tab.focused_pane_id = pane_id;
+        tab.next_pane_id = pane_id + 1;
 
-    if (self.pane_data.get(pane_id)) |pd| {
-        pd.tab_index = new_tab_idx;
-        pd.termio.start() catch {};
-        pd.termio.terminal.observer.onScreenChange = &callbacks.screenChangeCallback;
-        pd.termio.terminal.observer.screen_change_ctx = @ptrCast(pd);
-    }
+        // Set tab_index on the pane and start TermIO
+        const idx: u32 = @intCast(self.tab_manager.tabCount() - 1);
 
-    // Switch to the new tab and clear stale activity indicators
+        if (self.pane_data.get(pane_id)) |pd| {
+            pd.tab_index = idx;
+            pd.termio.start() catch {};
+            pd.termio.terminal.observer.onScreenChange = &callbacks.screenChangeCallback;
+            pd.termio.terminal.observer.screen_change_ctx = @ptrCast(pd);
+        }
+        break :blk idx;
+    };
+
+    // Switch to the new tab; resizing also clears stale activity indicators.
     switchToTab(self, new_tab_idx);
     resizeAllPanes(self);
     _ = updateTabTitles(self);
-    for (self.tab_manager.tabs.items) |*t| t.has_activity = false;
 }
 
 /// Close the active tab and all its panes.
@@ -339,8 +353,17 @@ pub fn actionCloseTabByIndex(self: *App, idx: usize) void {
     }
     cancelConfirmPrompt(self);
     syncTabIndices(self);
-    resizeAllPanes(self);
+    resizeAllPanesLocked(self);
     self.requestFrame();
+}
+
+/// Drop output not yet applied to `tab`'s activity dot. Caller holds `pane_mutex`.
+fn clearPendingActivity(self: *App, tab: *Tab) void {
+    const leaves = tree_ops.collectLeaves(tab.fullRoot(), self.allocator) catch return;
+    defer self.allocator.free(leaves);
+    for (leaves) |pane_id| {
+        if (self.pane_data.get(pane_id)) |pd| pd.activity_pending.store(false, .release);
+    }
 }
 
 /// Switch to a tab by index, clearing activity indicator.
@@ -351,6 +374,11 @@ pub fn switchToTab(self: *App, idx: usize) void {
     if (self.tab_manager.agent_mode_active) {
         exitAgentMode(self);
     }
+    self.pane_mutex.lock();
+    defer self.pane_mutex.unlock();
+    // Output the leaving tab printed while active isn't background
+    // activity: drop it before the render thread applies it.
+    if (self.tab_manager.getActiveTab()) |old| clearPendingActivity(self, old);
     self.tab_manager.switchTab(idx);
     // Clear activity on the now-active tab
     if (self.tab_manager.getActiveTab()) |tab| {
@@ -382,16 +410,17 @@ pub fn focusDirection(self: *App, direction: PaneTree.FocusDirection) void {
 /// Split the focused pane in the given direction.
 /// Checks canSplit minimum before proceeding (UI-SPEC: 10x3).
 pub fn actionSplit(self: *App, direction: PaneTree.SplitDirection) void {
+    // The split changes the tree and adds a pane: hold pane_mutex so the
+    // render thread isn't walking either.
+    self.pane_mutex.lock();
+    defer self.pane_mutex.unlock();
+
     const tab = self.tab_manager.getActiveTab() orelse return;
     // Zoomed: split in the full tree. Splitting the single-leaf zoom view
     // would put the new pane in a tree that unzoom throws away.
     if (tab.is_zoomed) {
-        // unzoom frees the zoom tree: hold pane_mutex so the render thread
-        // isn't walking it.
-        self.pane_mutex.lock();
-        defer self.pane_mutex.unlock();
         tab.unzoom();
-        resizeAllPanes(self);
+        resizeAllPanesLocked(self);
     }
     const leaf = tree_ops.findLeaf(tab.root, tab.focused_pane_id) orelse return;
     const metrics = self.font_grid.getMetrics();
@@ -427,8 +456,8 @@ pub fn actionSplit(self: *App, direction: PaneTree.SplitDirection) void {
         pd.termio.terminal.observer.screen_change_ctx = @ptrCast(pd);
     }
 
-    resizeAllPanes(self);
-    _ = updateTabTitles(self);
+    resizeAllPanesLocked(self);
+    _ = updateTabTitlesLocked(self);
     self.requestFrame();
 }
 
@@ -447,8 +476,8 @@ pub fn actionClosePane(self: *App) void {
 
     if (result) |_| {
         // Sibling takes focus, resize remaining panes
-        resizeAllPanes(self);
-        _ = updateTabTitles(self);
+        resizeAllPanesLocked(self);
+        _ = updateTabTitlesLocked(self);
         self.requestFrame();
     } else {
         // Was last pane in tab - close the tab
@@ -460,8 +489,8 @@ pub fn actionClosePane(self: *App) void {
         }
         cancelConfirmPrompt(self);
         syncTabIndices(self);
-        resizeAllPanes(self);
-        _ = updateTabTitles(self);
+        resizeAllPanesLocked(self);
+        _ = updateTabTitlesLocked(self);
         self.requestFrame();
     }
 }
@@ -501,8 +530,8 @@ pub fn actionClosePaneById(self: *App, pane_id: u32) void {
 
     if (sibling_focus) |new_focus| {
         tab.focused_pane_id = new_focus;
-        resizeAllPanes(self);
-        _ = updateTabTitles(self);
+        resizeAllPanesLocked(self);
+        _ = updateTabTitlesLocked(self);
         self.requestFrame();
         return;
     }
@@ -515,13 +544,16 @@ pub fn actionClosePaneById(self: *App, pane_id: u32) void {
     }
     cancelConfirmPrompt(self);
     syncTabIndices(self);
-    resizeAllPanes(self);
-    _ = updateTabTitles(self);
+    resizeAllPanesLocked(self);
+    _ = updateTabTitlesLocked(self);
     self.requestFrame();
 }
 
 /// Toggle zoom on the focused pane.
 pub fn actionZoomPane(self: *App) void {
+    // Zoom swaps tab.root and unzoom frees the zoom tree.
+    self.pane_mutex.lock();
+    defer self.pane_mutex.unlock();
     const tab = self.tab_manager.getActiveTab() orelse return;
 
     if (tab.is_zoomed) {
@@ -534,12 +566,14 @@ pub fn actionZoomPane(self: *App) void {
         tab.root = new_root;
         tab.is_zoomed = true;
     }
-    resizeAllPanes(self);
+    resizeAllPanesLocked(self);
     self.requestFrame();
 }
 
 /// Resize the focused pane by 1 cell in the given direction.
 pub fn actionResizePane(self: *App, direction: PaneTree.FocusDirection) void {
+    self.pane_mutex.lock();
+    defer self.pane_mutex.unlock();
     const tab = self.tab_manager.getActiveTab() orelse return;
     const leaf = tree_ops.findLeaf(tab.root, tab.focused_pane_id) orelse return;
 
@@ -573,12 +607,14 @@ pub fn actionResizePane(self: *App, direction: PaneTree.FocusDirection) void {
     new_ratio = @max(0.1, @min(0.9, new_ratio)); // Clamp
     b.ratio = new_ratio;
 
-    resizeAllPanes(self);
+    resizeAllPanesLocked(self);
     self.requestFrame();
 }
 
 /// Swap focused pane with neighbor in the given direction.
 pub fn actionSwapDirectional(self: *App, direction: PaneTree.FocusDirection) void {
+    self.pane_mutex.lock();
+    defer self.pane_mutex.unlock();
     const tab = self.tab_manager.getActiveTab() orelse return;
     const leaf = tree_ops.findLeaf(tab.root, tab.focused_pane_id) orelse return;
     const neighbor_id = tree_ops.focusDirectional(leaf, direction) orelse return;
@@ -590,17 +626,22 @@ pub fn actionSwapDirectional(self: *App, direction: PaneTree.FocusDirection) voi
 
 /// Rotate the split direction of the focused pane's parent branch.
 pub fn actionRotateSplit(self: *App) void {
+    self.pane_mutex.lock();
+    defer self.pane_mutex.unlock();
     const tab = self.tab_manager.getActiveTab() orelse return;
     const leaf = tree_ops.findLeaf(tab.root, tab.focused_pane_id) orelse return;
     if (leaf.leaf.parent) |parent| {
         tree_ops.rotate(parent);
-        resizeAllPanes(self);
+        resizeAllPanesLocked(self);
         self.requestFrame();
     }
 }
 
 /// Break the focused pane out into a new tab.
 pub fn actionBreakOut(self: *App) void {
+    // Changes the tree, frees nodes and can move the tabs array.
+    self.pane_mutex.lock();
+    defer self.pane_mutex.unlock();
     const tab = self.tab_manager.getActiveTab() orelse return;
     const pane_id = tab.focused_pane_id;
 
@@ -621,13 +662,22 @@ pub fn actionBreakOut(self: *App) void {
     new_tab.next_pane_id = pane_id + 1;
 
     syncTabIndices(self);
-    resizeAllPanes(self);
+    resizeAllPanesLocked(self);
     self.requestFrame();
 }
 
 /// Recompute bounds for the active tab and resize all pane PTYs.
 /// Called after any structural layout change (split, close, resize, zoom, etc).
+/// Takes `pane_mutex`; use `resizeAllPanesLocked` when already holding it.
 pub fn resizeAllPanes(self: *App) void {
+    self.pane_mutex.lock();
+    defer self.pane_mutex.unlock();
+    resizeAllPanesLocked(self);
+}
+
+/// `resizeAllPanes` for callers that hold `pane_mutex`: it writes pane
+/// bounds and walks the tab tree, both read by the render thread.
+pub fn resizeAllPanesLocked(self: *App) void {
     const fb = self.window.getFramebufferSize();
     // Suppress activity for 30 frames -- async PTY redraws from resize cause false positives
     self.suppress_activity_frames.store(30, .release);
@@ -637,6 +687,8 @@ pub fn resizeAllPanes(self: *App) void {
     var pd_iter = self.pane_data.iterator();
     while (pd_iter.next()) |entry| {
         entry.value_ptr.*.suppressAgentOutputUntil(deadline);
+        // Output from before the reset must not bring the dots back.
+        entry.value_ptr.*.activity_pending.store(false, .release);
     }
     const metrics = self.font_grid.getMetrics();
     const available = agents.contentRectFor(self, fb.width, fb.height);
@@ -761,7 +813,7 @@ fn pickNextEligible(eligibles: []const Eligible, current: AgentSource) ?Eligible
 const AgentSource = layout_mod.TabManager.AgentSource;
 
 /// Activate the source: switch active tab + focus, set agent_mode_active,
-/// resize the source pane to fullscreen.
+/// resize the source pane to fullscreen. Caller holds `pane_mutex`.
 fn activateSource(self: *App, src: AgentSource) void {
     self.tab_manager.agent_source = src;
     self.tab_manager.agent_mode_active = true;
@@ -769,7 +821,7 @@ fn activateSource(self: *App, src: AgentSource) void {
     if (self.tab_manager.getActiveTab()) |t| {
         t.focused_pane_id = src.pane_id;
     }
-    resizeAllPanes(self);
+    resizeAllPanesLocked(self);
     self.requestFrame();
 }
 
@@ -831,7 +883,16 @@ pub fn isShellName(name: []const u8) bool {
 /// Update tab titles from focused pane CWD and process name.
 /// Format: "basename" when the foreground process is a shell, otherwise
 /// "process@basename [count] [Z]". Returns true if any title changed.
+/// Takes `pane_mutex`; use `updateTabTitlesLocked` when already holding it.
 pub fn updateTabTitles(self: *App) bool {
+    self.pane_mutex.lock();
+    defer self.pane_mutex.unlock();
+    return updateTabTitlesLocked(self);
+}
+
+/// `updateTabTitles` for callers that hold `pane_mutex`: the render thread
+/// draws tab titles under it.
+pub fn updateTabTitlesLocked(self: *App) bool {
     var any_changed = false;
     for (self.tab_manager.tabs.items) |*tab| {
         var title_buf: [128]u8 = undefined;
@@ -962,6 +1023,11 @@ pub fn closeShellPicker(self: *App) void {
 /// Kill current PTY and respawn with a new shell, preserving pane position.
 /// Content is lost. Follows destroyPane ordering for teardown, createPane for spawn.
 pub fn respawnShell(self: *App, pd: *PaneData, shell_name: []const u8) !void {
+    // The render thread reads this pane's termio and surface under
+    // pane_mutex; they are freed and rebuilt below.
+    self.pane_mutex.lock();
+    defer self.pane_mutex.unlock();
+
     // Compute actual pane dimensions from bounds (not default config)
     const metrics = self.font_grid.getMetrics();
     var actual_cols = self.config.cols();
@@ -1150,7 +1216,7 @@ pub fn activatePreset(self: *App, preset: *const LayoutPreset.LayoutPreset, repl
         var ti: usize = first_idx;
         while (ti < self.tab_manager.tabs.items.len) : (ti += 1) {
             self.tab_manager.switchTab(ti);
-            resizeAllPanes(self);
+            resizeAllPanesLocked(self);
         }
         // Leave the first new tab active (original post-activation behavior).
         _ = original_active;

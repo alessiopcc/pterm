@@ -388,12 +388,9 @@ pub fn screenChangeCallback(ctx: ?*anyopaque) void {
         // Skip activity marking during resize cooldown
         if (app.suppress_activity_frames.load(.acquire) == 0) {
             if (ctx) |raw| {
+                // The render thread applies this to the tab under pane_mutex.
                 const pd: *PaneData = @ptrCast(@alignCast(raw));
-                const pane_tab_idx = pd.tab_index;
-                const active_idx = app.tab_manager.active_idx;
-                if (pane_tab_idx != active_idx and pane_tab_idx < app.tab_manager.tabs.items.len) {
-                    app.tab_manager.tabs.items[pane_tab_idx].has_activity = true;
-                }
+                pd.activity_pending.store(true, .release);
             }
         }
         app.requestFrame();
@@ -408,6 +405,10 @@ pub fn configReloadCallback() void {
         std.log.warn("Config reload failed: {}", .{err});
         return;
     };
+    // The render thread reads the config's strings (agent process names,
+    // layout names) and the palette under pane_mutex.
+    self.pane_mutex.lock();
+    defer self.pane_mutex.unlock();
     self.renderer_palette = theme_mod.buildRendererPaletteFromConfig(new_config.colors, new_config.theme);
     // Update notification manager from new config
     self.notification_manager.updateConfig(

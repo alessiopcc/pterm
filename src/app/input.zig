@@ -779,9 +779,12 @@ pub fn handleCursorPos(self: *App, xpos: f64, ypos: f64) void {
 
         var new_ratio = self.border_drag_start_ratio + delta_ratio;
         new_ratio = @max(0.1, @min(0.9, new_ratio));
-        b.ratio = new_ratio;
-
-        self.resizeAllPanes();
+        {
+            self.pane_mutex.lock();
+            defer self.pane_mutex.unlock();
+            b.ratio = new_ratio;
+            actions.resizeAllPanesLocked(self);
+        }
         self.requestFrame();
         return;
     }
