@@ -357,6 +357,15 @@ pub fn actionCloseTabByIndex(self: *App, idx: usize) void {
     self.requestFrame();
 }
 
+/// Drop output not yet applied to `tab`'s activity dot. Caller holds `pane_mutex`.
+fn clearPendingActivity(self: *App, tab: *Tab) void {
+    const leaves = tree_ops.collectLeaves(tab.fullRoot(), self.allocator) catch return;
+    defer self.allocator.free(leaves);
+    for (leaves) |pane_id| {
+        if (self.pane_data.get(pane_id)) |pd| pd.activity_pending.store(false, .release);
+    }
+}
+
 /// Switch to a tab by index, clearing activity indicator.
 pub fn switchToTab(self: *App, idx: usize) void {
     // Close overlays on tab switch (Pitfall 3: prevent acting on wrong pane)
@@ -367,6 +376,9 @@ pub fn switchToTab(self: *App, idx: usize) void {
     }
     self.pane_mutex.lock();
     defer self.pane_mutex.unlock();
+    // Output the leaving tab printed while active isn't background
+    // activity: drop it before the render thread applies it.
+    if (self.tab_manager.getActiveTab()) |old| clearPendingActivity(self, old);
     self.tab_manager.switchTab(idx);
     // Clear activity on the now-active tab
     if (self.tab_manager.getActiveTab()) |tab| {
@@ -675,6 +687,8 @@ pub fn resizeAllPanesLocked(self: *App) void {
     var pd_iter = self.pane_data.iterator();
     while (pd_iter.next()) |entry| {
         entry.value_ptr.*.suppressAgentOutputUntil(deadline);
+        // Output from before the reset must not bring the dots back.
+        entry.value_ptr.*.activity_pending.store(false, .release);
     }
     const metrics = self.font_grid.getMetrics();
     const available = agents.contentRectFor(self, fb.width, fb.height);
